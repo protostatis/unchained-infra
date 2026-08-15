@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from conversation_transcript import SESSION_SCHEMA_VERSION
 from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     HOSTED_MAX_SESSION_MESSAGES,
@@ -867,6 +868,109 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_session_save_keeps_full_visible_transcript_when_context_is_capped(self):
+        """The archive/display transcript must not inherit the 64-message cap."""
+        sid = "s-transcript-cap"
+        messages = [{"role": "system", "content": "system"}]
+        with tempfile.TemporaryDirectory() as session_dir:
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                for index in range(20):
+                    prompt = f"original prompt {index}"
+                    answer = f"visible answer {index}"
+                    messages.append({"role": "user", "content": prompt})
+                    self.agent._append_transcript(sid, "user", prompt)
+                    messages.append({"role": "assistant", "content": answer})
+                    self.agent._append_transcript(sid, "assistant", answer)
+                # This is provider-only execution state, not a visible chat
+                # message. It may remain in private context until normal
+                # compaction runs, but it must never enter display history.
+                messages.insert(
+                    1,
+                    {
+                        "role": "tool",
+                        "tool_call_id": "old-tool",
+                        "content": "RAW_BROWSER_SENTINEL" * 1000,
+                    },
+                )
+                self.agent._save_session(sid, messages)
+                with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                    saved = json.load(f)
+
+        self.assertLessEqual(len(saved["messages"]), HOSTED_MAX_SESSION_MESSAGES)
+        self.assertEqual(saved["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertEqual(len(saved["transcript"]), 40)
+        self.assertEqual(saved["transcript"][0]["content"], "original prompt 0")
+        self.assertEqual(saved["transcript"][20]["content"], "original prompt 10")
+        self.assertEqual(saved["transcript"][-1]["content"], "visible answer 19")
+        self.assertNotIn("RAW_BROWSER_SENTINEL", json.dumps(saved["transcript"]))
+        self.assertIn("RAW_BROWSER_SENTINEL", json.dumps(saved["messages"]))
+
+    def test_unknown_session_schema_does_not_load_private_provider_context(self):
+        sid = "s-unknown-session-schema"
+        with tempfile.TemporaryDirectory() as session_dir:
+            path = os.path.join(session_dir, f"{sid}.json")
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "schema_version": 999,
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": "PRIVATE_PROVIDER_CONTEXT",
+                            }
+                        ],
+                        "transcript": [
+                            {"role": "assistant", "content": "visible context"}
+                        ],
+                    },
+                    f,
+                )
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                messages = self.agent._load_session(sid)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertNotIn("PRIVATE_PROVIDER_CONTEXT", json.dumps(messages))
+        self.assertEqual(self.agent.transcripts[sid], [])
+
+    async def test_unknown_session_schema_rejects_turn_without_overwrite(self):
+        sid = "s-unknown-schema-turn"
+        original = {
+            "schema_version": 999,
+            "messages": [
+                {"role": "assistant", "content": "PRIVATE_PROVIDER_CONTEXT"}
+            ],
+            "transcript": [{"role": "assistant", "content": "visible context"}],
+        }
+        provider = AsyncMock()
+        send = AsyncMock()
+        with tempfile.TemporaryDirectory() as session_dir:
+            path = os.path.join(session_dir, f"{sid}.json")
+            with open(path, "w") as f:
+                json.dump(original, f)
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", new=provider),
+                patch.object(self.agent, "_send", new=send),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-unknown-schema",
+                        "message": "Continue this chat",
+                    }
+                )
+            with open(path) as f:
+                saved = json.load(f)
+
+        provider.assert_not_awaited()
+        self.assertEqual(saved, original)
+        self.assertEqual(
+            [call.args[1]["type"] for call in send.await_args_list],
+            ["error", "done"],
+        )
+
     async def test_handle_message_bounds_oversized_live_session_before_provider(self):
         sid = "s-context-bound"
         cached = [{"role": "system", "content": "old system"}]
@@ -921,6 +1025,110 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(
             sum(1 for message in provider_messages if message.get("role") != "system"),
             HOSTED_MAX_SESSION_MESSAGES,
+        )
+
+    async def test_handle_message_keeps_visible_transcript_after_context_compaction(self):
+        sid = "s-transcript-after-compact"
+        cached = [{"role": "system", "content": "old system"}]
+        for index in range(22):
+            cached.extend(
+                [
+                    {"role": "user", "content": f"original prompt {index}"},
+                    {"role": "assistant", "content": "click" * 5000},
+                ]
+            )
+        original_message_count = len(cached)
+        self.agent.sessions[sid] = cached
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "final answer"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=AsyncMock()),
+                patch.object(
+                    self.agent,
+                    "_sanitize_user_output",
+                    new=AsyncMock(return_value="final answer"),
+                ),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-context",
+                        "message": "current request",
+                    }
+                )
+            with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                saved = json.load(f)
+
+        self.assertEqual(saved["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertLess(len(saved["messages"]), original_message_count)
+        self.assertEqual(saved["transcript"][0]["content"], "original prompt 0")
+        self.assertEqual(saved["transcript"][-2]["content"], "current request")
+        self.assertEqual(saved["transcript"][-1]["content"], "final answer")
+
+    async def test_reasoning_only_final_response_stays_private(self):
+        sid = "s-reasoning-private"
+        private_reasoning = "PRIVATE_REASONING_DO_NOT_DISPLAY"
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": private_reasoning,
+                    },
+                    "finish_reason": "stop",
+                }],
+            }
+
+        send = AsyncMock()
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=send),
+                patch.object(
+                    self.agent,
+                    "_sanitize_user_output",
+                    new=AsyncMock(return_value=""),
+                ),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-reasoning",
+                        "message": "Do the task",
+                    }
+                )
+            with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                saved = json.load(f)
+
+        transcript_text = json.dumps(saved["transcript"])
+        self.assertNotIn(private_reasoning, transcript_text)
+        self.assertIn(private_reasoning, json.dumps(saved["messages"]))
+        text_events = [
+            call.args[1]["data"]
+            for call in send.await_args_list
+            if call.args[1].get("type") == "text"
+        ]
+        self.assertEqual(
+            text_events,
+            [
+                "[Agent completed the task but returned no text response. "
+                "Try asking it to summarize what it found.]"
+            ],
         )
 
     async def test_background_navigation_policy_reaches_cloud_tools(self):

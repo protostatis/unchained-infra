@@ -19,7 +19,7 @@ from _thread import LockType
 from dataclasses import dataclass, field
 from typing import Deque, TextIO
 
-from chat_event_transport import normalize_text_event
+from chat_event_transport import CHAT_TURN_REPLAY_EVENT_BYTES, normalize_text_event
 
 
 @dataclass
@@ -219,7 +219,7 @@ async def profile_session_guard(core, session_id: str):
 
 
 _CHAT_TURN_JOURNAL_LIMIT = 200
-_CHAT_TURN_REPLAY_EVENT_BYTES = 12 * 1024
+_CHAT_TURN_REPLAY_EVENT_BYTES = CHAT_TURN_REPLAY_EVENT_BYTES
 _CHAT_TURN_REPLAY_TEXT_BYTES = 64 * 1024
 _CHAT_TURN_RETENTION_SECONDS = 5 * 60
 _CHAT_TURN_TERMINAL_STATUSES = frozenset({"done", "error", "cancelled"})

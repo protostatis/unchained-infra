@@ -360,7 +360,7 @@ def _first_user_message_preview(session_id: str) -> str:
     """Extract a short preview label from the first user message in a session."""
     try:
         repo = _hosted_repo()
-        msgs, found = repo.read_session_messages(session_id)
+        msgs, found = repo.read_session_transcript(session_id)
         if not found:
             return ""
         for m in msgs:
@@ -3280,7 +3280,7 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
                 preview = state["previews"].get(str(n), "")
                 empty = True
                 if sid:
-                    msgs, found = _hosted_repo().read_session_messages(sid)
+                    msgs, found = _hosted_repo().read_session_transcript(sid)
                     if found and msgs:
                         empty = False
                         if not preview:
@@ -3421,46 +3421,56 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
 
     # OpenRouter/hosted lanes use the server-owned repository.
     if core._is_openrouter_model(model) and user_id:
-        if not _hosted_repo().archive_owned_by(user_id, archive_id):
+        repo = _hosted_repo()
+        if not repo.archive_owned_by(user_id, archive_id):
             return web.json_response(
                 {"error": "Archive not found"}, status=404
+            )
+        # Validate before archiving/deleting the target slot. Unsupported
+        # future-schema archives must leave the current conversation intact.
+        target_slot = repo.archive_restore_slot(
+            user_id, archive_id, requested_slot
+        )
+        if target_slot is None:
+            return web.json_response(
+                {"error": "Archive cannot be restored by this agent version"},
+                status=409,
             )
         # Archive the currently-occupied target slot exactly once before
         # restoring, then delete the old session file so it doesn't leave
         # an unbounded orphan.  Do NOT delete the source archive file.
-        if requested_slot:
-            slot_state = _hosted_repo().get_slot_state(user_id)
-            current_sid = slot_state["slots"].get(str(requested_slot), "")
-            if current_sid:
+        slot_state = repo.get_slot_state(user_id)
+        current_sid = slot_state["slots"].get(str(target_slot), "")
+        if current_sid:
+            try:
+                archived = repo.archive_session(
+                    user_id, current_sid, slot=target_slot
+                )
+            except Exception:
+                log.exception(
+                    "[chat] failed to archive current session before restore"
+                )
+                archived = None
+            # Remove the now-archived active session file.  The archive
+            # snapshot is already durable; the active file is no longer
+            # needed and keeping it would leave an unbounded orphan.
+            if archived:
                 try:
-                    archived = _hosted_repo().archive_session(
-                        user_id, current_sid, slot=requested_slot
-                    )
-                except Exception:
-                    log.exception(
-                        "[chat] failed to archive current session before restore"
-                    )
-                    archived = None
-                # Remove the now-archived active session file.  The archive
-                # snapshot is already durable; the active file is no longer
-                # needed and keeping it would leave an unbounded orphan.
-                if archived:
-                    try:
-                        os.remove(
-                            _hosted_repo().session_path(
-                                current_sid,
-                                sessions_dir=_HOSTED_SESSIONS_DIR,
-                            )
-                        )
-                    except FileNotFoundError:
-                        pass
-                    except OSError:
-                        log.exception(
-                            "[chat] failed to remove orphan session file %s",
+                    os.remove(
+                        repo.session_path(
                             current_sid,
+                            sessions_dir=_HOSTED_SESSIONS_DIR,
                         )
-        new_sid, slot, msgs = _hosted_repo().restore_archive(
-            user_id, archive_id, target_slot=requested_slot, agent_id=agent_id
+                    )
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    log.exception(
+                        "[chat] failed to remove orphan session file %s",
+                        current_sid,
+                    )
+        new_sid, slot, msgs = repo.restore_archive(
+            user_id, archive_id, target_slot=target_slot, agent_id=agent_id
         )
         if new_sid is None:
             return web.json_response(

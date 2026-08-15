@@ -7,10 +7,10 @@ user identity. The module preserves compatibility with the existing
 ``/data/sessions`` format used by ``chat_agent_openrouter.py`` for active
 message payloads.
 
-Archive metadata (preview, slot, timestamps) is stored alongside the
-full message snapshot in the archive directory. Slot state is a tiny JSON
-blob that remains atomic: a corrupt or partial write never replaces the
-current state.
+Archive metadata (preview, slot, timestamps), bounded provider resume context,
+and the full user-visible transcript are stored together in the archive
+directory. Slot state is a tiny JSON blob that remains atomic: a corrupt or
+partial write never replaces the current state.
 
 All public methods accept an explicit ``data_dir`` parameter so tests can
 target a temp directory without touching the real ``/data`` volume.
@@ -26,6 +26,13 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+
+from conversation_transcript import (
+    SESSION_SCHEMA_VERSION,
+    has_supported_session_schema,
+    project_visible_messages,
+    visible_transcript_from_payload,
+)
 
 try:
     import fcntl as _fcntl
@@ -183,14 +190,20 @@ class HostedConversationRepo:
             sessions_dir=sessions_dir or self._sessions_dir,
         )
 
-    def read_session_messages(
-        self, session_id: str, *, sessions_dir: str | None = None
-    ) -> tuple[list[dict], bool]:
-        """Read active session messages. Returns (messages, found).
+    @staticmethod
+    def _visible_messages(messages: object) -> list[dict]:
+        """Return the strict legacy projection used by unversioned records."""
+        return project_visible_messages(messages)
 
-        Dual-read: tries the validated path first, then falls back to
-        the legacy sanitized path so historically-stored files remain
-        readable.
+    def read_session_payload(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[dict, bool]:
+        """Read a session's bounded resume history and display transcript.
+
+        ``messages`` remains the legacy provider-context contract.  The
+        optional ``transcript`` field is a complete user-visible record that
+        must not be capped along with model context.  Legacy files derive it
+        from ``messages`` so they stay readable.
         """
         sd = sessions_dir or self._sessions_dir
         # Try validated path first; fall back to legacy for historic files.
@@ -210,12 +223,35 @@ class HostedConversationRepo:
             try:
                 with open(candidate) as f:
                     data = json.load(f)
+                if not has_supported_session_schema(data):
+                    continue
                 msgs = data.get("messages")
                 if isinstance(msgs, list):
-                    return msgs, True
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    return {
+                        "messages": msgs,
+                        "transcript": visible_transcript_from_payload(data),
+                    }, True
+            except (AttributeError, FileNotFoundError, json.JSONDecodeError, OSError):
                 continue
-        return [], False
+        return {}, False
+
+    def read_session_messages(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[list[dict], bool]:
+        """Read the bounded provider/resume history from an active session."""
+        payload, found = self.read_session_payload(
+            session_id, sessions_dir=sessions_dir
+        )
+        return payload.get("messages", []), found
+
+    def read_session_transcript(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[list[dict], bool]:
+        """Read the complete user-visible transcript from an active session."""
+        payload, found = self.read_session_payload(
+            session_id, sessions_dir=sessions_dir
+        )
+        return payload.get("transcript", []), found
 
     def session_file_exists(
         self, session_id: str, *, sessions_dir: str | None = None
@@ -426,6 +462,27 @@ class HostedConversationRepo:
             raise ValueError("invalid archive_id")
         return os.path.join(self._archives_dir(user_id), f"{archive_id}.json")
 
+    def archive_restore_slot(
+        self,
+        user_id: str,
+        archive_id: str,
+        target_slot: int | None = None,
+    ) -> int | None:
+        """Return an archive's safe restore slot without loading its context."""
+        self._ensure_user_dirs(user_id)
+        try:
+            with open(self._archive_path(user_id, archive_id)) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        if (
+            not has_supported_session_schema(data)
+            or not isinstance(data.get("messages"), list)
+        ):
+            return None
+        slot = target_slot or data.get("slot") or 1
+        return slot if slot in (1, 2, 3) else 1
+
     def archive_session(
         self,
         user_id: str,
@@ -442,27 +499,31 @@ class HostedConversationRepo:
         The original session file is NOT removed by this method — callers
         are responsible for cleaning it up after a successful archive.
         """
-        msgs, found = self.read_session_messages(
+        session, found = self.read_session_payload(
             session_id, sessions_dir=sessions_dir
         )
-        if not found or not msgs:
+        msgs = session.get("messages", [])
+        transcript = session.get("transcript", [])
+        if not found or not transcript:
             return None
         self._ensure_user_dirs(user_id)
         # Auto-extract preview from first user message if none given.
         if not preview:
-            for m in msgs:
+            for m in transcript:
                 if m.get("role") == "user":
                     preview = re.sub(r"\s+", " ", str(m.get("content", "")).strip())[:80]
                     break
         archive_id = f"{int(time.time() * 1000)}.{uuid.uuid4().hex[:12]}"
         payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
             "archive_id": archive_id,
             "session_id": session_id,
             "slot": slot,
             "preview": preview[:200],
-            "message_count": len(msgs),
+            "message_count": len(transcript),
             "archived_at": time.time(),
             "messages": msgs,
+            "transcript": transcript,
         }
         path = self._archive_path(user_id, archive_id)
         tmp = f"{path}.{uuid.uuid4().hex}.tmp"
@@ -526,8 +587,9 @@ class HostedConversationRepo:
         authenticated account's agent_id from auth_info; the default
         ``"trial-agent"`` is only appropriate for the legacy shared trial lane.
 
-        Returns ``(new_session_id, slot, messages)``. The restored messages are
-        written to a fresh session file. If the archive does not exist, returns
+        Returns ``(new_session_id, slot, resume_messages)``. The bounded
+        provider resume context and full display transcript are written to a
+        fresh session file. If the archive does not exist, returns
         ``(None, 0, [])``.
         """
         self._ensure_user_dirs(user_id)
@@ -537,9 +599,12 @@ class HostedConversationRepo:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None, 0, []
+        if not has_supported_session_schema(data):
+            return None, 0, []
         msgs = data.get("messages", [])
         if not isinstance(msgs, list):
             msgs = []
+        transcript = visible_transcript_from_payload(data)
         slot = target_slot or data.get("slot") or 1
         if slot not in (1, 2, 3):
             slot = 1
@@ -553,7 +618,16 @@ class HostedConversationRepo:
             try:
                 os.makedirs(os.path.dirname(sid_path), exist_ok=True)
                 with open(tmp, "w") as f:
-                    json.dump({"messages": msgs}, f, separators=(",", ":"), sort_keys=True)
+                    json.dump(
+                        {
+                            "schema_version": SESSION_SCHEMA_VERSION,
+                            "messages": msgs,
+                            "transcript": transcript,
+                        },
+                        f,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, sid_path)

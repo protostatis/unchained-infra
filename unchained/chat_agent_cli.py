@@ -47,6 +47,7 @@ import websockets  # noqa: E402
 from chat_event_transport import (  # noqa: E402
     CHAT_WS_MAX_MESSAGE_BYTES,
     SCREENSHOT_OMITTED_MESSAGE,
+    iter_replay_safe_text_chunks,
     read_inline_screenshot,
     send_agent_event,
 )
@@ -1561,6 +1562,16 @@ def _make_emitter(sid: str, req_id: str):
     return emit
 
 
+async def _emit_replay_safe_text(emit, text: str, sid: str, req_id: str) -> None:
+    """Emit a final response in journal-safe chunks without changing its text."""
+    for chunk in iter_replay_safe_text_chunks(
+        text,
+        session_id=sid,
+        req_id=req_id,
+    ):
+        await emit({"type": "text", "data": chunk})
+
+
 def _extract_opencode_error_message(event: dict) -> str:
     """Return a best-effort error message from an OpenCode error event."""
     err = event.get("error")
@@ -2378,7 +2389,7 @@ async def handle_message_claude(
     if response:
         # Save assistant response locally
         _append_message("assistant", response)
-        await emit({"type": "text", "data": response})
+        await _emit_replay_safe_text(emit, response, sid, req_id)
     await emit({"type": "done"})
 
 
@@ -2741,7 +2752,7 @@ async def handle_message_codex(
             response = "Codex CLI finished without a final response."
 
     _append_message("assistant", response)
-    await emit({"type": "text", "data": response})
+    await _emit_replay_safe_text(emit, response, sid, req_id)
     await emit({"type": "done"})
     try:
         if os.path.exists(output_file):
@@ -3143,7 +3154,7 @@ async def handle_message_opencode(
                 response = "OpenCode CLI finished without a final response."
 
         _append_message("assistant", response)
-        await emit({"type": "text", "data": response})
+        await _emit_replay_safe_text(emit, response, sid, req_id)
         await emit({"type": "done"})
     except asyncio.CancelledError:
         # Upstream request cancellation is handled by /web/chat/cancel. Do not

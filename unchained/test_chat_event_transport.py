@@ -19,6 +19,7 @@ import chat_agent_gemini
 import chat_agent_openrouter
 import chat_agent_sdk
 from chat_event_transport import (
+    CHAT_TEXT_REPLAY_TARGET_BYTES,
     CHAT_WS_MAX_MESSAGE_BYTES,
     EVENT_OMITTED_MESSAGE,
     MALFORMED_TEXT_EVENT_MESSAGE,
@@ -26,6 +27,7 @@ from chat_event_transport import (
     MAX_INLINE_SCREENSHOT_BASE64_BYTES,
     SCREENSHOT_OMITTED_MESSAGE,
     bound_agent_event,
+    iter_replay_safe_text_chunks,
     overlay_event,
     read_inline_screenshot,
     serialize_agent_event,
@@ -35,6 +37,51 @@ from web_app.handlers import chat_stream
 
 
 class TestChatEventTransport(unittest.TestCase):
+    def test_replay_safe_text_chunks_preserve_escaped_unicode_exactly(self):
+        text = ("line \\\" \\ \u0001 cafe \u3053\u3093\u306b\u3061\u306f \U0001f916\n" * 700)
+        chunks = list(
+            iter_replay_safe_text_chunks(
+                text,
+                session_id="s-" + "x" * 180,
+                req_id="r-" + "y" * 80,
+            )
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunks), text)
+        for chunk in chunks:
+            event = {
+                "type": "text",
+                "data": chunk,
+                "session_id": "s-" + "x" * 180,
+                "req_id": "r-" + "y" * 80,
+            }
+            encoded = json.dumps(event, separators=(",", ":"), default=str)
+            self.assertLessEqual(
+                len(encoded.encode("utf-8")), CHAT_TEXT_REPLAY_TARGET_BYTES
+            )
+
+    def test_local_cli_emits_chunks_before_done(self):
+        text = ("large final response \U0001f916\n" * 900)
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        async def exercise():
+            await chat_agent_cli._emit_replay_safe_text(
+                emit, text, "s-local-chunks", "r-local-chunks"
+            )
+            await emit({"type": "done"})
+
+        asyncio.run(exercise())
+
+        self.assertGreater(len(events), 2)
+        self.assertEqual([event["type"] for event in events][-1], "done")
+        self.assertEqual(
+            "".join(event["data"] for event in events[:-1]), text
+        )
+
     def test_inline_screenshot_within_limit_is_preserved(self):
         data = "iVBOR" + "A" * 1024
         event = {"type": "tool_result", "data": data, "is_screenshot": True}
@@ -272,7 +319,7 @@ class TestChatEventTransport(unittest.TestCase):
         )
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
-        self.assertEqual(agent_package.VERSION, "0.3.127")
+        self.assertEqual(agent_package.VERSION, "0.3.128")
         self.assertEqual(
             agent_package._PACKAGE_FILES["unchained/chat_event_transport.py"],
             "chat_event_transport.py",

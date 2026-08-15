@@ -52,13 +52,19 @@ from credit import (
     validate_hosted_context_budget,
 )
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
+from conversation_transcript import (
+    SESSION_SCHEMA_VERSION,
+    has_supported_session_schema,
+    looks_like_internal_tool_payload as _looks_like_internal_tool_payload,
+    project_visible_messages,
+    strip_internal_tool_payload as _strip_internal_tool_payload,
+    visible_transcript_from_payload,
+)
 from context_compact import compact_messages, emergency_trim
 from tool_payloads import (
     _DSML_PREFIX,
     _XML_GT as _DSML_XML_GT,
     _XML_LT as _DSML_XML_LT,
-    contains_tool_call_wrapper,
-    strip_tool_call_wrappers,
 )
 from web_state import canonical_session_tab
 from scheduler_agent import (
@@ -1152,69 +1158,6 @@ def _extract_deepseek_usage(
     }
 
 
-def _looks_like_internal_tool_payload(text: str) -> bool:
-    """Detect accidental user-visible tool-call payloads."""
-    raw = (text or "").strip()
-    if not raw:
-        return False
-    if contains_tool_call_wrapper(raw):
-        return True
-    if re.search(
-        r'^\s*\{\s*"?name"?\s*:\s*[^,\n]+,\s*"?arguments"?\s*:\s*\{',
-        raw,
-        flags=re.IGNORECASE,
-    ):
-        return True
-    if re.search(r'(?s)```(?:json)?\s*\{.*"name"\s*:.*"arguments"\s*:.*\}\s*```', raw):
-        return True
-    if raw.count('"name"') >= 1 and raw.count('"arguments"') >= 1 and len(raw) > 120:
-        return True
-    return False
-
-
-def _strip_internal_tool_payload(text: str) -> str:
-    """Best-effort local cleanup of leaked tool-call payload text."""
-    cleaned = text or ""
-    # Remove explicit tool-call wrappers and JSON fenced blocks first.
-    cleaned = strip_tool_call_wrappers(cleaned)
-    cleaned = re.sub(r"(?is)```(?:json)?\s*.*?```", " ", cleaned)
-    # Remove inline function-call style JSON objects.
-    cleaned = re.sub(
-        r'(?is)\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}',
-        " ",
-        cleaned,
-    )
-    cleaned = re.sub(
-        r'(?is)\{\s*name\s*:\s*[^,\n]+,\s*arguments\s*:\s*\{.*?\}\s*\}',
-        " ",
-        cleaned,
-    )
-    # Drop residual JSON-ish lines often emitted around tool payloads.
-    kept_lines: list[str] = []
-    for line in cleaned.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        low = s.lower()
-        if contains_tool_call_wrapper(s):
-            continue
-        if s in {"{", "}", "[", "]", ",", "```", "```json"}:
-            continue
-        if (
-            low.startswith('"name"')
-            or low.startswith('"arguments"')
-            or low.startswith('"tool_call_id"')
-            or low.startswith("name:")
-            or low.startswith("arguments:")
-            or low.startswith("tool_call_id:")
-        ):
-            continue
-        kept_lines.append(s)
-    cleaned = " ".join(kept_lines)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
 # ---------------------------------------------------------------------------
 # Trial Agent
 # ---------------------------------------------------------------------------
@@ -1230,8 +1173,15 @@ class TrialAgent:
         self.openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
         self.ws = None
-        # session_id → list of messages (in-memory cache; backed by disk)
+        # session_id → bounded provider/resume messages (backed by disk)
         self.sessions: dict[str, list] = {}
+        # session_id → complete user-visible transcript. This is deliberately
+        # separate from provider context so archive/history reloads never lose
+        # the original prompt when the working context is compacted or capped.
+        self.transcripts: dict[str, list[dict[str, str]]] = {}
+        # Session files created by newer runtimes must never be resumed or
+        # overwritten by this worker.
+        self.unsupported_sessions: set[str] = set()
         # session_id → active asyncio Task (for cancel support)
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.active_req_ids: dict[str, str] = {}
@@ -1413,23 +1363,51 @@ class TrialAgent:
         safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
         return os.path.join(SESSION_DIR, f"{safe_id}.json")
 
+    @staticmethod
+    def _visible_transcript(messages: object) -> list[dict[str, str]]:
+        """Project legacy provider messages into safe user-visible entries."""
+        return project_visible_messages(messages)
+
     def _load_session(self, session_id: str) -> list:
-        """Load session from disk, prepend current system prompt. Returns messages list."""
+        """Load bounded provider context and its display transcript from disk."""
         path = self._session_path(session_id)
         try:
             with open(path) as f:
                 data = json.load(f)
+            if not has_supported_session_schema(data):
+                print(
+                    f"[{session_id}] Unsupported session schema; "
+                    "refusing to load persisted context"
+                )
+                self.transcripts[session_id] = []
+                self.unsupported_sessions.add(session_id)
+                return [{"role": "system", "content": _build_system_prompt()}]
             msgs = data.get("messages", [])
+            if not isinstance(msgs, list):
+                msgs = []
+            self.transcripts[session_id] = visible_transcript_from_payload(data)
             print(f"[{session_id}] Loaded {len(msgs)} messages from disk")
         except FileNotFoundError:
             msgs = []
+            self.transcripts[session_id] = []
         except Exception as e:
             print(f"[{session_id}] Failed to load session: {e}")
             msgs = []
+            self.transcripts[session_id] = []
         return [{"role": "system", "content": _build_system_prompt()}] + msgs
 
+    def _append_transcript(self, session_id: str, role: str, content: object) -> None:
+        """Record one exact user-visible chat message for archive/history use."""
+        entry = project_visible_messages([{"role": role, "content": content}])
+        if not entry:
+            return
+        self.transcripts.setdefault(session_id, []).append(entry[0])
+
     def _save_session(self, session_id: str, messages: list, max_messages: int | None = None):
-        """Persist session messages to disk (system prompt excluded, capped)."""
+        """Persist bounded provider context plus the full visible transcript."""
+        if session_id in self.unsupported_sessions:
+            print(f"[{session_id}] Refusing to overwrite unsupported session schema")
+            return
         path = self._session_path(session_id)
         cap = (
             max_messages
@@ -1438,11 +1416,31 @@ class TrialAgent:
         )
         bounded = _cap_openai_history(messages, cap)
         non_system = [m for m in bounded if m.get("role") != "system"]
+        transcript = self.transcripts.get(session_id)
+        if transcript is None:
+            transcript = self._visible_transcript(non_system)
+        else:
+            transcript = project_visible_messages(transcript)
+        self.transcripts[session_id] = transcript
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "messages": non_system,
+            "transcript": transcript,
+        }
+        temp_path = f"{path}.{_uuid_hex()}.tmp"
         try:
-            with open(path, "w") as f:
-                json.dump({"messages": non_system}, f)
+            with open(temp_path, "w") as f:
+                json.dump(payload, f, separators=(",", ":"), ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
         except Exception as e:
             print(f"[{session_id}] Failed to save session: {e}")
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
     async def _sanitize_user_output(
         self,
@@ -1827,7 +1825,22 @@ class TrialAgent:
         # Start or continue conversation (load from disk if not in memory cache)
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
+        if session_id in self.unsupported_sessions:
+            await self._send(
+                session_id,
+                {
+                    "type": "error",
+                    "data": (
+                        "This conversation was created by a newer agent version and "
+                        "cannot be resumed safely. Start a new chat to continue."
+                    ),
+                },
+            )
+            await self._send(session_id, {"type": "done"})
+            return
         messages = self.sessions[session_id]
+        if session_id not in self.transcripts:
+            self.transcripts[session_id] = self._visible_transcript(messages)
         # Rebuild system prompt with scheduler instructions when armed
         base_system = _build_system_prompt()
         if turn_state.armed and turn_state.grant_id:
@@ -1850,6 +1863,7 @@ class TrialAgent:
             for key in ("refusal", "reasoning"):
                 msg.pop(key, None)
         messages.append({"role": "user", "content": user_text})
+        self._append_transcript(session_id, "user", user_text)
         context_stats = _prepare_hosted_context(messages)
         self.sessions[session_id] = messages
         if (
@@ -1902,7 +1916,7 @@ class TrialAgent:
                         )
                         final_msg = final_resp["choices"][0]["message"]
                         messages.append(final_msg)
-                        text = final_msg.get("content") or final_msg.get("reasoning") or ""
+                        text = final_msg.get("content") or ""
                         text = await self._sanitize_user_output(
                             client,
                             model,
@@ -1921,6 +1935,7 @@ class TrialAgent:
                     if not text:
                         text = fallback
                     await self._send(session_id, {"type": "text", "data": text})
+                    self._append_transcript(session_id, "assistant", text)
                     self._save_session(session_id, messages)
                     await self._send(session_id, {"type": "done"})
 
@@ -2076,11 +2091,6 @@ class TrialAgent:
                     # No tool calls → final answer
                     if not tool_calls:
                         text = message.get("content") or ""
-                        # Some chain-of-thought models (e.g. Solar Pro) put their
-                        # thinking in a 'reasoning' field and return content=None.
-                        # Fall back to reasoning if content is empty.
-                        if not text:
-                            text = message.get("reasoning") or ""
                         text = await self._sanitize_user_output(
                             client,
                             model,
@@ -2099,6 +2109,11 @@ class TrialAgent:
                             await self._send(session_id, {"type": "text",
                                 "data": "[Agent completed the task but returned no text response. "
                                         "Try asking it to summarize what it found.]"})
+                            text = (
+                                "[Agent completed the task but returned no text response. "
+                                "Try asking it to summarize what it found.]"
+                            )
+                        self._append_transcript(session_id, "assistant", text)
                         self._save_session(session_id, messages)
                         await self._send(session_id, {"type": "done"})
                         print(f"[{session_id}] Done ({turn + 1} turns)")
@@ -3332,7 +3347,7 @@ class LocalOpenRouterCLI:
                 client, summary_prompt, self.model, tool_choice="none"
             )
             summary_msg = summary_resp["choices"][0]["message"]
-            summary = (summary_msg.get("content") or summary_msg.get("reasoning") or "").strip()
+            summary = (summary_msg.get("content") or "").strip()
         except Exception as e:
             print(f"[context] Tier 2 skipped: summary request failed: {e}")
             return bool(cstats["compacted"])
@@ -3387,6 +3402,7 @@ class LocalOpenRouterCLI:
 
     async def _run_turn(self, client: httpx.AsyncClient, user_text: str):
         self.messages.append({"role": "user", "content": user_text})
+        self.agent._append_transcript(self.session_id, "user", user_text)
 
         ns = NudgeState()
         reflex = ReflexState()
@@ -3439,7 +3455,7 @@ class LocalOpenRouterCLI:
             self.messages.append(message)
 
             if not tool_calls:
-                text = message.get("content") or message.get("reasoning") or ""
+                text = message.get("content") or ""
                 text = await self.agent._sanitize_user_output(
                     client,
                     self.model,
@@ -3449,6 +3465,7 @@ class LocalOpenRouterCLI:
                 if not text:
                     text = f"[empty response, finish_reason={finish_reason}]"
                 print(f"\nassistant> {text}\n")
+                self.agent._append_transcript(self.session_id, "assistant", text)
                 self._save_local_session()
                 return
 
@@ -3489,7 +3506,7 @@ class LocalOpenRouterCLI:
                         timeout=FORCE_FINAL_TIMEOUT,
                     )
                     final_msg = final_resp["choices"][0]["message"]
-                    final_text = final_msg.get("content") or final_msg.get("reasoning") or ""
+                    final_text = final_msg.get("content") or ""
                     final_text = await self.agent._sanitize_user_output(
                         client,
                         self.model,
@@ -3504,6 +3521,7 @@ class LocalOpenRouterCLI:
                 if not final_text:
                     final_text = "I got stuck and could not complete the task."
                 print(f"\nassistant> {final_text}\n")
+                self.agent._append_transcript(self.session_id, "assistant", final_text)
                 self._save_local_session()
                 return
 

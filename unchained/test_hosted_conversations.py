@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
+from conversation_transcript import SESSION_SCHEMA_VERSION
 from hosted_conversations import HostedConversationRepo
 
 
@@ -62,11 +63,22 @@ class TestHostedConversationRepo(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _write_session(self, session_id: str, messages: list[dict]) -> str:
+    def _write_session(
+        self,
+        session_id: str,
+        messages: list[dict],
+        transcript: list[dict] | None = None,
+        schema_version: int | None = None,
+    ) -> str:
         path = self.repo.session_path(session_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"messages": messages}, f)
+            payload = {"messages": messages}
+            if schema_version is not None:
+                payload["schema_version"] = schema_version
+            if transcript is not None:
+                payload["transcript"] = transcript
+            json.dump(payload, f)
         return path
 
     # --- Slot state ---
@@ -204,6 +216,120 @@ class TestHostedConversationRepo(unittest.TestCase):
         state = self.repo.get_slot_state("u-restore")
         self.assertEqual(state["slots"]["3"], new_sid)
         self.assertEqual(state["active_slot"], 3)
+
+    def test_archive_restore_keeps_full_transcript_beyond_resume_context(self):
+        """Archives must preserve the original prompt even after context capping."""
+        sid = "s-trial-agent-transcript-source"
+        transcript = []
+        for index in range(20):
+            transcript.extend([
+                {"role": "user", "content": f"original prompt {index}"},
+                {"role": "assistant", "content": f"visible answer {index}"},
+            ])
+        # Simulate the capped model context that previously became the entire
+        # archive snapshot. The first prompt is intentionally absent here.
+        resume_messages = transcript[-8:]
+        self._write_session(
+            sid,
+            resume_messages,
+            transcript=transcript,
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+
+        archive_id = self.repo.archive_session(
+            "u-transcript", sid, slot=1, sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(archive_id)
+        archive_data = _json_file(self.repo._archive_path("u-transcript", archive_id))
+        self.assertEqual(archive_data["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertEqual(archive_data["message_count"], len(transcript))
+        self.assertEqual(archive_data["transcript"][0]["content"], "original prompt 0")
+
+        new_sid, slot, restored_resume = self.repo.restore_archive(
+            "u-transcript",
+            archive_id,
+            sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(new_sid)
+        self.assertEqual(slot, 1)
+        self.assertEqual(restored_resume, resume_messages)
+        restored_transcript, found = self.repo.read_session_transcript(new_sid)
+        self.assertTrue(found)
+        self.assertEqual(restored_transcript, transcript)
+        restored_data = _json_file(self.repo.session_path(new_sid))
+        self.assertEqual(restored_data["schema_version"], SESSION_SCHEMA_VERSION)
+
+    def test_v2_empty_transcript_does_not_fall_back_to_private_messages(self):
+        sid = "s-trial-agent-empty-transcript"
+        messages = [{"role": "user", "content": "legacy original prompt"}]
+        self._write_session(
+            sid,
+            messages,
+            transcript=[],
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+        self.assertTrue(found)
+        self.assertEqual(transcript, [])
+        archive_id = self.repo.archive_session(
+            "u-empty-transcript", sid, sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNone(archive_id)
+
+    def test_legacy_projection_excludes_tool_bearing_assistant_content(self):
+        sid = "s-trial-agent-legacy-tool-content"
+        self._write_session(
+            sid,
+            [
+                {"role": "user", "content": "Find the answer"},
+                {
+                    "role": "assistant",
+                    "content": "I will call the browser now.",
+                    "tool_calls": [{"id": "call-1"}],
+                },
+                {"role": "tool", "content": "private tool result"},
+            ],
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+
+        self.assertTrue(found)
+        self.assertEqual(
+            transcript,
+            [{"role": "user", "content": "Find the answer"}],
+        )
+
+    def test_unknown_schema_does_not_project_private_messages(self):
+        sid = "s-trial-agent-unknown-schema"
+        self._write_session(
+            sid,
+            [{"role": "user", "content": "private context"}],
+            transcript=[{"role": "user", "content": "visible context"}],
+            schema_version=999,
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+
+        self.assertFalse(found)
+        self.assertEqual(transcript, [])
+        archive_id = "unknown-schema-archive"
+        os.makedirs(self.repo._archives_dir("u-unknown-schema"), exist_ok=True)
+        with open(self.repo._archive_path("u-unknown-schema", archive_id), "w") as f:
+            json.dump(
+                {
+                    "schema_version": 999,
+                    "messages": [{"role": "user", "content": "private context"}],
+                    "transcript": [{"role": "user", "content": "visible context"}],
+                },
+                f,
+            )
+        restored_sid, slot, messages = self.repo.restore_archive(
+            "u-unknown-schema", archive_id, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNone(restored_sid)
+        self.assertEqual(slot, 0)
+        self.assertEqual(messages, [])
 
     def test_restore_archive_uses_archive_slot_when_no_target(self):
         sid = "s-trial-agent-archive-noslot"
@@ -822,6 +948,99 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(data.get("session_id"))
         self.assertTrue(data["session_id"].startswith("s-trial-agent-"))
         self.assertEqual(data["active_slot"], 2)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_trial_restore_without_slot_archives_archive_target_slot(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-implicit-restore-slot"
+        source_sid = "s-trial-agent-archive-source"
+        current_sid = "s-trial-agent-slot-two-current"
+        self._write_session(
+            source_sid,
+            [{"role": "user", "content": "Restore this conversation"}],
+        )
+        archive_id = self.repo.archive_session(
+            user_id, source_sid, slot=2, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+        self._write_session(
+            current_sid,
+            [{"role": "user", "content": "Keep slot two before restore"}],
+        )
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["2"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["active_slot"], 2)
+        self.assertNotEqual(data["session_id"], current_sid)
+        self.assertFalse(os.path.isfile(self.repo.session_path(current_sid)))
+        archives = self.repo.list_archives(user_id)
+        self.assertEqual(len(archives), 2)
+        self.assertIn(
+            "Keep slot two before restore",
+            [archive["preview"] for archive in archives],
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_unsupported_archive_keeps_target_slot_intact(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-unsupported-archive"
+        current_sid = "s-trial-agent-current"
+        self._write_session(
+            current_sid,
+            [{"role": "user", "content": "Keep this conversation"}],
+        )
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+        archive_id = "unsupported-archive"
+        os.makedirs(self.repo._archives_dir(user_id), exist_ok=True)
+        with open(self.repo._archive_path(user_id, archive_id), "w") as f:
+            json.dump(
+                {
+                    "schema_version": 999,
+                    "messages": [{"role": "user", "content": "future private data"}],
+                },
+                f,
+            )
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertIn("cannot be restored", data["error"])
+        self.assertEqual(
+            self.repo.get_slot_state(user_id)["slots"]["1"], current_sid
+        )
+        self.assertTrue(os.path.isfile(self.repo.session_path(current_sid)))
+        self.assertEqual(len(self.repo.list_archives(user_id)), 1)
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_trial_restore_foreign_archive_returns_404(self, mock_core):

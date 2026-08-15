@@ -32,9 +32,13 @@ from aiohttp import web
 
 from analytics import AnalyticsStore, _safe_event_name
 from auth import Auth
+from conversation_transcript import (
+    looks_like_internal_tool_payload,
+    strip_internal_tool_payload,
+    visible_transcript_from_payload,
+)
 import provision_helpers
 from template_utils import inject_google_client_id
-from tool_payloads import contains_tool_call_wrapper, strip_tool_call_wrappers
 from web_state import ChatRuntimeState, canonical_session_tab as _canonical_session_tab
 from web_app.cmd_dispatch import (
     CmdInputError,
@@ -1363,30 +1367,12 @@ def _trial_session_path(session_id: str) -> str:
 
 def _looks_like_tool_payload(text: str) -> bool:
     """Detect raw or escaped tool payloads that should not be shown to users."""
-    s = (text or "").strip()
-    if not s:
-        return False
-    # {"name": "ddm", "arguments": {...}}
-    if re.search(
-        r'^\s*\{\s*"?name"?\s*:\s*[^,\n]+,\s*"?arguments"?\s*:\s*\{',
-        s, flags=re.IGNORECASE,
-    ):
-        return True
-    if contains_tool_call_wrapper(s):
-        return True
-    return False
+    return looks_like_internal_tool_payload(text)
 
 
 def _strip_tool_payloads(text: str) -> str:
     """Remove inline tool-call JSON from text, keep human-readable parts."""
-    cleaned = re.sub(
-        r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}',
-        "", text, flags=re.DOTALL,
-    )
-    cleaned = strip_tool_call_wrappers(cleaned)
-    # Collapse whitespace left behind
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
+    return strip_internal_tool_payload(text)
 
 
 def _read_trial_history(session_id: str) -> tuple[list[dict], bool]:
@@ -1395,28 +1381,7 @@ def _read_trial_history(session_id: str) -> tuple[list[dict], bool]:
     try:
         with open(session_path) as f:
             data = json.load(f)
-        raw = data.get("messages", [])
-        # Filter to visible chat messages only.
-        msgs: list[dict] = []
-        for m in raw:
-            role = m.get("role")
-            if role == "user":
-                msgs.append({"role": "user", "content": m.get("content", "")})
-            elif role == "assistant":
-                # Skip messages that are purely tool calls (no user-facing text)
-                if m.get("tool_calls") and not m.get("content"):
-                    continue
-                content = m.get("content") or ""
-                if not content:
-                    continue
-                # Strip leaked tool-call JSON from content
-                if _looks_like_tool_payload(content):
-                    content = _strip_tool_payloads(content)
-                if _looks_like_tool_payload(content):
-                    continue
-                if content:
-                    msgs.append({"role": "assistant", "content": content})
-        return msgs, True
+        return visible_transcript_from_payload(data), True
     except FileNotFoundError:
         return [], False
     except Exception as e:
