@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Iterator
 
 
 CHAT_WS_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_INLINE_SCREENSHOT_BASE64_BYTES = 8 * 1024 * 1024
 MAX_AGENT_EVENT_BYTES = 12 * 1024 * 1024
+# The in-memory reconnect journal has a much smaller per-event budget than
+# the WebSocket transport. Local CLI final responses are chunked to this
+# conservative target before they enter that journal.
+CHAT_TURN_REPLAY_EVENT_BYTES = 12 * 1024
+CHAT_TEXT_REPLAY_TARGET_BYTES = 8 * 1024
 SCREENSHOT_OMITTED_MESSAGE = (
     "Screenshot preview omitted because the image exceeded the 8 MiB inline preview limit."
 )
@@ -21,6 +26,85 @@ MALFORMED_TEXT_EVENT_MESSAGE = (
 
 def _utf8_size(value: str) -> int:
     return len(value.encode("utf-8"))
+
+
+def _serialized_replay_text_event_size(
+    text: str,
+    *,
+    session_id: str,
+    req_id: str,
+) -> int:
+    """Return the journal's JSON size for one normal text event.
+
+    ``web_state`` uses the default ``ensure_ascii=True`` behavior when it
+    measures replay events. Mirror that policy so escaped Unicode, quotes, and
+    control characters cannot make a seemingly small raw string overflow the
+    replay cap.
+    """
+    event: dict[str, str] = {
+        "type": "text",
+        "data": text,
+        "session_id": session_id,
+    }
+    if req_id:
+        event["req_id"] = req_id
+    return _utf8_size(json.dumps(event, separators=(",", ":"), default=str))
+
+
+def iter_replay_safe_text_chunks(
+    text: str,
+    *,
+    session_id: str,
+    req_id: str = "",
+    max_event_bytes: int = CHAT_TEXT_REPLAY_TARGET_BYTES,
+) -> Iterator[str]:
+    """Yield exact, codepoint-safe text chunks that fit the replay journal.
+
+    This is intentionally narrower than the 12 MiB agent transport limit. The
+    browser concatenates ordinary ``text`` events, while the 8 KiB target leaves
+    room for journal-added sequence and timestamp metadata below its 12 KiB cap.
+    Reconnect replay remains bounded by the journal's event-count retention;
+    archived/history text is authoritative for exceptionally large responses.
+    """
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    if max_event_bytes <= 0:
+        raise ValueError("max_event_bytes must be positive")
+    if _serialized_replay_text_event_size(
+        "", session_id=session_id, req_id=req_id
+    ) > max_event_bytes:
+        raise ValueError("max_event_bytes is too small for event metadata")
+    if not text:
+        yield ""
+        return
+
+    start = 0
+    while start < len(text):
+        # A valid chunk can never contain more code points than the byte budget.
+        stop = min(len(text), start + max_event_bytes)
+        if _serialized_replay_text_event_size(
+            text[start:stop], session_id=session_id, req_id=req_id
+        ) <= max_event_bytes:
+            yield text[start:stop]
+            start = stop
+            continue
+
+        low = start + 1
+        high = stop
+        best = start
+        while low <= high:
+            middle = (low + high) // 2
+            if _serialized_replay_text_event_size(
+                text[start:middle], session_id=session_id, req_id=req_id
+            ) <= max_event_bytes:
+                best = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        if best == start:
+            raise ValueError("max_event_bytes is too small for one text character")
+        yield text[start:best]
+        start = best
 
 
 def _identity_fields(event: dict[str, Any]) -> dict[str, Any]:

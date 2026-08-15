@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
-from hosted_conversations import HostedConversationRepo
+from conversation_transcript import SESSION_SCHEMA_VERSION
+from hosted_conversations import ArchivePreservationError, HostedConversationRepo
 
 
 def _json_file(path: str) -> dict:
@@ -62,11 +63,22 @@ class TestHostedConversationRepo(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _write_session(self, session_id: str, messages: list[dict]) -> str:
+    def _write_session(
+        self,
+        session_id: str,
+        messages: list[dict],
+        transcript: list[dict] | None = None,
+        schema_version: int | None = None,
+    ) -> str:
         path = self.repo.session_path(session_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"messages": messages}, f)
+            payload = {"messages": messages}
+            if schema_version is not None:
+                payload["schema_version"] = schema_version
+            if transcript is not None:
+                payload["transcript"] = transcript
+            json.dump(payload, f)
         return path
 
     # --- Slot state ---
@@ -105,6 +117,26 @@ class TestHostedConversationRepo(unittest.TestCase):
             self.repo._safe_user_key("u-a"),
             self.repo._safe_user_key("u-b"),
         )
+
+    def test_slot_replay_does_not_delete_source_bound_elsewhere(self):
+        """An idempotent destination must not hide a newly rebound source."""
+        state = self.repo.get_slot_state("u-slot-replay")
+        state["slots"]["1"] = "s-old-source"
+        state["slots"]["2"] = "s-new-destination"
+        self.repo.set_slot_state("u-slot-replay", state)
+
+        updated = self.repo.replace_slot_session(
+            "u-slot-replay",
+            2,
+            "s-old-source",
+            "s-new-destination",
+            allow_empty=True,
+        )
+
+        self.assertFalse(updated)
+        current = self.repo.get_slot_state("u-slot-replay")
+        self.assertEqual(current["slots"]["1"], "s-old-source")
+        self.assertEqual(current["slots"]["2"], "s-new-destination")
 
     # --- Session IDs ---
 
@@ -157,6 +189,14 @@ class TestHostedConversationRepo(unittest.TestCase):
         )
         self.assertIsNone(archive_id)
 
+    def test_archive_session_refuses_corrupt_existing_session(self):
+        sid = "s-trial-agent-corrupt"
+        with open(self.repo.session_path(sid), "w") as f:
+            f.write("{")
+
+        with self.assertRaises(ArchivePreservationError):
+            self.repo.archive_session("u-test", sid, sessions_dir=str(self.session_dir))
+
     def test_list_archives_oldest_first_and_respects_limit(self):
         for i in range(5):
             sid = f"s-trial-agent-arc-{i}"
@@ -204,6 +244,153 @@ class TestHostedConversationRepo(unittest.TestCase):
         state = self.repo.get_slot_state("u-restore")
         self.assertEqual(state["slots"]["3"], new_sid)
         self.assertEqual(state["active_slot"], 3)
+
+    def test_archive_restore_keeps_full_transcript_beyond_resume_context(self):
+        """Archives must preserve the original prompt even after context capping."""
+        sid = "s-trial-agent-transcript-source"
+        transcript = []
+        for index in range(20):
+            transcript.extend([
+                {"role": "user", "content": f"original prompt {index}"},
+                {"role": "assistant", "content": f"visible answer {index}"},
+            ])
+        # Simulate the capped model context that previously became the entire
+        # archive snapshot. The first prompt is intentionally absent here.
+        resume_messages = transcript[-8:]
+        self._write_session(
+            sid,
+            resume_messages,
+            transcript=transcript,
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+
+        archive_id = self.repo.archive_session(
+            "u-transcript", sid, slot=1, sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(archive_id)
+        archive_data = _json_file(self.repo._archive_path("u-transcript", archive_id))
+        self.assertEqual(archive_data["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertEqual(archive_data["message_count"], len(transcript))
+        self.assertEqual(archive_data["transcript"][0]["content"], "original prompt 0")
+
+        new_sid, slot, restored_resume = self.repo.restore_archive(
+            "u-transcript",
+            archive_id,
+            sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(new_sid)
+        self.assertEqual(slot, 1)
+        self.assertEqual(restored_resume, resume_messages)
+        restored_transcript, found = self.repo.read_session_transcript(new_sid)
+        self.assertTrue(found)
+        self.assertEqual(restored_transcript, transcript)
+        restored_data = _json_file(self.repo.session_path(new_sid))
+        self.assertEqual(restored_data["schema_version"], SESSION_SCHEMA_VERSION)
+
+    def test_v2_transcript_preserves_displayed_json_verbatim(self):
+        sid = "s-trial-agent-literal-transcript"
+        visible = (
+            "Here is the API example:\n\n"
+            "```json\n"
+            '{"name":"describe_schema","arguments":{"format":"full"}}\n'
+            "```\n\n"
+            "Keep this payload in the answer."
+        )
+        transcript = [
+            {"role": "user", "content": "Show the schema"},
+            {"role": "assistant", "content": visible},
+        ]
+        self._write_session(
+            sid,
+            [{"role": "assistant", "content": "bounded provider context"}],
+            transcript=transcript,
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+
+        read_transcript, found = self.repo.read_session_transcript(sid)
+        archive_id = self.repo.archive_session(
+            "u-literal-transcript", sid, sessions_dir=str(self.session_dir)
+        )
+
+        self.assertTrue(found)
+        self.assertEqual(read_transcript, transcript)
+        self.assertIsNotNone(archive_id)
+        archive = _json_file(
+            self.repo._archive_path("u-literal-transcript", str(archive_id))
+        )
+        self.assertEqual(archive["transcript"], transcript)
+
+    def test_v2_empty_transcript_does_not_fall_back_to_private_messages(self):
+        sid = "s-trial-agent-empty-transcript"
+        messages = [{"role": "user", "content": "legacy original prompt"}]
+        self._write_session(
+            sid,
+            messages,
+            transcript=[],
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+        self.assertTrue(found)
+        self.assertEqual(transcript, [])
+        archive_id = self.repo.archive_session(
+            "u-empty-transcript", sid, sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNone(archive_id)
+
+    def test_legacy_projection_excludes_tool_bearing_assistant_content(self):
+        sid = "s-trial-agent-legacy-tool-content"
+        self._write_session(
+            sid,
+            [
+                {"role": "user", "content": "Find the answer"},
+                {
+                    "role": "assistant",
+                    "content": "I will call the browser now.",
+                    "tool_calls": [{"id": "call-1"}],
+                },
+                {"role": "tool", "content": "private tool result"},
+            ],
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+
+        self.assertTrue(found)
+        self.assertEqual(
+            transcript,
+            [{"role": "user", "content": "Find the answer"}],
+        )
+
+    def test_unknown_schema_does_not_project_private_messages(self):
+        sid = "s-trial-agent-unknown-schema"
+        self._write_session(
+            sid,
+            [{"role": "user", "content": "private context"}],
+            transcript=[{"role": "user", "content": "visible context"}],
+            schema_version=999,
+        )
+
+        transcript, found = self.repo.read_session_transcript(sid)
+
+        self.assertFalse(found)
+        self.assertEqual(transcript, [])
+        archive_id = "unknown-schema-archive"
+        os.makedirs(self.repo._archives_dir("u-unknown-schema"), exist_ok=True)
+        with open(self.repo._archive_path("u-unknown-schema", archive_id), "w") as f:
+            json.dump(
+                {
+                    "schema_version": 999,
+                    "messages": [{"role": "user", "content": "private context"}],
+                    "transcript": [{"role": "user", "content": "visible context"}],
+                },
+                f,
+            )
+        restored_sid, slot, messages = self.repo.restore_archive(
+            "u-unknown-schema", archive_id, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNone(restored_sid)
+        self.assertEqual(slot, 0)
+        self.assertEqual(messages, [])
 
     def test_restore_archive_uses_archive_slot_when_no_target(self):
         sid = "s-trial-agent-archive-noslot"
@@ -652,6 +839,53 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(archives[0]["preview"], "Valuable research")
 
     @patch("web_app.handlers.chat_flow._core")
+    async def test_new_chat_quiesces_before_archiving_source(self, mock_core):
+        """The worker's final-save ACK must precede source archival."""
+        from web_app.handlers import chat_stream
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+        from web_state import hosted_session_phase
+
+        old_session = "s-trial-agent-quiesce-before-archive"
+        user_id = "u-test-quiesce-before-archive"
+        core = self._core(user_id)
+        mock_core.return_value = core
+        self._write_session(old_session, [{"role": "user", "content": "Keep me"}])
+        events = []
+        repo = self.repo()
+        original_archive = repo.archive_session
+
+        async def quiesce(_core, session_id):
+            self.assertEqual(session_id, old_session)
+            events.append("quiesce")
+            return True
+
+        async def retire(_core, session_id):
+            self.assertEqual(session_id, old_session)
+            events.append("retire")
+
+        def archive(*args, **kwargs):
+            self.assertEqual(events, ["quiesce"])
+            return original_archive(*args, **kwargs)
+
+        request_id = "request-00000000000000A6"
+        reservation = await handle_chat_new(self._request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        with (
+            patch.object(chat_stream, "quiesce_hosted_session", side_effect=quiesce),
+            patch.object(chat_stream, "retire_hosted_session", side_effect=retire),
+            patch.object(repo, "archive_session", side_effect=archive),
+        ):
+            response = await handle_chat_new_ack(
+                self._ack_request(
+                    request_id, old_session, data["session_id"], data["commit_token"]
+                )
+            )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(events, ["quiesce", "retire"])
+        self.assertEqual(hosted_session_phase(core, old_session), "retired")
+
+    @patch("web_app.handlers.chat_flow._core")
     async def test_empty_session_is_not_archived(self, mock_core):
         """A session with no messages should not produce an archive."""
         from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
@@ -704,6 +938,45 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
 
         archives = self.repo().list_archives(user_id)
         self.assertEqual(len(archives), 0)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_new_chat_ack_keeps_source_when_archiving_fails(self, mock_core):
+        """A failed archive must leave the source chat and slot retryable."""
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        old_session = "s-trial-agent-archive-failure"
+        user_id = "u-test-archive-failure"
+        core = self._core(user_id)
+        core._session_tabs[old_session] = "active-tab"
+        repo = self.repo()
+        state = repo.get_slot_state(user_id)
+        state["slots"]["1"] = old_session
+        repo.set_slot_state(user_id, state)
+        mock_core.return_value = core
+        self._write_session(old_session, [{"role": "user", "content": "Keep me"}])
+
+        request_id = "request-00000000000000A5"
+        reservation = await handle_chat_new(self._request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        ack_request = self._ack_request(
+            request_id, old_session, data["session_id"], data["commit_token"]
+        )
+        with patch.object(
+            repo,
+            "archive_session",
+            side_effect=ArchivePreservationError("disk unavailable"),
+        ):
+            response = await handle_chat_new_ack(ack_request)
+
+        self.assertEqual(response.status, 503)
+        self.assertTrue(os.path.isfile(repo.session_path(old_session)))
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], old_session)
+        self.assertEqual(core._session_tabs[old_session], "active-tab")
+        self.assertNotIn(data["session_id"], core._session_tabs)
+
+        retry = await handle_chat_new_ack(ack_request)
+        self.assertEqual(retry.status, 200)
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], data["session_id"])
 
     def repo(self):
         from web_app.handlers.chat_flow import _hosted_repo
@@ -822,6 +1095,276 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(data.get("session_id"))
         self.assertTrue(data["session_id"].startswith("s-trial-agent-"))
         self.assertEqual(data["active_slot"], 2)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_trial_restore_without_slot_archives_archive_target_slot(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-implicit-restore-slot"
+        source_sid = "s-trial-agent-archive-source"
+        current_sid = "s-trial-agent-slot-two-current"
+        self._write_session(
+            source_sid,
+            [{"role": "user", "content": "Restore this conversation"}],
+        )
+        archive_id = self.repo.archive_session(
+            user_id, source_sid, slot=2, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+        self._write_session(
+            current_sid,
+            [{"role": "user", "content": "Keep slot two before restore"}],
+        )
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["2"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["active_slot"], 2)
+        self.assertNotEqual(data["session_id"], current_sid)
+        self.assertFalse(os.path.isfile(self.repo.session_path(current_sid)))
+        archives = self.repo.list_archives(user_id)
+        self.assertEqual(len(archives), 2)
+        self.assertIn(
+            "Keep slot two before restore",
+            [archive["preview"] for archive in archives],
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_keeps_target_when_archiving_fails(self, mock_core):
+        """Restore must not replace a target chat that could not be archived."""
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-restore-archive-failure"
+        source_sid = "s-trial-agent-restore-source"
+        current_sid = "s-trial-agent-restore-current"
+        self._write_session(source_sid, [{"role": "user", "content": "Restore me"}])
+        archive_id = self.repo.archive_session(
+            user_id, source_sid, slot=1, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+        self._write_session(current_sid, [{"role": "user", "content": "Keep me"}])
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        with (
+            patch("web_app.handlers.chat_flow._hosted_repo", return_value=self.repo),
+            patch.object(
+                self.repo,
+                "archive_session",
+                side_effect=ArchivePreservationError("disk unavailable"),
+            ),
+            patch.object(self.repo, "restore_archive", wraps=self.repo.restore_archive) as restore,
+        ):
+            response = await handle_chat_restore_archive(request)
+
+        self.assertEqual(response.status, 503)
+        self.assertTrue(os.path.isfile(self.repo.session_path(current_sid)))
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], current_sid)
+        restore.assert_not_called()
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_rejects_malformed_v2_archive_before_target_mutation(self, mock_core):
+        """A v2 archive without canonical display history cannot replace a chat."""
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-malformed-v2-archive"
+        current_sid = "s-trial-agent-malformed-current"
+        self._write_session(current_sid, [{"role": "user", "content": "Keep me"}])
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+        archive_id = "malformed-v2-archive"
+        os.makedirs(self.repo._archives_dir(user_id), exist_ok=True)
+        with open(self.repo._archive_path(user_id, archive_id), "w") as f:
+            json.dump(
+                {
+                    "schema_version": SESSION_SCHEMA_VERSION,
+                    "messages": [{"role": "user", "content": "private context"}],
+                },
+                f,
+            )
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        response = await handle_chat_restore_archive(
+            SimpleNamespace(
+                json=AsyncMock(
+                    return_value={
+                        "model": "google/gemini-3.1-flash-lite",
+                        "archive_id": archive_id,
+                        "slot": 1,
+                    }
+                )
+            )
+        )
+
+        self.assertEqual(response.status, 409)
+        self.assertTrue(os.path.isfile(self.repo.session_path(current_sid)))
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], current_sid)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_aborts_when_target_slot_changes_after_archival(self, mock_core):
+        """A concurrent slot owner must not be displaced after target archival."""
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-restore-slot-race"
+        source_sid = "s-trial-agent-race-source"
+        archived_target_sid = "s-trial-agent-race-target"
+        competing_sid = "s-trial-agent-race-competing"
+        self._write_session(source_sid, [{"role": "user", "content": "Restore me"}])
+        archive_id = self.repo.archive_session(
+            user_id, source_sid, slot=1, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+        self._write_session(
+            archived_target_sid, [{"role": "user", "content": "Archive me"}]
+        )
+        self._write_session(
+            competing_sid, [{"role": "user", "content": "Keep competing chat"}]
+        )
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = archived_target_sid
+        self.repo.set_slot_state(user_id, state)
+
+        original_archive = self.repo.archive_session
+
+        def archive_then_switch(*args, **kwargs):
+            result = original_archive(*args, **kwargs)
+            changed = self.repo.get_slot_state(user_id)
+            changed["slots"]["1"] = competing_sid
+            self.repo.set_slot_state(user_id, changed)
+            return result
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        with (
+            patch("web_app.handlers.chat_flow._hosted_repo", return_value=self.repo),
+            patch.object(self.repo, "archive_session", side_effect=archive_then_switch),
+        ):
+            response = await handle_chat_restore_archive(request)
+
+        self.assertEqual(response.status, 409)
+        self.assertTrue(os.path.isfile(self.repo.session_path(archived_target_sid)))
+        self.assertTrue(os.path.isfile(self.repo.session_path(competing_sid)))
+        self.assertEqual(
+            self.repo.get_slot_state(user_id)["slots"]["1"], competing_sid
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_removes_confirmed_empty_target_session(self, mock_core):
+        """An empty target is safe to replace and should not become an orphan."""
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-empty-restore-target"
+        source_sid = "s-trial-agent-empty-target-source"
+        current_sid = "s-trial-agent-empty-target-current"
+        self._write_session(source_sid, [{"role": "user", "content": "Restore me"}])
+        archive_id = self.repo.archive_session(
+            user_id, source_sid, slot=1, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+        self._write_session(current_sid, [])
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        response = await handle_chat_restore_archive(
+            SimpleNamespace(
+                json=AsyncMock(
+                    return_value={
+                        "model": "google/gemini-3.1-flash-lite",
+                        "archive_id": archive_id,
+                        "slot": 1,
+                    }
+                )
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertFalse(os.path.isfile(self.repo.session_path(current_sid)))
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_unsupported_archive_keeps_target_slot_intact(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-unsupported-archive"
+        current_sid = "s-trial-agent-current"
+        self._write_session(
+            current_sid,
+            [{"role": "user", "content": "Keep this conversation"}],
+        )
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = current_sid
+        self.repo.set_slot_state(user_id, state)
+        archive_id = "unsupported-archive"
+        os.makedirs(self.repo._archives_dir(user_id), exist_ok=True)
+        with open(self.repo._archive_path(user_id, archive_id), "w") as f:
+            json.dump(
+                {
+                    "schema_version": 999,
+                    "messages": [{"role": "user", "content": "future private data"}],
+                },
+                f,
+            )
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertIn("cannot be restored", data["error"])
+        self.assertEqual(
+            self.repo.get_slot_state(user_id)["slots"]["1"], current_sid
+        )
+        self.assertTrue(os.path.isfile(self.repo.session_path(current_sid)))
+        self.assertEqual(len(self.repo.list_archives(user_id)), 1)
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_trial_restore_foreign_archive_returns_404(self, mock_core):
@@ -1254,6 +1797,122 @@ class TestTrialNewChatSlotUpdate(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_slot_conflict_keeps_source_retryable(self, mock_core):
+        """A concurrent slot owner must block deletion until a retry can commit."""
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        old_session = "s-trial-agent-new-chat-race-source"
+        competing_session = "s-trial-agent-new-chat-race-competing"
+        user_id = "u-test-new-chat-slot-race"
+        core = self._core(user_id)
+        core._session_tabs[old_session] = "active-tab"
+        repo = self._repo()
+        state = repo.get_slot_state(user_id)
+        state["slots"]["1"] = old_session
+        repo.set_slot_state(user_id, state)
+        self._write_session(old_session, [{"role": "user", "content": "Keep me"}])
+        self._write_session(
+            competing_session, [{"role": "user", "content": "Competing chat"}]
+        )
+        mock_core.return_value = core
+
+        request_id = "request-0000000000000B04"
+        reservation = await handle_chat_new(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "session_id": old_session,
+                    "slot": 1,
+                })
+            )
+        )
+        data = json.loads(reservation.body.decode())
+        ack_request = SimpleNamespace(
+            json=AsyncMock(return_value={
+                "model": "google/gemini-3.1-flash-lite",
+                "request_id": request_id,
+                "commit_token": data["commit_token"],
+                "previous_session_id": old_session,
+                "session_id": data["session_id"],
+                "slot": 1,
+            })
+        )
+        original_archive = repo.archive_session
+
+        def archive_then_switch(*args, **kwargs):
+            result = original_archive(*args, **kwargs)
+            changed = repo.get_slot_state(user_id)
+            changed["slots"]["1"] = competing_session
+            repo.set_slot_state(user_id, changed)
+            return result
+
+        with patch.object(repo, "archive_session", side_effect=archive_then_switch):
+            response = await handle_chat_new_ack(ack_request)
+
+        self.assertEqual(response.status, 503)
+        self.assertTrue(os.path.isfile(repo.session_path(old_session)))
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], competing_session)
+        self.assertEqual(core._session_tabs[old_session], "active-tab")
+        self.assertNotIn(data["session_id"], core._session_tabs)
+
+        restored = repo.get_slot_state(user_id)
+        restored["slots"]["1"] = old_session
+        repo.set_slot_state(user_id, restored)
+        retry = await handle_chat_new_ack(ack_request)
+
+        self.assertEqual(retry.status, 200)
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], data["session_id"])
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_empty_slot_does_not_displace_source_bound_elsewhere(self, mock_core):
+        """A stale slot request must not delete a chat active in another slot."""
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        old_session = "s-trial-agent-cross-slot-source"
+        user_id = "u-test-new-chat-cross-slot"
+        core = self._core(user_id)
+        core._session_tabs[old_session] = "active-tab"
+        repo = self._repo()
+        state = repo.get_slot_state(user_id)
+        state["slots"]["1"] = old_session
+        repo.set_slot_state(user_id, state)
+        self._write_session(old_session, [{"role": "user", "content": "Keep me"}])
+        mock_core.return_value = core
+
+        request_id = "request-0000000000000B05"
+        reservation = await handle_chat_new(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "session_id": old_session,
+                    "slot": 2,
+                })
+            )
+        )
+        data = json.loads(reservation.body.decode())
+        response = await handle_chat_new_ack(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "commit_token": data["commit_token"],
+                    "previous_session_id": old_session,
+                    "session_id": data["session_id"],
+                    "slot": 2,
+                })
+            )
+        )
+
+        self.assertEqual(response.status, 503)
+        self.assertTrue(os.path.isfile(repo.session_path(old_session)))
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], old_session)
+        self.assertEqual(repo.get_slot_state(user_id)["slots"]["2"], "")
+        self.assertEqual(core._session_tabs[old_session], "active-tab")
+        self.assertNotIn(data["session_id"], core._session_tabs)
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_slot_idempotent_recovery_preserves_mapping(self, mock_core):

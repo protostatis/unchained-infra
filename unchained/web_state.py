@@ -19,7 +19,7 @@ from _thread import LockType
 from dataclasses import dataclass, field
 from typing import Deque, TextIO
 
-from chat_event_transport import normalize_text_event
+from chat_event_transport import CHAT_TURN_REPLAY_EVENT_BYTES, normalize_text_event
 
 
 @dataclass
@@ -46,6 +46,15 @@ class ProfileSessionLockState:
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     users: int = 0
+
+
+@dataclass
+class HostedSessionLifecycle:
+    """Coordinates hosted dispatch with archive/replace transitions."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    phase: str = "open"
+    dispatch_leases: set[asyncio.Future] = field(default_factory=set)
 
 
 def profile_session_caller_tag(session_id: str) -> str:
@@ -218,8 +227,78 @@ async def profile_session_guard(core, session_id: str):
             locks.pop(session_id, None)
 
 
+def hosted_session_lifecycles(core) -> dict[str, HostedSessionLifecycle]:
+    """Return the per-session hosted dispatch and retirement coordinators."""
+    lifecycles = getattr(core, "_hosted_session_lifecycles", None)
+    if not isinstance(lifecycles, dict):
+        lifecycles = {}
+        core._hosted_session_lifecycles = lifecycles
+    return lifecycles
+
+
+def _hosted_session_lifecycle(core, session_id: str) -> HostedSessionLifecycle:
+    lifecycles = hosted_session_lifecycles(core)
+    lifecycle = lifecycles.get(session_id)
+    if lifecycle is None:
+        lifecycle = HostedSessionLifecycle()
+        lifecycles[session_id] = lifecycle
+    return lifecycle
+
+
+def hosted_session_phase(core, session_id: str) -> str:
+    """Return the current hosted lifecycle phase without creating state."""
+    lifecycle = hosted_session_lifecycles(core).get(session_id)
+    return lifecycle.phase if lifecycle is not None else "open"
+
+
+async def start_hosted_session_dispatch(core, session_id: str) -> asyncio.Future | None:
+    """Lease one queued hosted worker dispatch while the session remains open."""
+    lifecycle = _hosted_session_lifecycle(core, session_id)
+    async with lifecycle.lock:
+        if lifecycle.phase != "open":
+            return None
+        lease = asyncio.get_running_loop().create_future()
+        lifecycle.dispatch_leases.add(lease)
+        return lease
+
+
+async def finish_hosted_session_dispatch(
+    core, session_id: str, lease: asyncio.Future
+) -> None:
+    """Release a dispatch lease after its WebSocket send has completed."""
+    lifecycle = _hosted_session_lifecycle(core, session_id)
+    async with lifecycle.lock:
+        lifecycle.dispatch_leases.discard(lease)
+        if not lease.done():
+            lease.set_result(None)
+
+
+async def begin_hosted_session_transition(
+    core, session_id: str
+) -> HostedSessionLifecycle | None:
+    """Block new dispatches and wait for all previously queued sends."""
+    lifecycle = _hosted_session_lifecycle(core, session_id)
+    async with lifecycle.lock:
+        if lifecycle.phase != "open":
+            return None
+        lifecycle.phase = "transitioning"
+        pending_dispatches = tuple(lifecycle.dispatch_leases)
+    if pending_dispatches:
+        await asyncio.gather(*pending_dispatches, return_exceptions=True)
+    return lifecycle
+
+
+async def finish_hosted_session_transition(
+    lifecycle: HostedSessionLifecycle, *, retired: bool
+) -> None:
+    """Reopen a failed transition or permanently retire its source session."""
+    async with lifecycle.lock:
+        if lifecycle.phase == "transitioning":
+            lifecycle.phase = "retired" if retired else "open"
+
+
 _CHAT_TURN_JOURNAL_LIMIT = 200
-_CHAT_TURN_REPLAY_EVENT_BYTES = 12 * 1024
+_CHAT_TURN_REPLAY_EVENT_BYTES = CHAT_TURN_REPLAY_EVENT_BYTES
 _CHAT_TURN_REPLAY_TEXT_BYTES = 64 * 1024
 _CHAT_TURN_RETENTION_SECONDS = 5 * 60
 _CHAT_TURN_TERMINAL_STATUSES = frozenset({"done", "error", "cancelled"})

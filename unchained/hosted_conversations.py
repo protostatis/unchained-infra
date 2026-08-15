@@ -7,10 +7,10 @@ user identity. The module preserves compatibility with the existing
 ``/data/sessions`` format used by ``chat_agent_openrouter.py`` for active
 message payloads.
 
-Archive metadata (preview, slot, timestamps) is stored alongside the
-full message snapshot in the archive directory. Slot state is a tiny JSON
-blob that remains atomic: a corrupt or partial write never replaces the
-current state.
+Archive metadata (preview, slot, timestamps), bounded provider resume context,
+and the full user-visible transcript are stored together in the archive
+directory. Slot state is a tiny JSON blob that remains atomic: a corrupt or
+partial write never replaces the current state.
 
 All public methods accept an explicit ``data_dir`` parameter so tests can
 target a temp directory without touching the real ``/data`` volume.
@@ -26,6 +26,14 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+
+from conversation_transcript import (
+    SESSION_SCHEMA_VERSION,
+    has_supported_session_schema,
+    project_visible_messages,
+    validate_visible_transcript,
+    visible_transcript_from_payload,
+)
 
 try:
     import fcntl as _fcntl
@@ -49,6 +57,14 @@ _DEFAULT_SESSIONS_DIR = os.environ.get(
 
 _SLOT_STATE_CURRENT_VERSION = 1
 _SLOT_COUNT = 3
+
+
+class ArchivePreservationError(RuntimeError):
+    """An existing session could not be safely preserved before replacement."""
+
+
+class ArchiveRestoreConflictError(RuntimeError):
+    """The target slot changed after its active session was preserved."""
 
 
 class HostedConversationRepo:
@@ -183,17 +199,11 @@ class HostedConversationRepo:
             sessions_dir=sessions_dir or self._sessions_dir,
         )
 
-    def read_session_messages(
+    def _session_read_candidates(
         self, session_id: str, *, sessions_dir: str | None = None
-    ) -> tuple[list[dict], bool]:
-        """Read active session messages. Returns (messages, found).
-
-        Dual-read: tries the validated path first, then falls back to
-        the legacy sanitized path so historically-stored files remain
-        readable.
-        """
+    ) -> list[str]:
+        """Return current and legacy paths in the order they should be read."""
         sd = sessions_dir or self._sessions_dir
-        # Try validated path first; fall back to legacy for historic files.
         try:
             path = HostedConversationRepo.make_session_path(session_id, sessions_dir=sd)
         except ValueError:
@@ -206,16 +216,102 @@ class HostedConversationRepo:
             candidates.append(path)
         if legacy != path:
             candidates.append(legacy)
-        for candidate in candidates:
+        return candidates
+
+    @staticmethod
+    def _visible_messages(messages: object) -> list[dict]:
+        """Return the strict legacy projection used by unversioned records."""
+        return project_visible_messages(messages)
+
+    def read_session_payload(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[dict, bool]:
+        """Read a session's bounded resume history and display transcript.
+
+        ``messages`` remains the legacy provider-context contract.  The
+        optional ``transcript`` field is a complete user-visible record that
+        must not be capped along with model context.  Legacy files derive it
+        from ``messages`` so they stay readable.
+        """
+        # Try validated path first; fall back to legacy for historic files.
+        for candidate in self._session_read_candidates(
+            session_id, sessions_dir=sessions_dir
+        ):
             try:
                 with open(candidate) as f:
                     data = json.load(f)
+                if not has_supported_session_schema(data):
+                    continue
                 msgs = data.get("messages")
                 if isinstance(msgs, list):
-                    return msgs, True
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    return {
+                        "messages": msgs,
+                        "transcript": visible_transcript_from_payload(data),
+                    }, True
+            except (AttributeError, FileNotFoundError, json.JSONDecodeError, OSError):
                 continue
-        return [], False
+        return {}, False
+
+    def _read_archive_session_payload(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[dict, bool]:
+        """Read a source session strictly before a destructive transition.
+
+        Missing sessions and valid sessions without visible history are safe
+        no-ops. Existing malformed, unreadable, or future-schema files must
+        stop the transition rather than being deleted without an archive.
+        """
+        for candidate in self._session_read_candidates(
+            session_id, sessions_dir=sessions_dir
+        ):
+            try:
+                with open(candidate) as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                continue
+            except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+                raise ArchivePreservationError(
+                    "could not read existing session for archival"
+                ) from exc
+            if not isinstance(data, dict) or not has_supported_session_schema(data):
+                raise ArchivePreservationError(
+                    "existing session has an unsupported or invalid schema"
+                )
+            messages = data.get("messages")
+            if not isinstance(messages, list):
+                raise ArchivePreservationError(
+                    "existing session has invalid provider context"
+                )
+            if (
+                data.get("schema_version") == SESSION_SCHEMA_VERSION
+                and validate_visible_transcript(data.get("transcript")) is None
+            ):
+                raise ArchivePreservationError(
+                    "existing session has an invalid visible transcript"
+                )
+            return {
+                "messages": messages,
+                "transcript": visible_transcript_from_payload(data),
+            }, True
+        return {}, False
+
+    def read_session_messages(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[list[dict], bool]:
+        """Read the bounded provider/resume history from an active session."""
+        payload, found = self.read_session_payload(
+            session_id, sessions_dir=sessions_dir
+        )
+        return payload.get("messages", []), found
+
+    def read_session_transcript(
+        self, session_id: str, *, sessions_dir: str | None = None
+    ) -> tuple[list[dict], bool]:
+        """Read the complete user-visible transcript from an active session."""
+        payload, found = self.read_session_payload(
+            session_id, sessions_dir=sessions_dir
+        )
+        return payload.get("transcript", []), found
 
     def session_file_exists(
         self, session_id: str, *, sessions_dir: str | None = None
@@ -382,8 +478,13 @@ class HostedConversationRepo:
         new_session_id: str,
         *,
         preview: str = "",
+        allow_empty: bool = False,
     ) -> bool:
-        """Compare-and-set a slot session while preserving concurrent updates."""
+        """Compare-and-set a slot session while preserving concurrent updates.
+
+        ``allow_empty`` lets a new-chat transition claim an unbound slot, while
+        still rejecting a session installed by a competing transition.
+        """
         if slot not in (1, 2, 3):
             raise ValueError(f"slot must be 1-3, got {slot}")
         self.validate_session_id(expected_session_id)
@@ -391,7 +492,18 @@ class HostedConversationRepo:
         with self._slot_state_lock(user_id):
             state = self.get_slot_state(user_id)
             slot_key = str(slot)
-            if state["slots"].get(slot_key, "") != expected_session_id:
+            current_session_id = state["slots"].get(slot_key, "")
+            source_bound_elsewhere = any(
+                key != slot_key and bound_session == expected_session_id
+                for key, bound_session in state["slots"].items()
+            )
+            if current_session_id == new_session_id:
+                return not source_bound_elsewhere
+            if current_session_id != expected_session_id and not (
+                allow_empty and not current_session_id
+            ):
+                return False
+            if allow_empty and not current_session_id and source_bound_elsewhere:
                 return False
             state["slots"][slot_key] = new_session_id
             state["previews"][slot_key] = str(preview)[:200]
@@ -426,6 +538,42 @@ class HostedConversationRepo:
             raise ValueError("invalid archive_id")
         return os.path.join(self._archives_dir(user_id), f"{archive_id}.json")
 
+    def archive_restore_slot(
+        self,
+        user_id: str,
+        archive_id: str,
+        target_slot: int | None = None,
+    ) -> int | None:
+        """Return an archive's safe restore slot when its payload is valid."""
+        data = self._read_restore_archive_payload(user_id, archive_id)
+        if data is None:
+            return None
+        slot = target_slot or data.get("slot") or 1
+        return slot if slot in (1, 2, 3) else 1
+
+    def _read_restore_archive_payload(
+        self, user_id: str, archive_id: str
+    ) -> dict | None:
+        """Read an archive only when its display and resume data are valid."""
+        self._ensure_user_dirs(user_id)
+        try:
+            with open(self._archive_path(user_id, archive_id)) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        if (
+            not isinstance(data, dict)
+            or not has_supported_session_schema(data)
+            or not isinstance(data.get("messages"), list)
+        ):
+            return None
+        if (
+            data.get("schema_version") == SESSION_SCHEMA_VERSION
+            and validate_visible_transcript(data.get("transcript")) is None
+        ):
+            return None
+        return data
+
     def archive_session(
         self,
         user_id: str,
@@ -436,47 +584,57 @@ class HostedConversationRepo:
         sessions_dir: str | None = None,
     ) -> str | None:
         """Read the current session payload, persist an archive snapshot,
-        and return the archive ID. Returns None if the session file does
-        not exist or is empty.
+        and return the archive ID. Returns None only when the session is
+        confirmed absent or has no visible history.
 
         The original session file is NOT removed by this method — callers
         are responsible for cleaning it up after a successful archive.
         """
-        msgs, found = self.read_session_messages(
+        session, found = self._read_archive_session_payload(
             session_id, sessions_dir=sessions_dir
         )
-        if not found or not msgs:
+        msgs = session.get("messages", [])
+        transcript = session.get("transcript", [])
+        if not found or not transcript:
             return None
-        self._ensure_user_dirs(user_id)
-        # Auto-extract preview from first user message if none given.
-        if not preview:
-            for m in msgs:
-                if m.get("role") == "user":
-                    preview = re.sub(r"\s+", " ", str(m.get("content", "")).strip())[:80]
-                    break
-        archive_id = f"{int(time.time() * 1000)}.{uuid.uuid4().hex[:12]}"
-        payload = {
-            "archive_id": archive_id,
-            "session_id": session_id,
-            "slot": slot,
-            "preview": preview[:200],
-            "message_count": len(msgs),
-            "archived_at": time.time(),
-            "messages": msgs,
-        }
-        path = self._archive_path(user_id, archive_id)
-        tmp = f"{path}.{uuid.uuid4().hex}.tmp"
+        tmp = ""
         try:
+            self._ensure_user_dirs(user_id)
+            # Auto-extract preview from first user message if none given.
+            if not preview:
+                for m in transcript:
+                    if m.get("role") == "user":
+                        preview = re.sub(r"\s+", " ", str(m.get("content", "")).strip())[:80]
+                        break
+            archive_id = f"{int(time.time() * 1000)}.{uuid.uuid4().hex[:12]}"
+            payload = {
+                "schema_version": SESSION_SCHEMA_VERSION,
+                "archive_id": archive_id,
+                "session_id": session_id,
+                "slot": slot,
+                "preview": preview[:200],
+                "message_count": len(transcript),
+                "archived_at": time.time(),
+                "messages": msgs,
+                "transcript": transcript,
+            }
+            path = self._archive_path(user_id, archive_id)
+            tmp = f"{path}.{uuid.uuid4().hex}.tmp"
             with open(tmp, "w") as f:
                 json.dump(payload, f, separators=(",", ":"), sort_keys=True)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, path)
+        except (OSError, TypeError, ValueError) as exc:
+            raise ArchivePreservationError(
+                "could not persist session archive"
+            ) from exc
         finally:
-            try:
-                os.remove(tmp)
-            except FileNotFoundError:
-                pass
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except FileNotFoundError:
+                    pass
         return archive_id
 
     def list_archives(self, user_id: str, *, limit: int = 100) -> list[dict]:
@@ -516,6 +674,7 @@ class HostedConversationRepo:
         archive_id: str,
         *,
         target_slot: int | None = None,
+        expected_session_id: str | None = None,
         sessions_dir: str | None = None,
         agent_id: str = "trial-agent",
     ) -> tuple[str | None, int, list[dict]]:
@@ -526,25 +685,34 @@ class HostedConversationRepo:
         authenticated account's agent_id from auth_info; the default
         ``"trial-agent"`` is only appropriate for the legacy shared trial lane.
 
-        Returns ``(new_session_id, slot, messages)``. The restored messages are
-        written to a fresh session file. If the archive does not exist, returns
+        ``expected_session_id`` makes a replacement conditional on the target
+        slot still pointing at that session; a mismatch raises
+        :class:`ArchiveRestoreConflictError` without writing a replacement.
+
+        Returns ``(new_session_id, slot, resume_messages)``. The bounded
+        provider resume context and full display transcript are written to a
+        fresh session file. If the archive does not exist, returns
         ``(None, 0, [])``.
         """
-        self._ensure_user_dirs(user_id)
-        path = self._archive_path(user_id, archive_id)
-        try:
-            with open(path) as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        data = self._read_restore_archive_payload(user_id, archive_id)
+        if data is None:
             return None, 0, []
-        msgs = data.get("messages", [])
-        if not isinstance(msgs, list):
-            msgs = []
+        msgs = data["messages"]
+        transcript = visible_transcript_from_payload(data)
         slot = target_slot or data.get("slot") or 1
         if slot not in (1, 2, 3):
             slot = 1
         preview = str(data.get("preview", ""))[:200]
         with self._slot_state_lock(user_id):
+            state = self.get_slot_state(user_id)
+            slot_key = str(slot)
+            if (
+                expected_session_id is not None
+                and state["slots"].get(slot_key, "") != expected_session_id
+            ):
+                raise ArchiveRestoreConflictError(
+                    "target slot changed before restore could commit"
+                )
             # Write restored messages to a fresh session file with an
             # agent-scoped session_id so ownership checks pass.
             new_sid = self.new_session_id(user_id, agent_id)
@@ -553,7 +721,16 @@ class HostedConversationRepo:
             try:
                 os.makedirs(os.path.dirname(sid_path), exist_ok=True)
                 with open(tmp, "w") as f:
-                    json.dump({"messages": msgs}, f, separators=(",", ":"), sort_keys=True)
+                    json.dump(
+                        {
+                            "schema_version": SESSION_SCHEMA_VERSION,
+                            "messages": msgs,
+                            "transcript": transcript,
+                        },
+                        f,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, sid_path)
@@ -563,10 +740,9 @@ class HostedConversationRepo:
                 except FileNotFoundError:
                     pass
             # Update slot state to point to the new session.
-            state = self.get_slot_state(user_id)
-            state["slots"][str(slot)] = new_sid
+            state["slots"][slot_key] = new_sid
             if preview:
-                state["previews"][str(slot)] = preview
+                state["previews"][slot_key] = preview
             state["active_slot"] = slot
             self._write_slot_state_unlocked(user_id, state)
         return new_sid, slot, msgs

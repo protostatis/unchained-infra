@@ -410,6 +410,46 @@ class TestOverlayFollowupTurnRegistry(unittest.IsolatedAsyncioTestCase):
         overlay_events = [call.args[1] for call in broadcast.call_args_list]
         self.assertEqual([event["type"] for event in overlay_events], ["error", "done"])
 
+    async def test_hosted_transition_waits_for_overlay_dispatch_lease(self):
+        from web_app.handlers.overlay_ws import _route_followup
+        from web_state import (
+            begin_hosted_session_transition,
+            finish_hosted_session_transition,
+            hosted_session_phase,
+        )
+
+        core, prior_turn, agent_ws = await self._core_with_turn(terminal=True)
+        core._overlay_sessions[prior_turn.session_id].model = "google/gemini-3.1-flash-lite"
+        core._is_openrouter_model = lambda model: model.startswith("google/")
+        sent = asyncio.Event()
+        release = asyncio.Event()
+
+        async def send_json(_message):
+            sent.set()
+            await release.wait()
+
+        agent_ws.send_json = AsyncMock(side_effect=send_json)
+        route_task = asyncio.create_task(
+            _route_followup(core, prior_turn.session_id, "follow up")
+        )
+        await sent.wait()
+
+        transition_task = asyncio.create_task(
+            begin_hosted_session_transition(core, prior_turn.session_id)
+        )
+        await asyncio.sleep(0)
+        self.assertEqual(
+            hosted_session_phase(core, prior_turn.session_id), "transitioning"
+        )
+        self.assertFalse(transition_task.done())
+
+        release.set()
+        result = await route_task
+        lifecycle = await transition_task
+        self.assertTrue(result["ok"])
+        self.assertIsNotNone(lifecycle)
+        await finish_hosted_session_transition(lifecycle, retired=False)
+
     async def test_http_handler_propagates_route_failure_status(self):
         from web_app.handlers.overlay_ws import handle_overlay_followup
 

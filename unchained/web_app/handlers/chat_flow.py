@@ -23,10 +23,16 @@ from challenge_detection import detect_challenge
 from domain_policy import execution_policy_for_url
 from rate_limit import SlidingWindowRateLimiter
 
-from hosted_conversations import HostedConversationRepo
+from hosted_conversations import (
+    ArchivePreservationError,
+    ArchiveRestoreConflictError,
+    HostedConversationRepo,
+)
 from web_app.core import get_core as _core
 from web_state import (
+    begin_hosted_session_transition,
     clear_profile_tab_monitor_handoff,
+    finish_hosted_session_transition,
     profile_session_guard,
     profile_tab_handoff_blocks_observed_tab,
     profile_tab_monitor_observed_tabs,
@@ -285,82 +291,104 @@ async def trial_new_chat_status_cleanup_context(app: web.Application):
             pass
 
 
-def _commit_trial_new_chat_transition(
+async def _commit_trial_new_chat_transition(
     core, record: dict, *, user_id: str = ""
-) -> None:
+) -> bool:
     previous_session_id = record["previous_session_id"]
     session_id = record["session_id"]
-    session_tabs = getattr(core, "_session_tabs", {})
-    # A late ACK must never replace resources already created for the new
-    # session. Keep the old resource tracked for normal stale cleanup.
-    destination_exists = isinstance(session_tabs, dict) and session_id in session_tabs
-    if not destination_exists:
-        for name in (
-            "_session_tabs",
-            "_session_agent_map",
-            "_session_allowed_tabs",
-            "_session_profile_paths",
-            "_session_last_active",
-            "_chat_preview_generations",
-        ):
-            mapping = getattr(core, name, None)
-            if not isinstance(mapping, dict):
-                continue
-            value = mapping.pop(previous_session_id, None)
-            if value is not None:
-                mapping.setdefault(session_id, value)
-    # Archive old session before deleting it, preserving history.
-    # archive_session() auto-extracts the preview from the first user
-    # message, so we avoid a redundant session-file read here.
-    if user_id:
-        repo = _hosted_repo()
-        slot = record.get("slot", 1)
-        try:
-            repo.archive_session(
-                user_id,
-                previous_session_id,
-                slot=slot,
-            )
-        except Exception:
-            log.exception(
-                "[chat] failed to archive session %s for user %s",
-                previous_session_id,
-                user_id,
-            )
-    core._delete_trial_session(previous_session_id)
-    # Atomically update the server slot state so the new session is
-    # immediately discoverable — no stale/deleted slot mapping.
-    if user_id:
-        try:
-            updated = repo.replace_slot_session(
-                user_id,
-                slot,
-                previous_session_id,
-                session_id,
-                preview="",
-            )
-            if not updated:
-                log.info(
-                    "[chat] slot state changed before new-chat commit for "
-                    "user %s slot %s",
+    lifecycle = await begin_hosted_session_transition(core, previous_session_id)
+    if lifecycle is None:
+        return False
+    retired = False
+    try:
+        # Imported lazily because chat_stream imports this module's repository
+        # helper. The worker ACK follows its cancellation-time final save.
+        from web_app.handlers.chat_stream import (
+            quiesce_hosted_session,
+            retire_hosted_session,
+        )
+
+        if not await quiesce_hosted_session(core, previous_session_id):
+            return False
+        # Archive before moving any state. A malformed or unreadable source must
+        # leave the live chat untouched so the client can retry safely.
+        if user_id:
+            repo = _hosted_repo()
+            slot = record.get("slot", 1)
+            try:
+                repo.archive_session(user_id, previous_session_id, slot=slot)
+            except ArchivePreservationError:
+                log.warning(
+                    "[chat] refusing to replace unpreserved session %s for user %s",
+                    previous_session_id,
+                    user_id,
+                )
+                return False
+            except Exception:
+                log.exception(
+                    "[chat] failed to archive session %s for user %s",
+                    previous_session_id,
+                    user_id,
+                )
+                return False
+            # Claim the authoritative slot before moving resources or deleting
+            # the source. A competing transition leaves this record retryable.
+            try:
+                updated = repo.replace_slot_session(
+                    user_id,
+                    slot,
+                    previous_session_id,
+                    session_id,
+                    preview="",
+                    allow_empty=True,
+                )
+            except Exception:
+                log.exception(
+                    "[chat] failed to claim slot for new-chat commit for user %s slot %s",
                     user_id,
                     slot,
                 )
-        except Exception:
-            log.exception(
-                "[chat] failed to update slot state after new-chat commit "
-                "for user %s slot %s",
-                user_id,
-                slot,
-            )
-    record["acknowledged"] = True
+                return False
+            if not updated:
+                log.info(
+                    "[chat] slot changed before new-chat commit for user %s slot %s",
+                    user_id,
+                    slot,
+                )
+                return False
+        session_tabs = getattr(core, "_session_tabs", {})
+        # A late ACK must never replace resources already created for the new
+        # session. Keep the old resource tracked for normal stale cleanup.
+        destination_exists = isinstance(session_tabs, dict) and session_id in session_tabs
+        if not destination_exists:
+            for name in (
+                "_session_tabs",
+                "_session_agent_map",
+                "_session_allowed_tabs",
+                "_session_profile_paths",
+                "_session_last_active",
+                "_chat_preview_generations",
+            ):
+                mapping = getattr(core, name, None)
+                if not isinstance(mapping, dict):
+                    continue
+                value = mapping.pop(previous_session_id, None)
+                if value is not None:
+                    mapping.setdefault(session_id, value)
+        core._delete_trial_session(previous_session_id)
+        await retire_hosted_session(core, previous_session_id)
+        retired = True
+        record["acknowledged"] = True
+        return True
+    finally:
+        await finish_hosted_session_transition(lifecycle, retired=retired)
 
 
 def _first_user_message_preview(session_id: str) -> str:
     """Extract a short preview label from the first user message in a session."""
     try:
         repo = _hosted_repo()
-        msgs, found = repo.read_session_messages(session_id)
+        msgs, found = repo.read_session_transcript(session_id)
         if not found:
             return ""
         for m in msgs:
@@ -450,10 +478,11 @@ def _guest_new_chat_response(record: dict, request_id: str, *, replayed: bool) -
     }
 
 
-def _trial_new_chat_unavailable_response(
+async def _trial_new_chat_unavailable_response(
     core,
     record: dict,
     *,
+    user_id: str,
     now: float,
     recovery_choice: str,
     known_state: str,
@@ -500,7 +529,12 @@ def _trial_new_chat_unavailable_response(
         )
     try:
         if recovery_choice == "destination":
-            _commit_trial_new_chat_transition(core, record)
+            if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+                return web.json_response(
+                    {"error": "Could not safely preserve the current chat"},
+                    status=503,
+                    headers={"Retry-After": "5"},
+                )
             _write_trial_new_chat_status(record, "acknowledged", now)
             recovery_session_id = record["session_id"]
         else:
@@ -2994,10 +3028,18 @@ async def handle_chat_new(request: web.Request) -> web.Response:
                 }
                 _guest_new_chat_requests[request_key] = record
                 _guest_new_chat_sources[source_key] = record
-                _commit_trial_new_chat_transition(core, record)
-                response = web.json_response(
-                    _guest_new_chat_response(record, request_id, replayed=False)
-                )
+                if not await _commit_trial_new_chat_transition(core, record):
+                    _guest_new_chat_requests.pop(request_key, None)
+                    _guest_new_chat_sources.pop(source_key, None)
+                    response = web.json_response(
+                        {"error": "Could not safely preserve the current chat"},
+                        status=503,
+                        headers={"Retry-After": "5"},
+                    )
+                else:
+                    response = web.json_response(
+                        _guest_new_chat_response(record, request_id, replayed=False)
+                    )
             core._attach_first_look_guest_cookies(
                 response, request, guest_id, quota_count=guest_quota_count
             )
@@ -3168,17 +3210,19 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         durable_status = _read_trial_new_chat_status(canonical_record)
     except (OSError, ValueError):
         log.exception("[chat] failed to read new-chat transition status")
-        return _trial_new_chat_unavailable_response(
+        return await _trial_new_chat_unavailable_response(
             core,
             recovery_record,
+            user_id=user_id,
             now=now,
             recovery_choice=recovery_choice,
             known_state=recovery_known_state,
         )
     if durable_status is None:
-        return _trial_new_chat_unavailable_response(
+        return await _trial_new_chat_unavailable_response(
             core,
             recovery_record,
+            user_id=user_id,
             now=now,
             recovery_choice=recovery_choice,
             known_state=recovery_known_state,
@@ -3202,7 +3246,12 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
             durable_status = _write_trial_new_chat_status(record, "rolled_back", now)
             status = durable_status["status"]
         elif status == "committing":
-            _commit_trial_new_chat_transition(core, record, user_id=user_id)
+            if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+                return web.json_response(
+                    {"error": "Could not safely preserve the current chat"},
+                    status=503,
+                    headers={"Retry-After": "5"},
+                )
             durable_status = _write_trial_new_chat_status(record, "acknowledged", now)
             status = durable_status["status"]
         recovery_decision = (
@@ -3228,7 +3277,12 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     if status != "acknowledged":
         if status == "pending":
             _write_trial_new_chat_status(record, "committing", now)
-        _commit_trial_new_chat_transition(core, record, user_id=user_id)
+        if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+            return web.json_response(
+                {"error": "Could not safely preserve the current chat"},
+                status=503,
+                headers={"Retry-After": "5"},
+            )
         _write_trial_new_chat_status(record, "acknowledged", now)
     else:
         record["acknowledged"] = True
@@ -3280,7 +3334,7 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
                 preview = state["previews"].get(str(n), "")
                 empty = True
                 if sid:
-                    msgs, found = _hosted_repo().read_session_messages(sid)
+                    msgs, found = _hosted_repo().read_session_transcript(sid)
                     if found and msgs:
                         empty = False
                         if not preview:
@@ -3421,57 +3475,114 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
 
     # OpenRouter/hosted lanes use the server-owned repository.
     if core._is_openrouter_model(model) and user_id:
-        if not _hosted_repo().archive_owned_by(user_id, archive_id):
+        repo = _hosted_repo()
+        if not repo.archive_owned_by(user_id, archive_id):
             return web.json_response(
                 {"error": "Archive not found"}, status=404
+            )
+        # Validate before archiving/deleting the target slot. Unsupported
+        # future-schema archives must leave the current conversation intact.
+        target_slot = repo.archive_restore_slot(
+            user_id, archive_id, requested_slot
+        )
+        if target_slot is None:
+            return web.json_response(
+                {"error": "Archive cannot be restored by this agent version"},
+                status=409,
             )
         # Archive the currently-occupied target slot exactly once before
         # restoring, then delete the old session file so it doesn't leave
         # an unbounded orphan.  Do NOT delete the source archive file.
-        if requested_slot:
-            slot_state = _hosted_repo().get_slot_state(user_id)
-            current_sid = slot_state["slots"].get(str(requested_slot), "")
+        slot_state = repo.get_slot_state(user_id)
+        current_sid = slot_state["slots"].get(str(target_slot), "")
+        lifecycle = None
+        retired = False
+        if current_sid:
+            lifecycle = await begin_hosted_session_transition(core, current_sid)
+            if lifecycle is None:
+                return web.json_response(
+                    {"error": "The current chat is changing. Reload and try again."},
+                    status=409,
+                )
+        try:
             if current_sid:
+                from web_app.handlers.chat_stream import (
+                    quiesce_hosted_session,
+                    retire_hosted_session,
+                )
+
+                if not await quiesce_hosted_session(core, current_sid):
+                    return web.json_response(
+                        {"error": "Could not safely preserve the current chat"},
+                        status=503,
+                        headers={"Retry-After": "5"},
+                    )
                 try:
-                    archived = _hosted_repo().archive_session(
-                        user_id, current_sid, slot=requested_slot
+                    repo.archive_session(user_id, current_sid, slot=target_slot)
+                except ArchivePreservationError:
+                    log.warning(
+                        "[chat] refusing restore over unpreserved session %s",
+                        current_sid,
+                    )
+                    return web.json_response(
+                        {"error": "Could not safely preserve the current chat"},
+                        status=503,
+                        headers={"Retry-After": "5"},
                     )
                 except Exception:
                     log.exception(
                         "[chat] failed to archive current session before restore"
                     )
-                    archived = None
-                # Remove the now-archived active session file.  The archive
-                # snapshot is already durable; the active file is no longer
-                # needed and keeping it would leave an unbounded orphan.
-                if archived:
-                    try:
-                        os.remove(
-                            _hosted_repo().session_path(
-                                current_sid,
-                                sessions_dir=_HOSTED_SESSIONS_DIR,
-                            )
-                        )
-                    except FileNotFoundError:
-                        pass
-                    except OSError:
-                        log.exception(
-                            "[chat] failed to remove orphan session file %s",
+                    return web.json_response(
+                        {"error": "Could not safely preserve the current chat"},
+                        status=503,
+                        headers={"Retry-After": "5"},
+                    )
+            try:
+                new_sid, slot, msgs = repo.restore_archive(
+                    user_id,
+                    archive_id,
+                    target_slot=target_slot,
+                    expected_session_id=current_sid,
+                    agent_id=agent_id,
+                )
+            except ArchiveRestoreConflictError:
+                return web.json_response(
+                    {"error": "The current chat changed. Reload and try again."},
+                    status=409,
+                )
+            if new_sid is None:
+                return web.json_response(
+                    {"error": "Archive not found or could not be restored"}, status=404
+                )
+            # Remove an archived source only after the replacement session and
+            # slot mapping are durable. If restore fails, the active chat remains.
+            if current_sid:
+                try:
+                    os.remove(
+                        repo.session_path(
                             current_sid,
+                            sessions_dir=_HOSTED_SESSIONS_DIR,
                         )
-        new_sid, slot, msgs = _hosted_repo().restore_archive(
-            user_id, archive_id, target_slot=requested_slot, agent_id=agent_id
-        )
-        if new_sid is None:
-            return web.json_response(
-                {"error": "Archive not found or could not be restored"}, status=404
-            )
-        return web.json_response({
-            "ok": True,
-            "trial": True,
-            "active_slot": slot,
-            "session_id": new_sid,
-        })
+                    )
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    log.exception(
+                        "[chat] failed to remove orphan session file %s",
+                        current_sid,
+                    )
+                await retire_hosted_session(core, current_sid)
+                retired = True
+            return web.json_response({
+                "ok": True,
+                "trial": True,
+                "active_slot": slot,
+                "session_id": new_sid,
+            })
+        finally:
+            if lifecycle is not None:
+                await finish_hosted_session_transition(lifecycle, retired=retired)
 
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
     restore_msg = {"type": "restore_archive", "archive_id": archive_id}

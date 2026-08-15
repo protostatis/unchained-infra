@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from conversation_transcript import SESSION_SCHEMA_VERSION
 from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     HOSTED_MAX_SESSION_MESSAGES,
@@ -867,6 +869,586 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_session_save_keeps_full_visible_transcript_when_context_is_capped(self):
+        """The archive/display transcript must not inherit the 64-message cap."""
+        sid = "s-transcript-cap"
+        messages = [{"role": "system", "content": "system"}]
+        with tempfile.TemporaryDirectory() as session_dir:
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                for index in range(20):
+                    prompt = f"original prompt {index}"
+                    answer = f"visible answer {index}"
+                    messages.append({"role": "user", "content": prompt})
+                    self.agent._append_transcript(sid, "user", prompt)
+                    messages.append({"role": "assistant", "content": answer})
+                    self.agent._append_transcript(sid, "assistant", answer)
+                # This is provider-only execution state, not a visible chat
+                # message. It may remain in private context until normal
+                # compaction runs, but it must never enter display history.
+                messages.insert(
+                    1,
+                    {
+                        "role": "tool",
+                        "tool_call_id": "old-tool",
+                        "content": "RAW_BROWSER_SENTINEL" * 1000,
+                    },
+                )
+                self.agent._save_session(sid, messages)
+                with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                    saved = json.load(f)
+
+        self.assertLessEqual(len(saved["messages"]), HOSTED_MAX_SESSION_MESSAGES)
+        self.assertEqual(saved["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertEqual(len(saved["transcript"]), 40)
+        self.assertEqual(saved["transcript"][0]["content"], "original prompt 0")
+        self.assertEqual(saved["transcript"][20]["content"], "original prompt 10")
+        self.assertEqual(saved["transcript"][-1]["content"], "visible answer 19")
+        self.assertNotIn("RAW_BROWSER_SENTINEL", json.dumps(saved["transcript"]))
+        self.assertIn("RAW_BROWSER_SENTINEL", json.dumps(saved["messages"]))
+
+    def test_session_save_preserves_displayed_json_verbatim(self):
+        sid = "s-transcript-literal"
+        visible = (
+            "Example response:\n\n"
+            "```json\n"
+            '{"name":"describe_schema","arguments":{"format":"full"}}\n'
+            "```\n"
+        )
+        with tempfile.TemporaryDirectory() as session_dir:
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                self.agent._append_transcript(sid, "assistant", visible)
+                self.agent._save_session(
+                    sid,
+                    [
+                        {"role": "system", "content": "system"},
+                        {"role": "assistant", "content": visible},
+                    ],
+                )
+                with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                    saved = json.load(f)
+
+        self.assertEqual(saved["transcript"], [{"role": "assistant", "content": visible}])
+
+    async def test_retire_session_waits_for_active_task_before_acknowledging(self):
+        sid = "s-retire-active-task"
+        saved = asyncio.Event()
+        sent = []
+
+        class WorkerSocket:
+            async def send(self, payload):
+                sent.append(json.loads(payload))
+
+        async def writer():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                saved.set()
+
+        task = asyncio.create_task(writer())
+        await asyncio.sleep(0)
+        self.agent.ws = WorkerSocket()
+        self.agent.active_tasks[sid] = task
+        self.agent.active_req_ids[sid] = "r-active"
+        self.agent.sessions[sid] = [{"role": "user", "content": "persist me"}]
+        self.agent.transcripts[sid] = [{"role": "user", "content": "persist me"}]
+        self.agent._session_billing_runs[sid] = "billing-run"
+
+        await self.agent._retire_session(sid, "r-control")
+
+        self.assertTrue(saved.is_set())
+        self.assertTrue(task.done())
+        self.assertNotIn(sid, self.agent.active_tasks)
+        self.assertNotIn(sid, self.agent.sessions)
+        self.assertNotIn(sid, self.agent.transcripts)
+        self.assertNotIn(sid, self.agent._session_billing_runs)
+        self.assertEqual(
+            sent,
+            [{"type": "retire_session_ack", "session_id": sid, "req_id": "r-control"}],
+        )
+        self.agent.retired_sessions.add(sid)
+        with tempfile.TemporaryDirectory() as session_dir:
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                self.agent._save_session(
+                    sid, [{"role": "user", "content": "must not recreate"}]
+                )
+            self.assertFalse(os.path.exists(os.path.join(session_dir, f"{sid}.json")))
+
+    async def test_retire_session_does_not_ack_when_final_save_fails(self):
+        sid = "s-retire-save-failure"
+        sent = []
+
+        class WorkerSocket:
+            async def send(self, payload):
+                sent.append(json.loads(payload))
+
+        async def writer():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.agent._save_session(
+                    sid,
+                    [{"role": "user", "content": "must remain durable"}],
+                    raise_on_error=True,
+                )
+
+        task = asyncio.create_task(writer())
+        await asyncio.sleep(0)
+        self.agent.ws = WorkerSocket()
+        self.agent.active_tasks[sid] = task
+
+        with patch.object(self.agent, "_save_session", side_effect=OSError("disk full")):
+            await self.agent._retire_session(sid, "r-control")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["type"], "retire_session_error")
+        self.assertNotIn("retire_session_ack", [event["type"] for event in sent])
+
+    async def test_retire_waits_for_startup_persistence_before_cancelling_turn(self):
+        sid = "s-retire-startup-barrier"
+        sent = []
+        provider_started = asyncio.Event()
+
+        class WorkerSocket:
+            async def send(self, payload):
+                sent.append(json.loads(payload))
+
+        async def provider(*_args, **_kwargs):
+            provider_started.set()
+            await asyncio.Event().wait()
+
+        self.agent.ws = WorkerSocket()
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=AsyncMock()),
+            ):
+                ready = asyncio.get_running_loop().create_future()
+                task = asyncio.create_task(
+                    self.agent._handle_message(
+                        {
+                            "session_id": sid,
+                            "agent_id": "client-browser",
+                            "user_id": "u-startup-barrier",
+                            "message": "persist before retirement can cancel me",
+                        },
+                        persistence_ready=ready,
+                    )
+                )
+                self.agent.active_tasks[sid] = task
+                self.agent._task_persistence_ready[sid] = (task, ready)
+                task.add_done_callback(
+                    lambda done: self.agent._finish_task(sid, "r-turn", done)
+                )
+
+                await self.agent._retire_session(sid, "r-control")
+
+                with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                    persisted = json.load(f)
+
+        self.assertTrue(ready.result())
+        self.assertTrue(provider_started.is_set())
+        self.assertEqual(
+            persisted["transcript"],
+            [{"role": "user", "content": "persist before retirement can cancel me"}],
+        )
+        self.assertEqual(
+            sent,
+            [{"type": "retire_session_ack", "session_id": sid, "req_id": "r-control"}],
+        )
+
+    async def test_buffered_replacement_persists_first_turn_before_second_starts(self):
+        sid = "s-buffered-replacement"
+
+        class WorkerSocket:
+            def __init__(self):
+                self.messages = [
+                    json.dumps(
+                        {
+                            "type": "user_message",
+                            "session_id": sid,
+                            "req_id": "r-first",
+                            "agent_id": "client-browser",
+                            "user_id": "u-buffered-replacement",
+                            "message": "first durable prompt",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "user_message",
+                            "session_id": sid,
+                            "req_id": "r-second",
+                            "agent_id": "client-browser",
+                            "user_id": "u-buffered-replacement",
+                            "message": "second durable prompt",
+                        }
+                    ),
+                ]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.messages:
+                    return self.messages.pop(0)
+                await asyncio.Event().wait()
+
+            async def send(self, _payload):
+                pass
+
+        socket = WorkerSocket()
+
+        async def connect():
+            self.agent.ws = socket
+
+        async def provider(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "connect", new=connect),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=AsyncMock()),
+            ):
+                run_task = asyncio.create_task(self.agent.run())
+                try:
+                    for _ in range(100):
+                        await asyncio.sleep(0.01)
+                        barrier = self.agent._task_persistence_ready.get(sid)
+                        if (
+                            self.agent.active_req_ids.get(sid) == "r-second"
+                            and barrier is not None
+                            and barrier[1].done()
+                            and barrier[1].result()
+                        ):
+                            break
+                    else:
+                        self.fail("second buffered message did not persist")
+
+                    with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                        persisted = json.load(f)
+                finally:
+                    run_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await run_task
+                    active = self.agent.active_tasks.get(sid)
+                    if active and not active.done():
+                        active.cancel()
+                        await active
+
+        self.assertEqual(
+            persisted["transcript"],
+            [
+                {"role": "user", "content": "first durable prompt"},
+                {"role": "user", "content": "second durable prompt"},
+            ],
+        )
+
+    async def test_buffered_cancel_persists_turn_before_terminal_events(self):
+        sid = "s-buffered-cancel"
+
+        class WorkerSocket:
+            def __init__(self):
+                self.messages = [
+                    json.dumps(
+                        {
+                            "type": "user_message",
+                            "session_id": sid,
+                            "req_id": "r-turn",
+                            "agent_id": "client-browser",
+                            "user_id": "u-buffered-cancel",
+                            "message": "durable before cancel",
+                        }
+                    ),
+                    json.dumps({"type": "cancel", "session_id": sid}),
+                ]
+                self.sent = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.messages:
+                    return self.messages.pop(0)
+                await asyncio.Event().wait()
+
+            async def send(self, payload):
+                self.sent.append(json.loads(payload))
+
+        socket = WorkerSocket()
+
+        async def connect():
+            self.agent.ws = socket
+
+        async def provider(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "connect", new=connect),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+            ):
+                run_task = asyncio.create_task(self.agent.run())
+                try:
+                    for _ in range(100):
+                        await asyncio.sleep(0.01)
+                        if any(event.get("type") == "cancelled" for event in socket.sent):
+                            break
+                    else:
+                        self.fail("buffered cancel did not complete")
+
+                    with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                        persisted = json.load(f)
+                finally:
+                    run_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await run_task
+
+        self.assertEqual(
+            persisted["transcript"],
+            [{"role": "user", "content": "durable before cancel"}],
+        )
+        self.assertEqual(
+            [event["type"] for event in socket.sent],
+            ["cancelled", "done"],
+        )
+
+    async def test_final_text_is_saved_before_it_is_emitted(self):
+        sid = "s-final-persistence-order"
+        events = []
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "durable answer"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        async def send(_session_id, event):
+            if event.get("type") == "text":
+                events.append("text")
+
+        def save(*_args, **_kwargs):
+            events.append("save")
+            return True
+
+        with (
+            patch.object(self.agent, "_call_openrouter", side_effect=provider),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="durable answer"),
+            ),
+            patch.object(self.agent, "_send", side_effect=send),
+            patch.object(self.agent, "_save_session", side_effect=save),
+        ):
+            await self.agent._handle_message(
+                {
+                    "session_id": sid,
+                    "agent_id": "client-browser",
+                    "user_id": "u-final-order",
+                    "message": "Do the task",
+                }
+            )
+
+        self.assertEqual(events, ["save", "save", "text"])
+
+    async def test_final_text_is_not_emitted_when_persistence_fails(self):
+        sid = "s-final-persistence-failure"
+        sent = []
+        strict_saves = 0
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "lost answer"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        async def send(_session_id, event):
+            sent.append(event)
+
+        def save(*_args, **kwargs):
+            nonlocal strict_saves
+            if kwargs.get("raise_on_error"):
+                strict_saves += 1
+                if strict_saves == 2:
+                    raise OSError("disk full")
+            return True
+
+        with (
+            patch.object(self.agent, "_call_openrouter", side_effect=provider),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="lost answer"),
+            ),
+            patch.object(self.agent, "_send", side_effect=send),
+            patch.object(self.agent, "_save_session", side_effect=save),
+            patch("traceback.print_exc"),
+        ):
+            await self.agent._handle_message(
+                {
+                    "session_id": sid,
+                    "agent_id": "client-browser",
+                    "user_id": "u-final-failure",
+                    "message": "Do the task",
+                }
+            )
+
+        self.assertFalse(any(event.get("type") == "text" for event in sent))
+        self.assertTrue(any(event.get("type") == "error" for event in sent))
+
+    async def test_user_turn_is_persisted_before_provider_or_worker_restart(self):
+        sid = "s-user-turn-durable"
+        saved_before_provider = []
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                saved_before_provider.extend(json.load(f)["transcript"])
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "durable answer"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(
+                    self.agent,
+                    "_sanitize_user_output",
+                    new=AsyncMock(return_value="durable answer"),
+                ),
+                patch.object(self.agent, "_send", new=AsyncMock()),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-user-turn-durable",
+                        "message": "persist this before calling the model",
+                    }
+                )
+                restarted = TrialAgent(
+                    api_key="trial-websocket-key",
+                    agent_id="trial-agent-restarted",
+                    server="ws://web:8080",
+                    model="google/gemini-3.1-flash-lite",
+                )
+                restarted._load_session(sid)
+
+        self.assertEqual(
+            saved_before_provider,
+            [{"role": "user", "content": "persist this before calling the model"}],
+        )
+        self.assertEqual(
+            restarted.transcripts[sid],
+            [
+                {"role": "user", "content": "persist this before calling the model"},
+                {"role": "assistant", "content": "durable answer"},
+            ],
+        )
+
+    async def test_completed_dirty_session_refuses_retirement_when_retry_fails(self):
+        sid = "s-dirty-completed-turn"
+        sent = []
+
+        class WorkerSocket:
+            async def send(self, payload):
+                sent.append(json.loads(payload))
+
+        self.agent.ws = WorkerSocket()
+        self.agent.sessions[sid] = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "durable prompt"},
+        ]
+        self.agent.transcripts[sid] = [
+            {"role": "user", "content": "durable prompt"},
+            {"role": "assistant", "content": "unsaved answer"},
+        ]
+        self.agent.dirty_sessions.add(sid)
+
+        with patch.object(self.agent, "_save_session", side_effect=OSError("disk full")):
+            await self.agent._retire_session(sid, "r-control")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["type"], "retire_session_error")
+        self.assertIn(sid, self.agent.dirty_sessions)
+        self.assertIn(sid, self.agent.sessions)
+
+    def test_unknown_session_schema_does_not_load_private_provider_context(self):
+        sid = "s-unknown-session-schema"
+        with tempfile.TemporaryDirectory() as session_dir:
+            path = os.path.join(session_dir, f"{sid}.json")
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "schema_version": 999,
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": "PRIVATE_PROVIDER_CONTEXT",
+                            }
+                        ],
+                        "transcript": [
+                            {"role": "assistant", "content": "visible context"}
+                        ],
+                    },
+                    f,
+                )
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                messages = self.agent._load_session(sid)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertNotIn("PRIVATE_PROVIDER_CONTEXT", json.dumps(messages))
+        self.assertEqual(self.agent.transcripts[sid], [])
+
+    async def test_unknown_session_schema_rejects_turn_without_overwrite(self):
+        sid = "s-unknown-schema-turn"
+        original = {
+            "schema_version": 999,
+            "messages": [
+                {"role": "assistant", "content": "PRIVATE_PROVIDER_CONTEXT"}
+            ],
+            "transcript": [{"role": "assistant", "content": "visible context"}],
+        }
+        provider = AsyncMock()
+        send = AsyncMock()
+        with tempfile.TemporaryDirectory() as session_dir:
+            path = os.path.join(session_dir, f"{sid}.json")
+            with open(path, "w") as f:
+                json.dump(original, f)
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", new=provider),
+                patch.object(self.agent, "_send", new=send),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-unknown-schema",
+                        "message": "Continue this chat",
+                    }
+                )
+            with open(path) as f:
+                saved = json.load(f)
+
+        provider.assert_not_awaited()
+        self.assertEqual(saved, original)
+        self.assertEqual(
+            [call.args[1]["type"] for call in send.await_args_list],
+            ["error", "done"],
+        )
+
     async def test_handle_message_bounds_oversized_live_session_before_provider(self):
         sid = "s-context-bound"
         cached = [{"role": "system", "content": "old system"}]
@@ -921,6 +1503,110 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(
             sum(1 for message in provider_messages if message.get("role") != "system"),
             HOSTED_MAX_SESSION_MESSAGES,
+        )
+
+    async def test_handle_message_keeps_visible_transcript_after_context_compaction(self):
+        sid = "s-transcript-after-compact"
+        cached = [{"role": "system", "content": "old system"}]
+        for index in range(22):
+            cached.extend(
+                [
+                    {"role": "user", "content": f"original prompt {index}"},
+                    {"role": "assistant", "content": "click" * 5000},
+                ]
+            )
+        original_message_count = len(cached)
+        self.agent.sessions[sid] = cached
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "final answer"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=AsyncMock()),
+                patch.object(
+                    self.agent,
+                    "_sanitize_user_output",
+                    new=AsyncMock(return_value="final answer"),
+                ),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-context",
+                        "message": "current request",
+                    }
+                )
+            with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                saved = json.load(f)
+
+        self.assertEqual(saved["schema_version"], SESSION_SCHEMA_VERSION)
+        self.assertLess(len(saved["messages"]), original_message_count)
+        self.assertEqual(saved["transcript"][0]["content"], "original prompt 0")
+        self.assertEqual(saved["transcript"][-2]["content"], "current request")
+        self.assertEqual(saved["transcript"][-1]["content"], "final answer")
+
+    async def test_reasoning_only_final_response_stays_private(self):
+        sid = "s-reasoning-private"
+        private_reasoning = "PRIVATE_REASONING_DO_NOT_DISPLAY"
+
+        async def provider(_client, _messages, *_args, **_kwargs):
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": private_reasoning,
+                    },
+                    "finish_reason": "stop",
+                }],
+            }
+
+        send = AsyncMock()
+        with tempfile.TemporaryDirectory() as session_dir:
+            with (
+                patch("chat_agent_openrouter.SESSION_DIR", session_dir),
+                patch.object(self.agent, "_call_openrouter", side_effect=provider),
+                patch.object(self.agent, "_send", new=send),
+                patch.object(
+                    self.agent,
+                    "_sanitize_user_output",
+                    new=AsyncMock(return_value=""),
+                ),
+            ):
+                await self.agent._handle_message(
+                    {
+                        "session_id": sid,
+                        "agent_id": "client-browser",
+                        "user_id": "u-reasoning",
+                        "message": "Do the task",
+                    }
+                )
+            with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                saved = json.load(f)
+
+        transcript_text = json.dumps(saved["transcript"])
+        self.assertNotIn(private_reasoning, transcript_text)
+        self.assertIn(private_reasoning, json.dumps(saved["messages"]))
+        text_events = [
+            call.args[1]["data"]
+            for call in send.await_args_list
+            if call.args[1].get("type") == "text"
+        ]
+        self.assertEqual(
+            text_events,
+            [
+                "[Agent completed the task but returned no text response. "
+                "Try asking it to summarize what it found.]"
+            ],
         )
 
     async def test_background_navigation_policy_reaches_cloud_tools(self):

@@ -52,13 +52,20 @@ from credit import (
     validate_hosted_context_budget,
 )
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
+from conversation_transcript import (
+    SESSION_SCHEMA_VERSION,
+    has_supported_session_schema,
+    looks_like_internal_tool_payload as _looks_like_internal_tool_payload,
+    project_visible_messages,
+    strip_internal_tool_payload as _strip_internal_tool_payload,
+    validate_visible_transcript,
+    visible_transcript_from_payload,
+)
 from context_compact import compact_messages, emergency_trim
 from tool_payloads import (
     _DSML_PREFIX,
     _XML_GT as _DSML_XML_GT,
     _XML_LT as _DSML_XML_LT,
-    contains_tool_call_wrapper,
-    strip_tool_call_wrappers,
 )
 from web_state import canonical_session_tab
 from scheduler_agent import (
@@ -210,6 +217,7 @@ print(
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
+RETIRE_SESSION_TIMEOUT = 25.0
 AUTO_LIVE_PREVIEW = os.environ.get("AUTO_LIVE_PREVIEW", "1").strip().lower() not in {
     "0",
     "false",
@@ -1152,69 +1160,6 @@ def _extract_deepseek_usage(
     }
 
 
-def _looks_like_internal_tool_payload(text: str) -> bool:
-    """Detect accidental user-visible tool-call payloads."""
-    raw = (text or "").strip()
-    if not raw:
-        return False
-    if contains_tool_call_wrapper(raw):
-        return True
-    if re.search(
-        r'^\s*\{\s*"?name"?\s*:\s*[^,\n]+,\s*"?arguments"?\s*:\s*\{',
-        raw,
-        flags=re.IGNORECASE,
-    ):
-        return True
-    if re.search(r'(?s)```(?:json)?\s*\{.*"name"\s*:.*"arguments"\s*:.*\}\s*```', raw):
-        return True
-    if raw.count('"name"') >= 1 and raw.count('"arguments"') >= 1 and len(raw) > 120:
-        return True
-    return False
-
-
-def _strip_internal_tool_payload(text: str) -> str:
-    """Best-effort local cleanup of leaked tool-call payload text."""
-    cleaned = text or ""
-    # Remove explicit tool-call wrappers and JSON fenced blocks first.
-    cleaned = strip_tool_call_wrappers(cleaned)
-    cleaned = re.sub(r"(?is)```(?:json)?\s*.*?```", " ", cleaned)
-    # Remove inline function-call style JSON objects.
-    cleaned = re.sub(
-        r'(?is)\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}',
-        " ",
-        cleaned,
-    )
-    cleaned = re.sub(
-        r'(?is)\{\s*name\s*:\s*[^,\n]+,\s*arguments\s*:\s*\{.*?\}\s*\}',
-        " ",
-        cleaned,
-    )
-    # Drop residual JSON-ish lines often emitted around tool payloads.
-    kept_lines: list[str] = []
-    for line in cleaned.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        low = s.lower()
-        if contains_tool_call_wrapper(s):
-            continue
-        if s in {"{", "}", "[", "]", ",", "```", "```json"}:
-            continue
-        if (
-            low.startswith('"name"')
-            or low.startswith('"arguments"')
-            or low.startswith('"tool_call_id"')
-            or low.startswith("name:")
-            or low.startswith("arguments:")
-            or low.startswith("tool_call_id:")
-        ):
-            continue
-        kept_lines.append(s)
-    cleaned = " ".join(kept_lines)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
 # ---------------------------------------------------------------------------
 # Trial Agent
 # ---------------------------------------------------------------------------
@@ -1230,11 +1175,28 @@ class TrialAgent:
         self.openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
         self.ws = None
-        # session_id → list of messages (in-memory cache; backed by disk)
+        # session_id → bounded provider/resume messages (backed by disk)
         self.sessions: dict[str, list] = {}
+        # session_id → complete user-visible transcript. This is deliberately
+        # separate from provider context so archive/history reloads never lose
+        # the original prompt when the working context is compacted or capped.
+        self.transcripts: dict[str, list[dict[str, str]]] = {}
+        # Session files created by newer runtimes must never be resumed or
+        # overwritten by this worker.
+        self.unsupported_sessions: set[str] = set()
+        # Successfully retired sessions must never recreate their deleted files.
+        self.retired_sessions: set[str] = set()
+        # Sessions with visible changes not yet confirmed on disk. Retirement
+        # retries these writes and refuses to ACK if they remain unsafe.
+        self.dirty_sessions: set[str] = set()
         # session_id → active asyncio Task (for cancel support)
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.active_req_ids: dict[str, str] = {}
+        # session_id → (task, future resolved once its user turn is durable).
+        # A retirement request must wait for this barrier before cancellation.
+        self._task_persistence_ready: dict[
+            str, tuple[asyncio.Task, asyncio.Future[bool]]
+        ] = {}
         # Per-session billing run IDs (set from ws_msg["billing_run_id"])
         self._session_billing_runs: dict[str, str] = {}
         # DeepSeek balance snapshot reporter (owned by run())
@@ -1413,36 +1375,111 @@ class TrialAgent:
         safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
         return os.path.join(SESSION_DIR, f"{safe_id}.json")
 
+    @staticmethod
+    def _visible_transcript(messages: object) -> list[dict[str, str]]:
+        """Project legacy provider messages into safe user-visible entries."""
+        return project_visible_messages(messages)
+
     def _load_session(self, session_id: str) -> list:
-        """Load session from disk, prepend current system prompt. Returns messages list."""
+        """Load bounded provider context and its display transcript from disk."""
         path = self._session_path(session_id)
         try:
             with open(path) as f:
                 data = json.load(f)
+            if not has_supported_session_schema(data):
+                print(
+                    f"[{session_id}] Unsupported session schema; "
+                    "refusing to load persisted context"
+                )
+                self.transcripts[session_id] = []
+                self.unsupported_sessions.add(session_id)
+                return [{"role": "system", "content": _build_system_prompt()}]
             msgs = data.get("messages", [])
+            if not isinstance(msgs, list):
+                msgs = []
+            self.transcripts[session_id] = visible_transcript_from_payload(data)
             print(f"[{session_id}] Loaded {len(msgs)} messages from disk")
         except FileNotFoundError:
             msgs = []
+            self.transcripts[session_id] = []
         except Exception as e:
             print(f"[{session_id}] Failed to load session: {e}")
             msgs = []
+            self.transcripts[session_id] = []
         return [{"role": "system", "content": _build_system_prompt()}] + msgs
 
-    def _save_session(self, session_id: str, messages: list, max_messages: int | None = None):
-        """Persist session messages to disk (system prompt excluded, capped)."""
-        path = self._session_path(session_id)
-        cap = (
-            max_messages
-            if isinstance(max_messages, int) and max_messages > 0
-            else HOSTED_MAX_SESSION_MESSAGES
-        )
-        bounded = _cap_openai_history(messages, cap)
-        non_system = [m for m in bounded if m.get("role") != "system"]
+    def _append_transcript(self, session_id: str, role: str, content: object) -> None:
+        """Record one exact user-visible chat message for archive/history use."""
+        entry = validate_visible_transcript([{"role": role, "content": content}])
+        if not entry:
+            return
+        self.transcripts.setdefault(session_id, []).append(entry[0])
+        self.dirty_sessions.add(session_id)
+
+    def _save_session(
+        self,
+        session_id: str,
+        messages: list,
+        max_messages: int | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> bool:
+        """Persist bounded provider context plus the full visible transcript."""
+        if session_id in self.retired_sessions:
+            error = RuntimeError("refusing to recreate retired session")
+            print(f"[{session_id}] {error}")
+            if raise_on_error:
+                raise error
+            return False
+        if session_id in self.unsupported_sessions:
+            error = RuntimeError("refusing to overwrite unsupported session schema")
+            print(f"[{session_id}] {error}")
+            if raise_on_error:
+                raise error
+            return False
+        temp_path = ""
         try:
-            with open(path, "w") as f:
-                json.dump({"messages": non_system}, f)
+            path = self._session_path(session_id)
+            cap = (
+                max_messages
+                if isinstance(max_messages, int) and max_messages > 0
+                else HOSTED_MAX_SESSION_MESSAGES
+            )
+            bounded = _cap_openai_history(messages, cap)
+            non_system = [m for m in bounded if m.get("role") != "system"]
+            transcript = self.transcripts.get(session_id)
+            if transcript is None:
+                transcript = self._visible_transcript(non_system)
+            else:
+                transcript = validate_visible_transcript(transcript)
+                if transcript is None:
+                    raise ValueError("invalid in-memory visible transcript")
+            self.transcripts[session_id] = transcript
+            payload = {
+                "schema_version": SESSION_SCHEMA_VERSION,
+                "messages": non_system,
+                "transcript": transcript,
+            }
+            temp_path = f"{path}.{_uuid_hex()}.tmp"
+            with open(temp_path, "w") as f:
+                json.dump(payload, f, separators=(",", ":"), ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
         except Exception as e:
+            self.dirty_sessions.add(session_id)
             print(f"[{session_id}] Failed to save session: {e}")
+            if raise_on_error:
+                raise
+            return False
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+        self.dirty_sessions.discard(session_id)
+        return True
 
     async def _sanitize_user_output(
         self,
@@ -1614,7 +1651,10 @@ class TrialAgent:
         self.ws = await websockets.connect(
             url, ping_interval=20, ping_timeout=30, max_size=CHAT_WS_MAX_MESSAGE_BYTES
         )
-        await self.ws.send(json.dumps({"key": self.api_key}))
+        await self.ws.send(json.dumps({
+            "key": self.api_key,
+            "capabilities": {"retire_session": True},
+        }))
         resp = json.loads(await self.ws.recv())
         if resp.get("type") != "auth_ok":
             raise RuntimeError(f"Auth failed: {resp}")
@@ -1647,35 +1687,78 @@ class TrialAgent:
                             continue
                         if msg.get("type") == "user_message":
                             sid = msg.get("session_id", "")
-                            # Store billing run ID for credit accounting
+                            req_id = str(msg.get("req_id", "") or "")
+                            if sid in self.retired_sessions:
+                                await self._send_retire_response(
+                                    sid,
+                                    req_id,
+                                    "error",
+                                    data="This conversation was archived. Start a new chat to continue.",
+                                )
+                                await self._send_retire_response(sid, req_id, "done")
+                                continue
+                            # Keep this pending until any previous turn is
+                            # durably stopped; it still owns its billing run.
                             billing_rid = str(msg.get("billing_run_id", "")).strip()
-                            if billing_rid:
-                                self._session_billing_runs[sid] = billing_rid
-                            req_id = ""
                             # Cancel any existing task for this session before starting a new one
                             if sid:
                                 old_task = self.active_tasks.get(sid)
-                                if old_task and not old_task.done():
-                                    old_task.cancel()
+                                if old_task:
+                                    stopped, error = await self._stop_task_safely(sid, old_task)
+                                    if not stopped:
+                                        await self._send_retire_response(
+                                            sid, req_id, "error", data=error
+                                        )
+                                        await self._send_retire_response(sid, req_id, "done")
+                                        continue
                                     print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
+                                else:
+                                    flushed, error = self._flush_dirty_session(sid)
+                                    if not flushed:
+                                        await self._send_retire_response(
+                                            sid, req_id, "error", data=error
+                                        )
+                                        await self._send_retire_response(sid, req_id, "done")
+                                        continue
                                 req_id = str(msg.get("req_id", "") or "")
                                 self.active_req_ids[sid] = req_id
+                                if billing_rid:
+                                    self._session_billing_runs[sid] = billing_rid
+                                persistence_ready = asyncio.get_running_loop().create_future()
+                            else:
+                                persistence_ready = None
                             token = _task_req_id.set(req_id)
                             try:
-                                task = asyncio.create_task(self._handle_message(msg))
+                                task = asyncio.create_task(
+                                    self._handle_message(msg, persistence_ready=persistence_ready)
+                                )
                             finally:
                                 _task_req_id.reset(token)
                             if sid:
                                 self.active_tasks[sid] = task
+                                self._task_persistence_ready[sid] = (task, persistence_ready)
                                 task.add_done_callback(
                                     lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
                                 )
+                        elif msg.get("type") == "retire_session":
+                            await self._retire_session(
+                                str(msg.get("session_id", "") or ""),
+                                str(msg.get("req_id", "") or ""),
+                            )
+                        elif msg.get("type") == "retire_session_commit":
+                            sid = str(msg.get("session_id", "") or "")
+                            if sid:
+                                self.retired_sessions.add(sid)
                         elif msg.get("type") == "cancel":
                             sid = msg.get("session_id", "")
                             task = self.active_tasks.get(sid)
                             if task and not task.done():
                                 req_id = self.active_req_ids.get(sid, "")
-                                task.cancel()
+                                stopped, error = await self._stop_task_safely(sid, task)
+                                if not stopped:
+                                    await self._send_retire_response(sid, req_id, "error", data=error)
+                                    await self._send_retire_response(sid, req_id, "done")
+                                    continue
                                 print(f"[{sid}] Cancelled")
                                 await self._send(sid, {"type": "cancelled", "req_id": req_id})
                                 await self._send(sid, {"type": "done", "req_id": req_id})
@@ -1693,10 +1776,118 @@ class TrialAgent:
     def _finish_task(self, session_id: str, req_id: str, task: asyncio.Task):
         """Clear correlation state only when this task still owns the session."""
         if self.active_tasks.get(session_id) is task:
+            barriers = getattr(self, "_task_persistence_ready", {})
+            barrier = barriers.get(session_id)
+            if barrier and barrier[0] is task:
+                ready = barrier[1]
+                if not ready.done():
+                    # A coroutine cancelled before its first instruction has no
+                    # chance to persist the accepted user turn.
+                    self.dirty_sessions.add(session_id)
+                    ready.set_result(False)
+                barriers.pop(session_id, None)
             self.active_tasks.pop(session_id, None)
             getattr(self, "_session_billing_runs", {}).pop(session_id, None)
             if self.active_req_ids.get(session_id) == req_id:
                 self.active_req_ids.pop(session_id, None)
+
+    async def _send_retire_response(
+        self, session_id: str, req_id: str, event_type: str, **extra
+    ) -> None:
+        """Send control replies with their exact control request ID."""
+        try:
+            await send_agent_event(
+                self.ws,
+                {
+                    "type": event_type,
+                    "session_id": session_id,
+                    "req_id": req_id,
+                    **extra,
+                },
+            )
+        except Exception as e:
+            print(f"[{session_id}] retire response failed: {e}")
+
+    async def _wait_for_task_persistence(
+        self, session_id: str, task: asyncio.Task
+    ) -> tuple[bool, str]:
+        """Wait until a task has durably accepted its user turn."""
+        barrier = self._task_persistence_ready.get(session_id)
+        if barrier is None or barrier[0] is not task:
+            if session_id in self.dirty_sessions:
+                return False, "Session state is not durably persisted."
+            return True, ""
+        try:
+            persisted = await asyncio.wait_for(
+                asyncio.shield(barrier[1]), RETIRE_SESSION_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            return False, "Timed out waiting for the accepted turn to persist."
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return False, f"Accepted turn did not persist safely: {type(exc).__name__}"
+        if not persisted:
+            return False, "Accepted turn was not durably persisted."
+        return True, ""
+
+    def _flush_dirty_session(self, session_id: str) -> tuple[bool, str]:
+        """Retry a completed session's last write before changing ownership."""
+        if session_id not in self.dirty_sessions:
+            return True, ""
+        messages = self.sessions.get(session_id)
+        if not isinstance(messages, list):
+            return False, "Session state is not durably persisted."
+        try:
+            self._save_session(session_id, messages, raise_on_error=True)
+        except Exception as exc:
+            return False, f"Session state could not be persisted: {type(exc).__name__}"
+        return True, ""
+
+    async def _stop_task_safely(
+        self, session_id: str, task: asyncio.Task
+    ) -> tuple[bool, str]:
+        """Persist, stop, and flush one task before another action owns its session."""
+        persisted, error = await self._wait_for_task_persistence(session_id, task)
+        if not persisted:
+            return False, error
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), RETIRE_SESSION_TIMEOUT)
+        except asyncio.TimeoutError:
+            return False, "Timed out waiting for the active turn to stop."
+        except asyncio.CancelledError:
+            if not task.done():
+                raise
+        except Exception as exc:
+            return False, f"Active turn did not stop safely: {type(exc).__name__}"
+        if self.active_tasks.get(session_id) is task:
+            self._finish_task(session_id, self.active_req_ids.get(session_id, ""), task)
+        return self._flush_dirty_session(session_id)
+
+    async def _retire_session(self, session_id: str, req_id: str) -> None:
+        """Stop a session writer and acknowledge only after its final save."""
+        task = self.active_tasks.get(session_id)
+        if task is not None:
+            stopped, error = await self._stop_task_safely(session_id, task)
+            if not stopped:
+                await self._send_retire_response(session_id, req_id, "retire_session_error", data=error)
+                return
+        else:
+            flushed, error = self._flush_dirty_session(session_id)
+            if not flushed:
+                await self._send_retire_response(session_id, req_id, "retire_session_error", data=error)
+                return
+        self.sessions.pop(session_id, None)
+        self.transcripts.pop(session_id, None)
+        self.unsupported_sessions.discard(session_id)
+        self.dirty_sessions.discard(session_id)
+        self.active_tasks.pop(session_id, None)
+        self.active_req_ids.pop(session_id, None)
+        self._task_persistence_ready.pop(session_id, None)
+        self._session_billing_runs.pop(session_id, None)
+        await self._send_retire_response(session_id, req_id, "retire_session_ack")
 
     async def _deepseek_balance_loop(self):
         """Periodically snapshot the DeepSeek account balance to the server.
@@ -1798,7 +1989,9 @@ class TrialAgent:
             },
         )
 
-    async def _handle_message(self, msg: dict):
+    async def _handle_message(
+        self, msg: dict, *, persistence_ready: asyncio.Future[bool] | None = None
+    ):
         session_id = msg["session_id"]
         # agent_id from the message routes to the right user's Chrome
         agent_id = msg.get("agent_id", self.agent_id)
@@ -1819,6 +2012,10 @@ class TrialAgent:
         )
         token = _scheduler_turn.set(turn_state)
 
+        def resolve_persistence_ready(persisted: bool) -> None:
+            if persistence_ready is not None and not persistence_ready.done():
+                persistence_ready.set_result(persisted)
+
         # Use model from message if provided (allows front-end model selector)
         model = msg.get("model") or self.model
 
@@ -1827,7 +2024,23 @@ class TrialAgent:
         # Start or continue conversation (load from disk if not in memory cache)
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
+        if session_id in self.unsupported_sessions:
+            resolve_persistence_ready(False)
+            await self._send(
+                session_id,
+                {
+                    "type": "error",
+                    "data": (
+                        "This conversation was created by a newer agent version and "
+                        "cannot be resumed safely. Start a new chat to continue."
+                    ),
+                },
+            )
+            await self._send(session_id, {"type": "done"})
+            return
         messages = self.sessions[session_id]
+        if session_id not in self.transcripts:
+            self.transcripts[session_id] = self._visible_transcript(messages)
         # Rebuild system prompt with scheduler instructions when armed
         base_system = _build_system_prompt()
         if turn_state.armed and turn_state.grant_id:
@@ -1850,8 +2063,24 @@ class TrialAgent:
             for key in ("refusal", "reasoning"):
                 msg.pop(key, None)
         messages.append({"role": "user", "content": user_text})
+        self._append_transcript(session_id, "user", user_text)
         context_stats = _prepare_hosted_context(messages)
         self.sessions[session_id] = messages
+        try:
+            # A worker restart or a completed error path must still leave the
+            # accepted user turn available for archive/restore.
+            self._save_session(session_id, messages, raise_on_error=True)
+        except Exception as e:
+            resolve_persistence_ready(False)
+            print(f"[{session_id}] Failed to persist user turn: {e}")
+            await self._send(
+                session_id,
+                {"type": "error", "data": "Could not save this message. Please retry."},
+            )
+            await self._send(session_id, {"type": "done"})
+            _scheduler_turn.reset(token)
+            return
+        resolve_persistence_ready(True)
         if (
             context_stats["message_trimmed"]
             or context_stats["tool_results_compacted"]
@@ -1902,7 +2131,7 @@ class TrialAgent:
                         )
                         final_msg = final_resp["choices"][0]["message"]
                         messages.append(final_msg)
-                        text = final_msg.get("content") or final_msg.get("reasoning") or ""
+                        text = final_msg.get("content") or ""
                         text = await self._sanitize_user_output(
                             client,
                             model,
@@ -1920,8 +2149,9 @@ class TrialAgent:
                         text = ""
                     if not text:
                         text = fallback
+                    self._append_transcript(session_id, "assistant", text)
+                    self._save_session(session_id, messages, raise_on_error=True)
                     await self._send(session_id, {"type": "text", "data": text})
-                    self._save_session(session_id, messages)
                     await self._send(session_id, {"type": "done"})
 
                 turn_cap = MAX_TURNS  # start at 50
@@ -2076,11 +2306,6 @@ class TrialAgent:
                     # No tool calls → final answer
                     if not tool_calls:
                         text = message.get("content") or ""
-                        # Some chain-of-thought models (e.g. Solar Pro) put their
-                        # thinking in a 'reasoning' field and return content=None.
-                        # Fall back to reasoning if content is empty.
-                        if not text:
-                            text = message.get("reasoning") or ""
                         text = await self._sanitize_user_output(
                             client,
                             model,
@@ -2091,15 +2316,16 @@ class TrialAgent:
                               f"finish={finish_reason!r} "
                               f"content={repr((message.get('content') or '')[:80])} "
                               f"reasoning_len={len(message.get('reasoning') or '')}")
-                        if text:
-                            await self._send(session_id, {"type": "text", "data": text})
-                        else:
+                        if not text:
                             # Model returned nothing — warn in logs, show placeholder
                             print(f"[{session_id}] WARNING: empty final content (finish={finish_reason!r})")
-                            await self._send(session_id, {"type": "text",
-                                "data": "[Agent completed the task but returned no text response. "
-                                        "Try asking it to summarize what it found.]"})
-                        self._save_session(session_id, messages)
+                            text = (
+                                "[Agent completed the task but returned no text response. "
+                                "Try asking it to summarize what it found.]"
+                            )
+                        self._append_transcript(session_id, "assistant", text)
+                        self._save_session(session_id, messages, raise_on_error=True)
+                        await self._send(session_id, {"type": "text", "data": text})
                         await self._send(session_id, {"type": "done"})
                         print(f"[{session_id}] Done ({turn + 1} turns)")
                         return
@@ -2466,7 +2692,7 @@ class TrialAgent:
 
         except asyncio.CancelledError:
             print(f"[{session_id}] Task cancelled")
-            self._save_session(session_id, messages)
+            self._save_session(session_id, messages, raise_on_error=True)
             # Don't send done — the cancel handler or new message handler does that
         except Exception as e:
             import traceback
@@ -3332,7 +3558,7 @@ class LocalOpenRouterCLI:
                 client, summary_prompt, self.model, tool_choice="none"
             )
             summary_msg = summary_resp["choices"][0]["message"]
-            summary = (summary_msg.get("content") or summary_msg.get("reasoning") or "").strip()
+            summary = (summary_msg.get("content") or "").strip()
         except Exception as e:
             print(f"[context] Tier 2 skipped: summary request failed: {e}")
             return bool(cstats["compacted"])
@@ -3387,6 +3613,7 @@ class LocalOpenRouterCLI:
 
     async def _run_turn(self, client: httpx.AsyncClient, user_text: str):
         self.messages.append({"role": "user", "content": user_text})
+        self.agent._append_transcript(self.session_id, "user", user_text)
 
         ns = NudgeState()
         reflex = ReflexState()
@@ -3439,7 +3666,7 @@ class LocalOpenRouterCLI:
             self.messages.append(message)
 
             if not tool_calls:
-                text = message.get("content") or message.get("reasoning") or ""
+                text = message.get("content") or ""
                 text = await self.agent._sanitize_user_output(
                     client,
                     self.model,
@@ -3449,6 +3676,7 @@ class LocalOpenRouterCLI:
                 if not text:
                     text = f"[empty response, finish_reason={finish_reason}]"
                 print(f"\nassistant> {text}\n")
+                self.agent._append_transcript(self.session_id, "assistant", text)
                 self._save_local_session()
                 return
 
@@ -3489,7 +3717,7 @@ class LocalOpenRouterCLI:
                         timeout=FORCE_FINAL_TIMEOUT,
                     )
                     final_msg = final_resp["choices"][0]["message"]
-                    final_text = final_msg.get("content") or final_msg.get("reasoning") or ""
+                    final_text = final_msg.get("content") or ""
                     final_text = await self.agent._sanitize_user_output(
                         client,
                         self.model,
@@ -3504,6 +3732,7 @@ class LocalOpenRouterCLI:
                 if not final_text:
                     final_text = "I got stuck and could not complete the task."
                 print(f"\nassistant> {final_text}\n")
+                self.agent._append_transcript(self.session_id, "assistant", final_text)
                 self._save_local_session()
                 return
 

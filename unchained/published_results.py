@@ -17,7 +17,7 @@ import threading
 import time
 from html import escape
 
-from tool_payloads import contains_tool_call_wrapper, strip_tool_call_wrappers
+from conversation_transcript import visible_transcript_from_payload
 
 log = logging.getLogger(__name__)
 
@@ -218,39 +218,8 @@ def _pii_guard(query: str, result_text: str) -> bool:
 
 
 def _extract_visible_messages(session_data: dict) -> list[dict]:
-    """Extract user/assistant messages from a session, stripping tool calls."""
-    raw = session_data.get("messages", [])
-    msgs = []
-    for m in raw:
-        role = m.get("role")
-        if role == "user":
-            content = m.get("content", "")
-            if content:
-                msgs.append({"role": "user", "content": content})
-        elif role == "assistant":
-            if m.get("tool_calls") and not m.get("content"):
-                continue
-            content = m.get("content") or ""
-            if not content:
-                continue
-            # Strip leaked raw or HTML-escaped tool-call wrappers.
-            content = strip_tool_call_wrappers(content)
-            # Strip raw JSON tool-call payloads (nested braces possible)
-            content = re.sub(
-                r'\{[^{}]*"(?:name|function)"\s*:[^{}]*"arguments"\s*:[^}]*\}',
-                "", content
-            )
-            # Also strip any remaining JSON-like tool blocks with nested content
-            content = re.sub(
-                r'\{"(?:name|function|type)"\s*:.*?\}(?:\s*\})*',
-                "", content, flags=re.DOTALL
-            )
-            content = re.sub(r"\n{3,}", "\n\n", content).strip()
-            if contains_tool_call_wrapper(content):
-                continue
-            if content:
-                msgs.append({"role": "assistant", "content": content})
-    return msgs
+    """Return the canonical user-visible transcript eligible for publication."""
+    return visible_transcript_from_payload(session_data)
 
 
 def _messages_to_html(messages: list[dict]) -> str:

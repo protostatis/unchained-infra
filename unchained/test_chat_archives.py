@@ -18,6 +18,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 sys.path.insert(0, os.path.dirname(__file__))
 
 import web
+from conversation_transcript import SESSION_SCHEMA_VERSION
 
 
 class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
@@ -469,6 +470,35 @@ class TestLocalArchiveTemplate(unittest.TestCase):
         self.assertIn("const previousState = _loadSlotState();", web.CLAUDE_CHAT_HTML)
         self.assertIn("if (data.offline) return;", web.CLAUDE_CHAT_HTML)
         self.assertIn("_saveSlotState(previousState);", web.CLAUDE_CHAT_HTML)
+
+
+class TestHostedTranscriptHistory(unittest.TestCase):
+    def test_history_prefers_full_transcript_over_capped_provider_context(self):
+        """Reloaded /workspace history must retain the original prompt."""
+        session_id = "s-trial-agent-transcript-history"
+        transcript = []
+        for index in range(20):
+            transcript.extend([
+                {"role": "user", "content": f"original prompt {index}"},
+                {"role": "assistant", "content": f"answer {index}"},
+            ])
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = os.path.join(tempdir, f"{session_id}.json")
+            with open(path, "w") as f:
+                json.dump(
+                    {
+                        "schema_version": SESSION_SCHEMA_VERSION,
+                        "messages": transcript[-8:],
+                        "transcript": transcript,
+                    },
+                    f,
+                )
+            with patch.object(web, "_trial_session_path", return_value=path):
+                messages, found = web._read_trial_history(session_id)
+
+        self.assertTrue(found)
+        self.assertEqual(messages, transcript)
+        self.assertEqual(messages[0]["content"], "original prompt 0")
 
 
 if __name__ == "__main__":

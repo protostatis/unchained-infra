@@ -13,13 +13,24 @@ from unittest.mock import patch
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import TestClient, TestServer
 
-from chat_event_transport import MALFORMED_TEXT_EVENT_MESSAGE
+from chat_event_transport import (
+    MALFORMED_TEXT_EVENT_MESSAGE,
+    iter_replay_safe_text_chunks,
+)
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 from web_app.handlers import chat_stream
 from web_app.routes import ROUTE_SPECS
-from web_state import ChatTurnRegistry, ChatTurnState
+from web_state import (
+    ChatTurnRegistry,
+    ChatTurnState,
+    begin_hosted_session_transition,
+    finish_hosted_session_dispatch,
+    finish_hosted_session_transition,
+    hosted_session_phase,
+    start_hosted_session_dispatch,
+)
 
 
 class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
@@ -1151,6 +1162,52 @@ class TestChatTurnState(unittest.TestCase):
         self.assertEqual(event["malformed_text_data_type"], "NoneType")
         self.assertTrue(event["replay_body_omitted"])
 
+    def test_publish_preserves_replay_safe_text_chunks(self):
+        turn = self._turn()
+        text = ("escaped \" \\ \u0001 \u3053\u3093\u306b\u3061\u306f \U0001f916\n" * 900)
+        chunks = list(
+            iter_replay_safe_text_chunks(
+                text,
+                session_id=turn.session_id,
+                req_id=turn.req_id,
+            )
+        )
+
+        replay = [
+            turn.publish({"type": "text", "data": chunk})
+            for chunk in chunks
+        ]
+
+        self.assertGreater(len(replay), 1)
+        self.assertEqual("".join(event["data"] for event in replay), text)
+        self.assertTrue(
+            all(not event.get("replay_body_omitted") for event in replay)
+        )
+        self.assertTrue(
+            all(not event.get("malformed_text_event") for event in replay)
+        )
+
+    def test_replay_journal_retains_only_recent_large_response_chunks(self):
+        turn = self._turn()
+        chunks = list(
+            iter_replay_safe_text_chunks(
+                "x" * 30_000,
+                session_id=turn.session_id,
+                req_id=turn.req_id,
+                max_event_bytes=128,
+            )
+        )
+
+        for chunk in chunks:
+            turn.publish({"type": "text", "data": chunk})
+
+        self.assertGreater(len(chunks), 200)
+        self.assertEqual(len(turn.journal), 200)
+        self.assertEqual(
+            "".join(event["data"] for event in turn.journal),
+            "".join(chunks[-200:]),
+        )
+
     def test_tool_event_updates_current_action_in_snapshot(self):
         turn = self._turn()
 
@@ -1259,6 +1316,31 @@ class TestChatTurnRegistry(unittest.IsolatedAsyncioTestCase):
         with patch("web_state.time.time", return_value=110.001):
             self.assertIsNone(registry.get(turn.session_id, turn.req_id))
             self.assertIsNone(registry.get(turn.session_id))
+
+
+class TestHostedSessionLifecycle(unittest.IsolatedAsyncioTestCase):
+    async def test_transition_waits_for_queued_dispatch_then_retires_session(self):
+        core = SimpleNamespace()
+        session_id = "s-hosted-lifecycle"
+        lease = await start_hosted_session_dispatch(core, session_id)
+        self.assertIsNotNone(lease)
+
+        transition = asyncio.create_task(
+            begin_hosted_session_transition(core, session_id)
+        )
+        await asyncio.sleep(0)
+
+        self.assertEqual(hosted_session_phase(core, session_id), "transitioning")
+        self.assertFalse(transition.done())
+        self.assertIsNone(await start_hosted_session_dispatch(core, session_id))
+
+        await finish_hosted_session_dispatch(core, session_id, lease)
+        lifecycle = await transition
+        self.assertIsNotNone(lifecycle)
+        await finish_hosted_session_transition(lifecycle, retired=True)
+
+        self.assertEqual(hosted_session_phase(core, session_id), "retired")
+        self.assertIsNone(await start_hosted_session_dispatch(core, session_id))
 
 
 if __name__ == "__main__":

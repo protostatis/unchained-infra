@@ -29,12 +29,15 @@ from web_state import (
     ProfileTabMonitorHandoff,
     canonical_session_tab,
     clear_profile_tab_monitor_handoff,
+    finish_hosted_session_dispatch,
+    hosted_session_phase,
     profile_session_caller_tag,
     profile_session_guard,
     profile_tab_handoff_blocks_observed_tab,
     profile_tab_monitor_handoffs,
     profile_tab_monitor_observed_tabs,
     select_profile_slot_active_tab,
+    start_hosted_session_dispatch,
 )
 
 
@@ -77,6 +80,7 @@ _HOSTED_MAX_ACTIVE_TURNS_PER_USER = max(
 _HOSTED_TURN_DEADLINE_S = max(
     30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "600"))
 )
+_HOSTED_SESSION_QUIESCE_TIMEOUT_S = 30.0
 _HOSTED_MAX_USER_PROMPT_CHARS = max(
     1_000, int(os.environ.get("HOSTED_MAX_USER_PROMPT_CHARS", "20000"))
 )
@@ -180,6 +184,71 @@ def _turn_registry(core):
     """Return the optional signed-in turn registry without breaking fake cores."""
     registry = getattr(core, "_chat_turns", None)
     return registry if all(hasattr(registry, name) for name in ("get", "start")) else None
+
+
+async def _agent_control_request(
+    core, agent_id: str, message: dict, *, timeout: float
+) -> dict | None:
+    """Send one correlated worker-control message without a response stream."""
+    ws = getattr(core, "_chat_agents", {}).get(agent_id)
+    if ws is None or getattr(ws, "closed", False):
+        return None
+    queues = getattr(core, "_agent_req_queues", None)
+    if not isinstance(queues, dict):
+        queues = {}
+        core._agent_req_queues = queues
+    req_id = uuid.uuid4().hex[:8]
+    payload = dict(message)
+    payload["req_id"] = req_id
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    queues[req_id] = queue
+    try:
+        await ws.send_json(payload)
+        response = await asyncio.wait_for(queue.get(), timeout=timeout)
+        return response if isinstance(response, dict) else None
+    except (asyncio.TimeoutError, Exception):
+        return None
+    finally:
+        queues.pop(req_id, None)
+
+
+async def quiesce_hosted_session(core, session_id: str) -> bool:
+    """Wait until the hosted worker has stopped and persisted one session."""
+    worker_id = str(getattr(core, "TRIAL_AGENT_ID", "") or "")
+    # Minimal fake cores have no hosted worker. Production always sets this ID,
+    # so a real worker outage fails closed below.
+    if not worker_id:
+        return True
+    response = await _agent_control_request(
+        core,
+        worker_id,
+        {"type": "retire_session", "session_id": session_id},
+        timeout=_HOSTED_SESSION_QUIESCE_TIMEOUT_S,
+    )
+    if not response or response.get("type") != "retire_session_ack":
+        return False
+    turn = _registry_turn(_turn_registry(core), session_id)
+    if turn and not getattr(turn, "stream_finished", False):
+        _publish_turn_event(
+            core,
+            turn,
+            {"type": "cancelled", "session_id": session_id, "req_id": turn.req_id},
+        )
+    return True
+
+
+async def retire_hosted_session(core, session_id: str) -> None:
+    """Tell the worker to reject stale writes after a transition commits."""
+    worker_id = str(getattr(core, "TRIAL_AGENT_ID", "") or "")
+    if not worker_id:
+        return
+    ws = getattr(core, "_chat_agents", {}).get(worker_id)
+    if ws is None or getattr(ws, "closed", False):
+        return
+    try:
+        await ws.send_json({"type": "retire_session_commit", "session_id": session_id})
+    except Exception:
+        pass
 
 
 def _registry_turn(registry, session_id: str, req_id: str = ""):
@@ -1203,6 +1272,8 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                         "archives_response",
                         "restore_archive_ok",
                         "restore_archive_error",
+                        "retire_session_ack",
+                        "retire_session_error",
                         "delete_archive_ok",
                         "delete_archive_error",
                     ))):
@@ -1218,6 +1289,8 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     "archives_response",
                     "restore_archive_ok",
                     "restore_archive_error",
+                    "retire_session_ack",
+                    "retire_session_error",
                     "delete_archive_ok",
                     "delete_archive_error",
                 )):
@@ -1527,6 +1600,31 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
     elif not _session_owned(session_id):
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
+    if is_hosted:
+        phase = hosted_session_phase(core, session_id)
+        if phase == "retired":
+            return reject_first_look(
+                web.json_response(
+                    {
+                        "error": "session_archived",
+                        "message": "This conversation was archived. Start a new chat.",
+                    },
+                    status=409,
+                ),
+                "session_archived",
+            )
+        if phase == "transitioning":
+            return reject_first_look(
+                web.json_response(
+                    {
+                        "error": "session_transitioning",
+                        "message": "This conversation is being archived. Try again shortly.",
+                    },
+                    status=503,
+                    headers={"Retry-After": "2"},
+                ),
+                "session_transitioning",
+            )
     scheduler_grant_id = ""
     if scheduler_armed and guest_mode:
         scheduler_grant_id = core._mint_scheduler_turn_grant(auth_info.get("user_id", ""), session_id)
@@ -2227,7 +2325,31 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         # Record routing before forwarding so a concurrent reconnect or agent
         # disconnect can resolve this exact turn without a response queue.
         core._session_agents[session_id] = routing_agent_id
-        await ws.send_json(ws_msg)
+        dispatch_lease = None
+        if is_hosted:
+            dispatch_lease = await start_hosted_session_dispatch(core, session_id)
+            if dispatch_lease is None:
+                if turn:
+                    _publish_turn_failure(
+                        core, turn, "This conversation is being archived. Try again shortly."
+                    )
+                _discard_response_registration(core, session_id)
+                return reject_first_look(
+                    web.json_response(
+                        {
+                            "error": "session_transitioning",
+                            "message": "This conversation is being archived. Try again shortly.",
+                        },
+                        status=503,
+                        headers={"Retry-After": "2"},
+                    ),
+                    "session_transitioning",
+                )
+        try:
+            await ws.send_json(ws_msg)
+        finally:
+            if dispatch_lease is not None:
+                await finish_hosted_session_dispatch(core, session_id, dispatch_lease)
         if turn and is_hosted:
             _hosted_turn_deadline_task(core, turn, _HOSTED_TURN_DEADLINE_S)
         if guest_mode:
