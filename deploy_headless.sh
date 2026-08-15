@@ -47,6 +47,7 @@ echo "==> Uploading Python modules..."
     unchained/auth.py \
     unchained/chat_agent_openrouter.py \
     unchained/chat_event_transport.py \
+    unchained/conversation_transcript.py \
     unchained/chrome_bridge.py \
     unchained/cloud_tools.py \
     unchained/context_compact.py \

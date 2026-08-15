@@ -13,6 +13,7 @@ COPY unchained/auth.py .
 COPY unchained/analytics.py .
 COPY unchained/credit.py .
 COPY unchained/hosted_conversations.py .
+COPY unchained/conversation_transcript.py .
 COPY unchained/cloud_tools.py .
 COPY unchained/private_core_client.py .
 COPY unchained/private_core_contracts.py .

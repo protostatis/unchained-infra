@@ -979,12 +979,31 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_hosted_runtime_modules_are_packaged_for_deploy(self):
         repo_root = Path(__file__).resolve().parents[1]
         dockerfile = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+        headless_dockerfile = (repo_root / "Dockerfile.headless").read_text(
+            encoding="utf-8"
+        )
+        headless_deploy = (repo_root / "deploy_headless.sh").read_text(
+            encoding="utf-8"
+        )
         runtime_context = (
             repo_root / "deploy" / "runtime_context_files.sh"
         ).read_text(encoding="utf-8")
-        for module in ("credit.py", "hosted_conversations.py"):
+        for module in (
+            "credit.py",
+            "hosted_conversations.py",
+            "conversation_transcript.py",
+        ):
             self.assertIn(f"COPY unchained/{module} .", dockerfile)
             self.assertIn(f'"{module}"', runtime_context)
+        self.assertIn(
+            "COPY unchained/conversation_transcript.py .",
+            headless_dockerfile,
+        )
+        self.assertIn("unchained/conversation_transcript.py", headless_deploy)
+        pyproject = (repo_root / "unchained" / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"conversation_transcript"', pyproject)
 
     def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
         from web_app.handlers.unbrowser_demo import SCENARIOS
