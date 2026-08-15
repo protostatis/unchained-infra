@@ -110,6 +110,27 @@ def project_visible_messages(messages: object) -> list[dict[str, str]]:
     return transcript
 
 
+def validate_visible_transcript(transcript: object) -> list[dict[str, str]] | None:
+    """Validate canonical display history without changing already-shown text."""
+    if not isinstance(transcript, list):
+        return None
+    validated: list[dict[str, str]] = []
+    for message in transcript:
+        if not isinstance(message, dict):
+            return None
+        role = message.get("role")
+        content = message.get("content")
+        if (
+            not isinstance(role, str)
+            or role not in {"user", "assistant"}
+            or not isinstance(content, str)
+            or not content.strip()
+        ):
+            return None
+        validated.append({"role": role, "content": content})
+    return validated
+
+
 def visible_transcript_from_payload(payload: object) -> list[dict[str, str]]:
     """Read canonical transcript data without exposing private resume context.
 
@@ -126,6 +147,7 @@ def visible_transcript_from_payload(payload: object) -> list[dict[str, str]]:
     if version != SESSION_SCHEMA_VERSION:
         return []
     transcript = payload.get("transcript")
-    if not isinstance(transcript, list):
-        return []
-    return project_visible_messages(transcript)
+    # Versioned transcripts are written only after output is sanitized for the
+    # user. Preserve their text exactly; legacy provider messages still use the
+    # stricter projection above because they contain private execution state.
+    return validate_visible_transcript(transcript) or []

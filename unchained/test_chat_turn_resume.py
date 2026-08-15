@@ -22,7 +22,15 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 from web_app.handlers import chat_stream
 from web_app.routes import ROUTE_SPECS
-from web_state import ChatTurnRegistry, ChatTurnState
+from web_state import (
+    ChatTurnRegistry,
+    ChatTurnState,
+    begin_hosted_session_transition,
+    finish_hosted_session_dispatch,
+    finish_hosted_session_transition,
+    hosted_session_phase,
+    start_hosted_session_dispatch,
+)
 
 
 class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
@@ -1308,6 +1316,31 @@ class TestChatTurnRegistry(unittest.IsolatedAsyncioTestCase):
         with patch("web_state.time.time", return_value=110.001):
             self.assertIsNone(registry.get(turn.session_id, turn.req_id))
             self.assertIsNone(registry.get(turn.session_id))
+
+
+class TestHostedSessionLifecycle(unittest.IsolatedAsyncioTestCase):
+    async def test_transition_waits_for_queued_dispatch_then_retires_session(self):
+        core = SimpleNamespace()
+        session_id = "s-hosted-lifecycle"
+        lease = await start_hosted_session_dispatch(core, session_id)
+        self.assertIsNotNone(lease)
+
+        transition = asyncio.create_task(
+            begin_hosted_session_transition(core, session_id)
+        )
+        await asyncio.sleep(0)
+
+        self.assertEqual(hosted_session_phase(core, session_id), "transitioning")
+        self.assertFalse(transition.done())
+        self.assertIsNone(await start_hosted_session_dispatch(core, session_id))
+
+        await finish_hosted_session_dispatch(core, session_id, lease)
+        lifecycle = await transition
+        self.assertIsNotNone(lifecycle)
+        await finish_hosted_session_transition(lifecycle, retired=True)
+
+        self.assertEqual(hosted_session_phase(core, session_id), "retired")
+        self.assertIsNone(await start_hosted_session_dispatch(core, session_id))
 
 
 if __name__ == "__main__":

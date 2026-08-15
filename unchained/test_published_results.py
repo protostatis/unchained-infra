@@ -17,6 +17,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import published_results
 import web
+from conversation_transcript import SESSION_SCHEMA_VERSION
 
 
 class TestPublishedResultDisclosureContracts(unittest.TestCase):
@@ -169,6 +170,23 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
             "messages": [{"role": "assistant", "content": dsml}]
         })
         self.assertEqual(messages, [{"role": "assistant", "content": "Useful answer."}])
+
+    def test_v2_transcript_preserves_displayed_json_verbatim(self):
+        visible = (
+            "Example response:\n\n"
+            "```json\n"
+            '{"name":"describe_schema","arguments":{"format":"full"}}\n'
+            "```\n"
+        )
+        messages = published_results._extract_visible_messages(
+            {
+                "schema_version": SESSION_SCHEMA_VERSION,
+                "messages": [{"role": "assistant", "content": "private context"}],
+                "transcript": [{"role": "assistant", "content": visible}],
+            }
+        )
+
+        self.assertEqual(messages, [{"role": "assistant", "content": visible}])
 
     def test_unclosed_tool_call_keeps_only_the_safe_prefix(self):
         for index, opening in enumerate((
