@@ -289,8 +289,8 @@ async def intel_find_paths(global_name: str,
 
 @mcp.tool()
 async def cdp_navigate(url: str,
-                       bring_to_front: bool = False,
-                       tab_id: str = "auto", agent_id: str = "") -> str:
+                       tab_id: str = "auto", agent_id: str = "",
+                       bring_to_front: bool = False) -> str:
     """Navigate the browser to a URL. Returns page title and final URL.
 
     Args:

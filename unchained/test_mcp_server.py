@@ -216,5 +216,36 @@ class TestCdpNavigateBringToFront(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.content[0].text, "Navigated")
 
 
+class TestCdpNavigateSignatureContract(unittest.TestCase):
+    """The MCP tool mocks cloud_tools.navigate in tests, so validate the real
+    call chain accepts the bring_to_front kwarg end-to-end."""
+
+    def test_cloud_tools_navigate_accepts_bring_to_front(self):
+        import inspect
+
+        import cloud_tools
+
+        sig = inspect.signature(cloud_tools.navigate)
+        param = sig.parameters.get("bring_to_front")
+        self.assertIsNotNone(
+            param,
+            "cloud_tools.navigate must accept bring_to_front kwarg",
+        )
+        self.assertIs(param.default, True)
+
+    def test_private_core_client_navigate_accepts_bring_to_front(self):
+        import inspect
+
+        from private_core_client import PrivateCoreClient
+
+        sig = inspect.signature(PrivateCoreClient.navigate)
+        param = sig.parameters.get("bring_to_front")
+        self.assertIsNotNone(
+            param,
+            "PrivateCoreClient.navigate must accept bring_to_front kwarg",
+        )
+        self.assertIs(param.default, True)
+
+
 if __name__ == "__main__":
     unittest.main()
