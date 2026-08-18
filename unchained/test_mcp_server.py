@@ -180,5 +180,41 @@ class TestDdmFrameTool(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestCdpNavigateBringToFront(unittest.IsolatedAsyncioTestCase):
+    async def test_navigate_defaults_to_background(self):
+        """cdp_navigate must not bring Chrome to the front by default —
+        the browser should stay out of the way of other work on the machine."""
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.navigate", new=AsyncMock(return_value="Navigated")) as mock_nav,
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_navigate", {"url": "https://example.com"},
+            )
+
+        mock_nav.assert_awaited_once_with(
+            "claude-abc", "auto", "https://example.com",
+            bring_to_front=False,
+        )
+        self.assertEqual(result.content[0].text, "Navigated")
+
+    async def test_navigate_can_opt_into_bring_to_front(self):
+        """Callers can opt into the Chrome 147+ AIM foreground workaround."""
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.navigate", new=AsyncMock(return_value="Navigated")) as mock_nav,
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_navigate",
+                {"url": "https://example.com", "bring_to_front": True},
+            )
+
+        mock_nav.assert_awaited_once_with(
+            "claude-abc", "auto", "https://example.com",
+            bring_to_front=True,
+        )
+        self.assertEqual(result.content[0].text, "Navigated")
+
+
 if __name__ == "__main__":
     unittest.main()

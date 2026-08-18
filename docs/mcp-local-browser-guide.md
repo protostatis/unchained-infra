@@ -101,6 +101,16 @@ Then call tools directly — `agent_id` is auto-detected from your API key:
 - `ddm` with `flags=--text --find Slickdeals`
 - `list_provisioned_tabs` after a provisioned login flow opens a popup tab
 
+`cdp_navigate` navigates in the background by default — the Chrome window
+stays out of your way while you work on other tasks. If a navigation silently
+fails (Chrome 147+ routes `Page.navigate` to the omnibox AI Mode target when
+the tab isn't foregrounded), pass `bring_to_front=true` to retry with the
+window brought forward:
+
+```text
+cdp_navigate  url=https://slickdeals.net  bring_to_front=true
+```
+
 ## Provisioned Chrome Tabs And OAuth Popups
 
 When a provisioned Chrome flow opens a second tab or popup window, the default
