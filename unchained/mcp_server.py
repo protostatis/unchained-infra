@@ -289,10 +289,22 @@ async def intel_find_paths(global_name: str,
 
 @mcp.tool()
 async def cdp_navigate(url: str,
-                       tab_id: str = "auto", agent_id: str = "") -> str:
-    """Navigate the browser to a URL. Returns page title and final URL."""
+                       tab_id: str = "auto", agent_id: str = "",
+                       bring_to_front: bool = False) -> str:
+    """Navigate the browser to a URL. Returns page title and final URL.
+
+    Args:
+        url: URL to navigate to.
+        bring_to_front: Bring the Chrome window to the foreground before
+            navigating. Default False keeps the browser in the background so
+            it doesn't steal focus from other work on this machine. Set True
+            only if navigation silently fails — Chrome 147+ routes
+            Page.navigate to the omnibox AI Mode target instead of the tab
+            when the tab isn't the active foreground page.
+    """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.navigate(aid, tab_id, url)
+    return await cloud_tools.navigate(
+        aid, tab_id, url, bring_to_front=bring_to_front)
 
 
 @mcp.tool()

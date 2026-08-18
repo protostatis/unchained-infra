@@ -180,5 +180,72 @@ class TestDdmFrameTool(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestCdpNavigateBringToFront(unittest.IsolatedAsyncioTestCase):
+    async def test_navigate_defaults_to_background(self):
+        """cdp_navigate must not bring Chrome to the front by default —
+        the browser should stay out of the way of other work on the machine."""
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.navigate", new=AsyncMock(return_value="Navigated")) as mock_nav,
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_navigate", {"url": "https://example.com"},
+            )
+
+        mock_nav.assert_awaited_once_with(
+            "claude-abc", "auto", "https://example.com",
+            bring_to_front=False,
+        )
+        self.assertEqual(result.content[0].text, "Navigated")
+
+    async def test_navigate_can_opt_into_bring_to_front(self):
+        """Callers can opt into the Chrome 147+ AIM foreground workaround."""
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.navigate", new=AsyncMock(return_value="Navigated")) as mock_nav,
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_navigate",
+                {"url": "https://example.com", "bring_to_front": True},
+            )
+
+        mock_nav.assert_awaited_once_with(
+            "claude-abc", "auto", "https://example.com",
+            bring_to_front=True,
+        )
+        self.assertEqual(result.content[0].text, "Navigated")
+
+
+class TestCdpNavigateSignatureContract(unittest.TestCase):
+    """The MCP tool mocks cloud_tools.navigate in tests, so validate the real
+    call chain accepts the bring_to_front kwarg end-to-end."""
+
+    def test_cloud_tools_navigate_accepts_bring_to_front(self):
+        import inspect
+
+        import cloud_tools
+
+        sig = inspect.signature(cloud_tools.navigate)
+        param = sig.parameters.get("bring_to_front")
+        self.assertIsNotNone(
+            param,
+            "cloud_tools.navigate must accept bring_to_front kwarg",
+        )
+        self.assertIs(param.default, True)
+
+    def test_private_core_client_navigate_accepts_bring_to_front(self):
+        import inspect
+
+        from private_core_client import PrivateCoreClient
+
+        sig = inspect.signature(PrivateCoreClient.navigate)
+        param = sig.parameters.get("bring_to_front")
+        self.assertIsNotNone(
+            param,
+            "PrivateCoreClient.navigate must accept bring_to_front kwarg",
+        )
+        self.assertIs(param.default, True)
+
+
 if __name__ == "__main__":
     unittest.main()
