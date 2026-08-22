@@ -51,7 +51,7 @@ reaped on expiry and shutdown.
 
 Current pins:
 
-- `pyunbrowser==0.0.18`
+- `pyunbrowser==0.0.21`
 - `mcp-proxy==0.12.0`
 
 Update `Dockerfile.unbrowser-mcp` when publishing a new hosted unbrowser MCP

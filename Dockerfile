@@ -76,7 +76,7 @@ RUN pip install --no-cache-dir \
     "cryptography>=42.0" \
     "boto3>=1.34,<2.0" \
     "pypdf>=4.0" \
-    "pyunbrowser==0.0.18"
+    "pyunbrowser==0.0.21"
 
 # Rhythm — event-driven SPA automation (copied by deploy.sh when available)
 COPY --chown=unchained:unchained rhythm/ rhythm/
