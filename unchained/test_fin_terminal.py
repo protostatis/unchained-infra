@@ -625,7 +625,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     def test_unbrowser_mcp_pins_a_compatible_patched_sdk_version(self):
         self.assertIn("mcp-proxy==0.12.0", self.unbrowser_mcp_dockerfile)
         self.assertIn("mcp==1.29.0", self.unbrowser_mcp_dockerfile)
-        self.assertIn("pyunbrowser==0.0.18", self.unbrowser_mcp_dockerfile)
+        self.assertIn("pyunbrowser==0.0.21", self.unbrowser_mcp_dockerfile)
 
     def test_unbrowser_mcp_uses_per_session_workers_with_bounded_idle_cleanup(self):
         self.assertIn("COPY unchained/unbrowser_mcp_router.py .", self.unbrowser_mcp_dockerfile)

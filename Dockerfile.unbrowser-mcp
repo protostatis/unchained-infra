@@ -12,7 +12,7 @@ COPY unchained/unbrowser_mcp_router.py .
 RUN pip install --no-cache-dir \
     "mcp-proxy==0.12.0" \
     "mcp==1.29.0" \
-    "pyunbrowser==0.0.18"
+    "pyunbrowser==0.0.21"
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
