@@ -474,12 +474,14 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "c88f0ec14ede4ee067fb9d7d557017dc2856a8cc",
+            "05f0c634e8e9c45d1d0759e557e966edd2817cff",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
         self.assertIn("MARKET_RESEARCH_PROMPT=compact", service)
         self.assertIn("MARKET_PRECACHE_ENABLED=1", service)
+        self.assertIn("MARKET_PRECACHE_STRATEGY=single", service)
+        self.assertIn("MARKET_PRECACHE_MAX_JOBS=1", service)
         self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
         self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
         self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
@@ -528,7 +530,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "c88f0ec14ede4ee067fb9d7d557017dc2856a8cc"
+        app_revision = "05f0c634e8e9c45d1d0759e557e966edd2817cff"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"

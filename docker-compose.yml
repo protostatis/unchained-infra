@@ -166,7 +166,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#c88f0ec14ede4ee067fb9d7d557017dc2856a8cc"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#05f0c634e8e9c45d1d0759e557e966edd2817cff"
       args:
         PUBLIC_BASE_PATH: /fin-terminal/
     expose:
@@ -189,7 +189,13 @@ services:
       - MARKET_RESEARCH_PROMPT=compact
       # Enable singleton scout polling; the pinned app only records trigger
       # admission outcomes and has no dispatch path. Other runtimes stay off.
+      # Pre-cache uses the default `single` strategy (each exact identity via
+      # the proven compact path, BRIEFs first). MAX_JOBS=1 is the cautious
+      # first-day rollout: confirm a quality-usable archive identity and a
+      # real warm-cache hit before raising it toward 24.
       - MARKET_PRECACHE_ENABLED=1
+      - MARKET_PRECACHE_STRATEGY=single
+      - MARKET_PRECACHE_MAX_JOBS=1
       - MARKET_PRECACHE_QUALITY_GATE=1
       - MARKET_PRECACHE_BUDGET=500000
       - MARKET_PRECACHE_RUN_LIMIT=100000
