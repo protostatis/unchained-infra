@@ -189,7 +189,12 @@ services:
       - MARKET_RESEARCH_PROMPT=compact
       # Enable singleton scout polling; the pinned app only records trigger
       # admission outcomes and has no dispatch path. Other runtimes stay off.
-      - MARKET_PRECACHE_ENABLED=1
+      # Pre-cache is disabled (stopgap) until the terminal binary that ships
+      # the single-strategy warm path (MARKET_PRECACHE_STRATEGY) is pinned;
+      # the paired strategy previously burned the daily budget with no usable
+      # warm cache. Flip ENABLED back to 1 only after that SHA bump.
+      - MARKET_PRECACHE_ENABLED=0
+      - MARKET_PRECACHE_STRATEGY=single
       - MARKET_PRECACHE_QUALITY_GATE=1
       - MARKET_PRECACHE_BUDGET=500000
       - MARKET_PRECACHE_RUN_LIMIT=100000
