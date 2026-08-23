@@ -222,6 +222,17 @@ print(
 )
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
+_TERMINAL_RESPONSE_PROMPT = (
+    "Terminal response mode: the browser action budget is exhausted or the task "
+    "has been stopped. Do not call tools or emit tool-call markup. Respond with "
+    "plain text only. Summarize the verified work, clearly state anything that "
+    "remains incomplete, and do not claim unverified results."
+)
+_TERMINAL_RESPONSE_RETRY_PROMPT = (
+    "FINAL RETRY — output plain user-facing text only. No tools, XML, DSML, "
+    "JSON tool calls, or internal reasoning markers. Give a concise, truthful "
+    "status of the work completed so far and any remaining limitation."
+)
 AUTO_TAB_RESOLVE_TIMEOUT = 2.0
 _PHYSICAL_TARGET_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 _PROVISIONED_PHYSICAL_TARGET_RE = re.compile(r"^prov-[^-]+-[0-9A-Fa-f]{32}$")
@@ -1654,6 +1665,7 @@ class TrialAgent:
         model: str,
         draft_text: str,
         session_id: str = "",
+        strict: bool = False,
     ) -> str:
         """Ensure assistant output is plain user-facing text (no raw tool payloads)."""
         text = (draft_text or "").strip()
@@ -1669,6 +1681,11 @@ class TrialAgent:
         cleaned = _strip_internal_tool_payload(text)
         if cleaned and not _looks_like_internal_tool_payload(cleaned):
             return cleaned
+        if strict:
+            if session_id:
+                print(f"[{session_id}] Output sanitization rejected internal payload")
+            return ""
+
         if session_id:
             print(f"[{session_id}] Output sanitization fell back to safe placeholder")
 
@@ -2287,41 +2304,86 @@ class TrialAgent:
 
         try:
             async with httpx.AsyncClient() as client:
+                def _terminal_request_messages(prompt: str) -> list[dict]:
+                    """Add terminal guidance without changing persisted history.
+
+                    DeepSeek requires tool responses to remain adjacent to the
+                    assistant tool-call message.  Put the guidance in the first
+                    system message instead of appending it after a tool result.
+                    """
+                    request_messages = list(messages)
+                    if request_messages and request_messages[0].get("role") == "system":
+                        request_messages[0] = {
+                            **request_messages[0],
+                            "content": (
+                                f"{request_messages[0].get('content', '')}\n\n{prompt}"
+                            ),
+                        }
+                    else:
+                        request_messages.insert(0, {"role": "system", "content": prompt})
+                    return request_messages
+
                 async def _force_final_response(reason_log: str, fallback: str):
                     print(f"[{session_id}] {reason_log}")
-                    try:
-                        final_resp = await asyncio.wait_for(
-                            self._call_openrouter(
+                    text = ""
+                    for attempt, prompt in enumerate(
+                        (_TERMINAL_RESPONSE_PROMPT, _TERMINAL_RESPONSE_RETRY_PROMPT),
+                        start=1,
+                    ):
+                        try:
+                            final_resp = await asyncio.wait_for(
+                                self._call_openrouter(
+                                    client,
+                                    _terminal_request_messages(prompt),
+                                    model,
+                                    tool_choice="none",
+                                    session_id=session_id,
+                                    user_id=user_id,
+                                    checkpoint_identities=checkpoint_identities,
+                                ),
+                                timeout=FORCE_FINAL_TIMEOUT,
+                            )
+                            final_msg = final_resp["choices"][0]["message"]
+                            finish_reason = final_resp["choices"][0].get("finish_reason", "")
+                            if (
+                                not isinstance(final_msg, dict)
+                                or final_msg.get("tool_calls")
+                                or finish_reason in {"tool_calls", "length"}
+                                or not isinstance(final_msg.get("content"), str)
+                            ):
+                                print(
+                                    f"[{session_id}] Forced-final attempt {attempt} returned "
+                                    "non-terminal content"
+                                )
+                                continue
+                            text = await self._sanitize_user_output(
                                 client,
-                                messages,
                                 model,
-                                tool_choice="none",
+                                final_msg["content"],
                                 session_id=session_id,
-                                user_id=user_id,
-                                checkpoint_identities=checkpoint_identities,
-                            ),
-                            timeout=FORCE_FINAL_TIMEOUT,
-                        )
-                        final_msg = final_resp["choices"][0]["message"]
-                        messages.append(final_msg)
-                        text = final_msg.get("content") or ""
-                        text = await self._sanitize_user_output(
-                            client,
-                            model,
-                            text,
-                            session_id=session_id,
-                        )
-                    except asyncio.TimeoutError:
-                        print(
-                            f"[{session_id}] Forced-final model timeout after "
-                            f"{FORCE_FINAL_TIMEOUT}s"
-                        )
-                        text = ""
-                    except Exception as e:
-                        print(f"[{session_id}] Forced-final model error: {e}")
-                        text = ""
+                                strict=True,
+                            )
+                            if text:
+                                break
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} "
+                                "contained only internal formatting"
+                            )
+                        except asyncio.TimeoutError:
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} timed out "
+                                f"after {FORCE_FINAL_TIMEOUT}s"
+                            )
+                        except Exception as e:
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} error: {e}"
+                            )
                     if not text:
                         text = fallback
+                    # Never persist a provider response containing tool calls or
+                    # internal markup.  The canonical fallback also makes the
+                    # next user turn see a truthful terminal assistant message.
+                    messages.append({"role": "assistant", "content": text})
                     self._append_transcript(session_id, "assistant", text)
                     self._save_session(session_id, messages, raise_on_error=True)
                     await self._send(session_id, {"type": "text", "data": text})
