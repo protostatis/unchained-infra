@@ -1342,6 +1342,343 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(tool_results), 3)
         self.assertTrue(all("NAVIGATION_NOT_FOUND" in result["data"] for result in tool_results))
 
+    async def test_forced_final_retries_tool_response_and_persists_canonical_text(self):
+        sid = "s-forced-final-retry"
+        self.agent.sessions[sid] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "loop-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        malformed_final = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "I should call a tool.",
+                    "tool_calls": [{
+                        "id": "illegal-final-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        valid_retry = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "verified summary"},
+                "finish_reason": "stop",
+            }],
+        }
+        loop_state = SimpleNamespace(
+            hard_stop_guard=False,
+            hard_stop_recovery_used=0,
+            check_loop=lambda _signature: (
+                True,
+                "Stop retrying the same action.",
+                SimpleNamespace(should_intervene=False),
+            ),
+        )
+        call_model = AsyncMock(side_effect=[tool_response, malformed_final, valid_retry])
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=loop_state),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_sanitize_user_output", wraps=self.agent._sanitize_user_output),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session") as save_session,
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "user_id": "u-forced-final-retry",
+                "message": "inspect the page",
+            })
+
+        self.assertEqual(call_model.await_count, 3)
+        self.assertEqual(
+            [call.kwargs["tool_choice"] for call in call_model.await_args_list],
+            ["auto", "none", "none"],
+        )
+        self.assertIn("Terminal response mode", call_model.await_args_list[1].args[1][0]["content"])
+        self.assertIn("FINAL RETRY", call_model.await_args_list[2].args[1][0]["content"])
+        saved_messages = save_session.call_args.args[1]
+        self.assertEqual(saved_messages[-1], {"role": "assistant", "content": "verified summary"})
+        self.assertNotIn("illegal-final-call", json.dumps(saved_messages))
+
+    async def test_forced_final_falls_back_without_persisting_dsml(self):
+        sid = "s-forced-final-dsml-fallback"
+        self.agent.sessions[sid] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "loop-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        dsml = (
+            "<｜｜DSML｜｜tool_calls>"
+            "<｜｜DSML｜｜invoke name=\"js_eval\">"
+            "<｜｜DSML｜｜parameter name=\"expression\" string=\"true\">"
+            "document.title"
+            "</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+            "</｜｜DSML｜｜tool_calls>"
+        )
+        malformed_final = {
+            "choices": [{
+                "message": {"role": "assistant", "content": dsml},
+                "finish_reason": "stop",
+            }],
+        }
+        loop_state = SimpleNamespace(
+            hard_stop_guard=False,
+            hard_stop_recovery_used=0,
+            check_loop=lambda _signature: (
+                True,
+                "Stop retrying the same action.",
+                SimpleNamespace(should_intervene=False),
+            ),
+        )
+        call_model = AsyncMock(side_effect=[tool_response, malformed_final, malformed_final])
+        send = AsyncMock()
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=loop_state),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_send", new=send),
+            patch.object(self.agent, "_save_session") as save_session,
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "user_id": "u-forced-final-dsml",
+                "message": "inspect the page",
+            })
+
+        fallback = "I got stuck in a loop and couldn't complete the task. Please try rephrasing your request."
+        saved_messages = save_session.call_args.args[1]
+        self.assertEqual(saved_messages[-1], {"role": "assistant", "content": fallback})
+        self.assertNotIn("DSML", json.dumps(saved_messages))
+        sent_text = [
+            call.args[1]["data"]
+            for call in send.await_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "text"
+        ]
+        self.assertEqual(sent_text, [fallback])
+
+    async def test_hard_stop_terminalizes_before_another_model_tool_call(self):
+        sid = "s-hard-stop-terminal"
+        self.agent.sessions[sid] = []
+        self.agent._session_billing_runs[sid] = "run-hard-stop"
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "action-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "stopped safely"},
+                "finish_reason": "stop",
+            }],
+        }
+
+        class HardStopState:
+            hard_stop_guard = False
+            hard_stop_recovery_used = 0
+            intervention_events = 0
+            live_tool_log = []
+
+            def check_loop(self, _signature):
+                return False, "", None
+
+            def update_stagnation(self, *_args, **_kwargs):
+                pass
+
+            def run_intervention(self, _turn):
+                if not self.hard_stop_guard:
+                    return True, SimpleNamespace(
+                        feedback_prompt="Stop taking browser actions.",
+                        severity="hard_stop",
+                        reason_codes=["test"],
+                    )
+                return False, None
+
+            def check_stall_threshold(self):
+                return "none", ""
+
+            def should_extend_turns(self):
+                return False
+
+        call_model = AsyncMock(side_effect=[tool_response, final_response])
+        execute_tool = AsyncMock(return_value="layout")
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=HardStopState()),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "user_id": "u-hard-stop",
+                "message": "inspect the page",
+            })
+
+        self.assertEqual(execute_tool.await_count, 1)
+        self.assertEqual(call_model.await_count, 2)
+        self.assertEqual(
+            [call.kwargs["tool_choice"] for call in call_model.await_args_list],
+            ["auto", "none"],
+        )
+        self.assertEqual(
+            call_model.await_args_list[-1].kwargs["provider_timeout"],
+            35,
+        )
+
+    async def test_billed_forced_final_does_not_retry_after_successful_malformed_response(self):
+        sid = "s-billed-forced-final"
+        self.agent.sessions[sid] = []
+        self.agent._session_billing_runs[sid] = "run-billed-final"
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "loop-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        malformed_final = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "<tool_call>{\"name\":\"ddm\"}</tool_call>",
+                },
+                "finish_reason": "stop",
+            }],
+        }
+        loop_state = SimpleNamespace(
+            hard_stop_guard=False,
+            hard_stop_recovery_used=0,
+            check_loop=lambda _signature: (
+                True,
+                "Stop retrying the same action.",
+                SimpleNamespace(should_intervene=False),
+            ),
+        )
+        call_model = AsyncMock(side_effect=[tool_response, malformed_final])
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=loop_state),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "user_id": "u-billed-final",
+                "message": "inspect the page",
+            })
+
+        self.assertEqual(call_model.await_count, 2)
+
+    async def test_forced_final_save_failure_rolls_back_history_and_transcript(self):
+        sid = "s-forced-final-save-failure"
+        self.agent.sessions[sid] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "loop-call",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "ghost answer"},
+                "finish_reason": "stop",
+            }],
+        }
+        loop_state = SimpleNamespace(
+            hard_stop_guard=False,
+            hard_stop_recovery_used=0,
+            check_loop=lambda _signature: (
+                True,
+                "Stop retrying the same action.",
+                SimpleNamespace(should_intervene=False),
+            ),
+        )
+        call_model = AsyncMock(side_effect=[tool_response, final_response])
+        saved_snapshots = []
+        strict_saves = 0
+
+        def save_session(_session_id, messages, **kwargs):
+            nonlocal strict_saves
+            saved_snapshots.append((list(messages), dict(kwargs)))
+            if kwargs.get("raise_on_error"):
+                strict_saves += 1
+                if strict_saves == 2:
+                    raise OSError("disk full")
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=loop_state),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session", side_effect=save_session),
+            patch("traceback.print_exc"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "user_id": "u-forced-save-failure",
+                "message": "inspect the page",
+            })
+
+        self.assertGreaterEqual(len(saved_snapshots), 3)
+        self.assertEqual(saved_snapshots[1][0][-1]["content"], "ghost answer")
+        self.assertNotEqual(saved_snapshots[-1][0][-1].get("content"), "ghost answer")
+        self.assertNotIn("ghost answer", json.dumps(self.agent.transcripts[sid]))
+
     def test_prepare_hosted_context_bounds_messages_and_chars_in_place(self):
         messages = [{"role": "system", "content": "system" * 100}]
         for index in range(20):
@@ -2689,6 +3026,86 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
             body["input_cache_miss_rate_micro_usd_per_million"], 140_000
         )
         self.assertEqual(body["output_rate_micro_usd_per_million"], 280_000)
+
+    async def test_cancelled_billed_call_releases_pre_submit_reservation(self):
+        sid = "s-cancel-before-submit"
+        self.agent._session_billing_runs[sid] = "run-cancel-before-submit"
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+        reserve = AsyncMock(return_value={"call_id": "call-cancel"})
+        mark_submitted = AsyncMock(side_effect=asyncio.CancelledError())
+        release = AsyncMock(return_value={"status": "released"})
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(self.agent, "_credit_reserve", new=reserve),
+            patch.object(self.agent, "_credit_mark_submitted", new=mark_submitted),
+            patch.object(self.agent, "_credit_release", new=release),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.agent._call_openrouter(
+                    SimpleNamespace(),
+                    [{"role": "user", "content": "hello"}],
+                    model="deepseek-v4-flash",
+                    session_id=sid,
+                )
+
+        release.assert_awaited_once_with(credit_client, "call-cancel")
+        credit_client.aclose.assert_awaited_once()
+
+    async def test_cancelled_credit_reserve_closes_client(self):
+        sid = "s-cancel-during-reserve"
+        self.agent._session_billing_runs[sid] = "run-cancel-during-reserve"
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+        reserve = AsyncMock(side_effect=asyncio.CancelledError())
+        release = AsyncMock()
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(self.agent, "_credit_reserve", new=reserve),
+            patch.object(self.agent, "_credit_release", new=release),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.agent._call_openrouter(
+                    SimpleNamespace(),
+                    [{"role": "user", "content": "hello"}],
+                    model="deepseek-v4-flash",
+                    session_id=sid,
+                )
+
+        release.assert_not_awaited()
+        credit_client.aclose.assert_awaited_once()
+
+    async def test_provider_timeout_does_not_release_submitted_billed_call(self):
+        sid = "s-provider-timeout"
+        self.agent._session_billing_runs[sid] = "run-provider-timeout"
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+        reserve = AsyncMock(return_value={"call_id": "call-timeout"})
+        mark_submitted = AsyncMock(
+            return_value={"status": "submitted", "submitted_at": 1_786_896_000.0}
+        )
+        release = AsyncMock(return_value={"status": "released"})
+
+        async def provider_never_returns(*_args, **_kwargs):
+            await asyncio.sleep(1)
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(self.agent, "_credit_reserve", new=reserve),
+            patch.object(self.agent, "_credit_mark_submitted", new=mark_submitted),
+            patch.object(self.agent, "_credit_release", new=release),
+            patch.object(self.agent, "_do_openrouter_call", new=provider_never_returns),
+        ):
+            with self.assertRaises(asyncio.TimeoutError):
+                await self.agent._call_openrouter(
+                    SimpleNamespace(),
+                    [{"role": "user", "content": "hello"}],
+                    model="deepseek-v4-flash",
+                    session_id=sid,
+                    provider_timeout=0.01,
+                )
+
+        release.assert_not_awaited()
+        credit_client.aclose.assert_awaited_once()
 
     async def test_deepseek_settle_prices_by_submission_timestamp(self):
         """A successful DeepSeek call is priced by the callback-returned

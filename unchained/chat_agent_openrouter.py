@@ -222,6 +222,21 @@ print(
 )
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
+_TERMINAL_RESPONSE_PROMPT = (
+    "Terminal response mode: the browser action budget is exhausted or the task "
+    "has been stopped. Do not call tools or emit tool-call markup. Respond with "
+    "plain text only. Summarize the verified work, clearly state anything that "
+    "remains incomplete, and do not claim unverified results."
+)
+_TERMINAL_RESPONSE_RETRY_PROMPT = (
+    "FINAL RETRY — output plain user-facing text only. No tools, XML, DSML, "
+    "JSON tool calls, or internal reasoning markers. Give a concise, truthful "
+    "status of the work completed so far and any remaining limitation."
+)
+_TERMINAL_FALLBACK = (
+    "The run stopped before I could produce a reliable final summary. "
+    "Some of the requested work may be incomplete."
+)
 AUTO_TAB_RESOLVE_TIMEOUT = 2.0
 _PHYSICAL_TARGET_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 _PROVISIONED_PHYSICAL_TARGET_RE = re.compile(r"^prov-[^-]+-[0-9A-Fa-f]{32}$")
@@ -1654,6 +1669,7 @@ class TrialAgent:
         model: str,
         draft_text: str,
         session_id: str = "",
+        strict: bool = False,
     ) -> str:
         """Ensure assistant output is plain user-facing text (no raw tool payloads)."""
         text = (draft_text or "").strip()
@@ -1669,6 +1685,11 @@ class TrialAgent:
         cleaned = _strip_internal_tool_payload(text)
         if cleaned and not _looks_like_internal_tool_payload(cleaned):
             return cleaned
+        if strict:
+            if session_id:
+                print(f"[{session_id}] Output sanitization rejected internal payload")
+            return ""
+
         if session_id:
             print(f"[{session_id}] Output sanitization fell back to safe placeholder")
 
@@ -2287,49 +2308,124 @@ class TrialAgent:
 
         try:
             async with httpx.AsyncClient() as client:
+                def _terminal_request_messages(prompt: str) -> list[dict]:
+                    """Add terminal guidance without changing persisted history.
+
+                    DeepSeek requires tool responses to remain adjacent to the
+                    assistant tool-call message.  Put the guidance in the first
+                    system message instead of appending it after a tool result.
+                    """
+                    request_messages = list(messages)
+                    if request_messages and request_messages[0].get("role") == "system":
+                        request_messages[0] = {
+                            **request_messages[0],
+                            "content": (
+                                f"{request_messages[0].get('content', '')}\n\n{prompt}"
+                            ),
+                        }
+                    else:
+                        request_messages.insert(0, {"role": "system", "content": prompt})
+                    return request_messages
+
                 async def _force_final_response(reason_log: str, fallback: str):
                     print(f"[{session_id}] {reason_log}")
-                    try:
-                        final_resp = await asyncio.wait_for(
-                            self._call_openrouter(
+                    text = ""
+                    terminal_prompts = (
+                        (_TERMINAL_RESPONSE_PROMPT, _TERMINAL_RESPONSE_RETRY_PROMPT)
+                        if not self._session_billing_runs.get(session_id)
+                        else (_TERMINAL_RESPONSE_PROMPT,)
+                    )
+                    if len(terminal_prompts) == 1:
+                        print(
+                            f"[{session_id}] Hosted billing run: disabling terminal "
+                            "retry to avoid a second billed provider request"
+                        )
+                    for attempt, prompt in enumerate(
+                        terminal_prompts,
+                        start=1,
+                    ):
+                        try:
+                            final_resp = await self._call_openrouter(
                                 client,
-                                messages,
+                                _terminal_request_messages(prompt),
                                 model,
                                 tool_choice="none",
                                 session_id=session_id,
                                 user_id=user_id,
                                 checkpoint_identities=checkpoint_identities,
-                            ),
-                            timeout=FORCE_FINAL_TIMEOUT,
-                        )
-                        final_msg = final_resp["choices"][0]["message"]
-                        messages.append(final_msg)
-                        text = final_msg.get("content") or ""
-                        text = await self._sanitize_user_output(
-                            client,
-                            model,
-                            text,
-                            session_id=session_id,
-                        )
-                    except asyncio.TimeoutError:
-                        print(
-                            f"[{session_id}] Forced-final model timeout after "
-                            f"{FORCE_FINAL_TIMEOUT}s"
-                        )
-                        text = ""
-                    except Exception as e:
-                        print(f"[{session_id}] Forced-final model error: {e}")
-                        text = ""
+                                provider_timeout=FORCE_FINAL_TIMEOUT,
+                            )
+                            final_msg = final_resp["choices"][0]["message"]
+                            finish_reason = final_resp["choices"][0].get("finish_reason", "")
+                            if (
+                                not isinstance(final_msg, dict)
+                                or final_msg.get("tool_calls")
+                                or finish_reason in {"tool_calls", "length"}
+                                or not isinstance(final_msg.get("content"), str)
+                            ):
+                                print(
+                                    f"[{session_id}] Forced-final attempt {attempt} returned "
+                                    "non-terminal content"
+                                )
+                                continue
+                            text = await self._sanitize_user_output(
+                                client,
+                                model,
+                                final_msg["content"],
+                                session_id=session_id,
+                                strict=True,
+                            )
+                            if text:
+                                break
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} "
+                                "contained only internal formatting"
+                            )
+                        except asyncio.TimeoutError:
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} timed out "
+                                f"after {FORCE_FINAL_TIMEOUT}s"
+                            )
+                        except Exception as e:
+                            print(
+                                f"[{session_id}] Forced-final attempt {attempt} error: {e}"
+                            )
                     if not text:
                         text = fallback
-                    self._append_transcript(session_id, "assistant", text)
-                    self._save_session(session_id, messages, raise_on_error=True)
+                    # Never persist a provider response containing tool calls or
+                    # internal markup.  The canonical fallback also makes the
+                    # next user turn see a truthful terminal assistant message.
+                    previous_message_count = len(messages)
+                    previous_transcript = self.transcripts.get(session_id)
+                    previous_transcript = (
+                        list(previous_transcript)
+                        if previous_transcript is not None
+                        else None
+                    )
+                    try:
+                        messages.append({"role": "assistant", "content": text})
+                        self._append_transcript(session_id, "assistant", text)
+                        self._save_session(session_id, messages, raise_on_error=True)
+                    except Exception:
+                        del messages[previous_message_count:]
+                        if previous_transcript is None:
+                            self.transcripts.pop(session_id, None)
+                        else:
+                            self.transcripts[session_id] = previous_transcript
+                        raise
                     await self._send(session_id, {"type": "text", "data": text})
                     await self._send(session_id, {"type": "done"})
 
                 turn_cap = MAX_TURNS  # start at 50
 
                 for turn in range(MAX_ABSOLUTE_TURNS):
+                    if ns.hard_stop_guard:
+                        await _force_final_response(
+                            "Hard-stop guard active — forcing final response",
+                            _TERMINAL_FALLBACK,
+                        )
+                        return
+
                     # --- Dynamic extension check ---
                     if turn >= turn_cap:
                         if ns.should_extend_turns():
@@ -2341,7 +2437,7 @@ class TrialAgent:
                             print(f"[{session_id}] Extension denied at turn {turn} — forcing final")
                             await _force_final_response(
                                 f"Dynamic cap: extension denied at turn {turn}",
-                                "I've completed my research. Here's what I found so far.",
+                                _TERMINAL_FALLBACK,
                             )
                             return
 
@@ -2353,11 +2449,7 @@ class TrialAgent:
                                   f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
 
                     try:
-                        next_tool_choice = "none" if (ns.hard_stop_guard and ns.hard_stop_recovery_used >= 1) else "auto"
-                        if next_tool_choice == "none":
-                            print(
-                                f"[{session_id}] Hard-stop guard: forcing final response after one recovery turn"
-                            )
+                        next_tool_choice = "auto"
                         # Skip reasoning on first turn for instant action
                         # (user sees the agent react immediately).
                         first_turn_fast = turn == 0
@@ -2899,14 +2991,11 @@ class TrialAgent:
                         )
                         return
 
-                    if ns.hard_stop_guard and tool_calls:
-                        ns.hard_stop_recovery_used += 1
-
             # Absolute ceiling reached
             print(f"[{session_id}] Reached absolute max turns ({MAX_ABSOLUTE_TURNS})")
             await _force_final_response(
                 f"Absolute max turns ({MAX_ABSOLUTE_TURNS}) reached",
-                "I've reached the maximum number of research turns. Here's what I found.",
+                _TERMINAL_FALLBACK,
             )
 
         except asyncio.CancelledError:
@@ -2936,6 +3025,7 @@ class TrialAgent:
         user_id: str = "",
         reasoning: bool = True,
         checkpoint_identities: dict[str, BrowserCheckpointIdentity] | None = None,
+        provider_timeout: float | None = None,
     ) -> dict:
         effective_model = model or self.model
         provider = "deepseek" if _is_deepseek_model(effective_model) else "openrouter"
@@ -2989,6 +3079,24 @@ class TrialAgent:
         reserved_call_id: str | None = None
         credit_reservation: dict | None = None
         provider_submitted = False
+
+        async def _release_unsubmitted_reservation() -> None:
+            if not reserved_call_id or not credit_client or provider_submitted:
+                return
+            try:
+                # Shield cleanup from the cancellation that interrupted the
+                # provider turn.  The release must complete before the client
+                # is closed in the outer finally block.
+                await asyncio.shield(
+                    self._credit_release(credit_client, reserved_call_id)
+                )
+            except BaseException as release_error:
+                if session_id:
+                    print(
+                        f"[{session_id}] Failed to release pre-submit credit hold: "
+                        f"{type(release_error).__name__}"
+                    )
+
         if billing_run_id:
             if not token:
                 raise RuntimeError(
@@ -3017,31 +3125,40 @@ class TrialAgent:
             idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"
             # Retry transient reserve failures up to two times. A 402 also
             # remains fail-closed; the provider request is never sent.
-            for reserve_attempt in range(3):
-                credit_reservation = await self._credit_reserve(
-                    credit_client, billing_run_id,
-                    effective_model, idem_key,
-                )
-                if credit_reservation:
-                    reserved_call_id = credit_reservation.get("call_id", "")
-                    if reserved_call_id:
-                        break
-                if reserve_attempt < 2:
-                    print(f"[{session_id}] Credit reserve failed, "
-                          f"retry {reserve_attempt + 1}/2")
-                    await asyncio.sleep(1.0)
+            try:
+                for reserve_attempt in range(3):
+                    credit_reservation = await self._credit_reserve(
+                        credit_client, billing_run_id,
+                        effective_model, idem_key,
+                    )
+                    if credit_reservation:
+                        reserved_call_id = credit_reservation.get("call_id", "")
+                        if reserved_call_id:
+                            break
+                    if reserve_attempt < 2:
+                        print(f"[{session_id}] Credit reserve failed, "
+                              f"retry {reserve_attempt + 1}/2")
+                        await asyncio.sleep(1.0)
 
-            if not credit_reservation or not reserved_call_id:
-                # Fail closed: authenticated billing run exists but
-                # reserve failed/is insufficient — do NOT proceed.
-                if credit_client:
-                    try:
-                        await credit_client.aclose()
-                    except Exception:
-                        pass
-                raise RuntimeError(
-                    "Hosted credit authorization failed. Add credit or try a free model."
-                )
+                if not credit_reservation or not reserved_call_id:
+                    # Fail closed: authenticated billing run exists but
+                    # reserve failed/is insufficient — do NOT proceed.
+                    raise RuntimeError(
+                        "Hosted credit authorization failed. Add credit or try a free model."
+                    )
+            except asyncio.CancelledError:
+                await _release_unsubmitted_reservation()
+                try:
+                    await credit_client.aclose()
+                except Exception:
+                    pass
+                raise
+            except Exception:
+                try:
+                    await credit_client.aclose()
+                except Exception:
+                    pass
+                raise
 
         # Safe default pricing basis for unbilled/local calls (no submission
         # callback). Billed calls overwrite this immediately after the
@@ -3088,13 +3205,20 @@ class TrialAgent:
                     provider_submission_ts = time.time()
 
             try:
-                data = await self._do_openrouter_call(
+                provider_request = self._do_openrouter_call(
                     client,
                     body,
                     effective_model,
                     session_id,
                     allow_unmetered_retries=not bool(billing_run_id),
                 )
+                if provider_timeout is not None:
+                    data = await asyncio.wait_for(
+                        provider_request,
+                        timeout=provider_timeout,
+                    )
+                else:
+                    data = await provider_request
             except httpx.HTTPStatusError as exc:
                 status_code = int(getattr(exc.response, "status_code", 0) or 0)
                 if (
@@ -3202,15 +3326,14 @@ class TrialAgent:
                     # Leave the hold intact. The control plane captures any
                     # unresolved completed-call hold conservatively at turn end.
                     print(f"[{session_id}] Credit settlement unavailable; hold retained")
+        except asyncio.CancelledError:
+            await _release_unsubmitted_reservation()
+            raise
         except Exception:
             # A submitted request is never released: OpenRouter may have
             # accepted/billed it before a timeout or cancellation. Only a
             # definitely pre-submit reservation may be returned.
-            if reserved_call_id and credit_client and not provider_submitted:
-                try:
-                    await self._credit_release(credit_client, reserved_call_id)
-                except Exception:
-                    pass
+            await _release_unsubmitted_reservation()
             raise
         finally:
             if credit_client:
