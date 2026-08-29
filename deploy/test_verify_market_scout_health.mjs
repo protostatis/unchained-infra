@@ -53,13 +53,14 @@ function makeTriggerDryRun(overrides = {}) {
   };
 }
 
-function makeV2Journal(sources = [], overrides = {}) {
+function makeV3Journal(sources = [], overrides = {}) {
   return {
-    version: 2,
+    version: 3,
     updatedAt: Date.now(),
     decisions: [],
     sources,
     triggerDryRun: makeTriggerDryRun(),
+    triggerDispatches: [],
     ...overrides,
   };
 }
@@ -71,19 +72,20 @@ function emptyTriggerDryRun() { return JSON.parse(JSON.stringify(EMPTY_TRIGGER_D
 export async function readMarketEventScoutState(p) {
   let raw;
   try { raw = fs.readFileSync(p, "utf-8"); } catch(e) {
-    if (e.code === "ENOENT") return { version:2, updatedAt:Date.now(), sources:[], decisions:[], triggerDryRun:emptyTriggerDryRun() };
+    if (e.code === "ENOENT") return { version:3, updatedAt:Date.now(), sources:[], decisions:[], triggerDryRun:emptyTriggerDryRun(), triggerDispatches:[] };
     throw e;
   }
   const data = JSON.parse(raw);
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("bad root");
-  if (data.version !== 1 && data.version !== 2) throw new Error("bad version");
+  if (data.version !== 1 && data.version !== 2 && data.version !== 3) throw new Error("bad version");
   if (!Array.isArray(data.sources)) throw new Error("sources not array");
   for (const s of data.sources) {
     if (!s || typeof s.sourceId !== "string") throw new Error("missing sourceId");
     if (s.lastAttemptAt !== undefined && typeof s.lastAttemptAt !== "number") throw new Error("lastAttemptAt not numeric");
   }
-  if (data.version === 1) return { ...data, version:2, triggerDryRun:emptyTriggerDryRun() };
+  if (data.version === 1 || data.version === 2) return { ...data, version:3, triggerDryRun: data.triggerDryRun || emptyTriggerDryRun(), triggerDispatches:[] };
   if (!data.triggerDryRun || typeof data.triggerDryRun !== "object") throw new Error("missing triggerDryRun");
+  if (!Array.isArray(data.triggerDispatches)) throw new Error("missing triggerDispatches");
   return data;
 }
 `;
@@ -257,6 +259,28 @@ test("invariant: forward-disable passes", async () => {
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
+test("invariant: enabled dispatch requires the pinned model and exact caps", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const save = setEnv({
+    ...baseEnv(appPath),
+    MARKET_SCOUT_DISPATCH_ENABLED: "1",
+    MARKET_SCOUT_MODEL_ID: "nvidia/nemotron-3.5-lightning:free",
+    MARKET_SCOUT_DISPATCH_PER_RUN: "1",
+    MARKET_SCOUT_DISPATCH_DAILY_CAP: "4",
+  });
+  delete process.env.TERMINAL_RUNTIME_MODE;
+  try {
+    const mod = await importHelper();
+    const accepted = await mod.validateInvariants();
+    assert.equal(accepted.ok, true, JSON.stringify(accepted.errors));
+
+    process.env.MARKET_SCOUT_DISPATCH_DAILY_CAP = "7";
+    const rejected = await mod.validateInvariants();
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes("MARKET_SCOUT_DISPATCH_DAILY_CAP invariant failed"), JSON.stringify(rejected.errors));
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
 test("invariant: MARKET_RESEARCH_WORKER rejected as singleton marker", async () => {
   const { tmpDir, appPath } = await createMockApp();
   const save = setEnv({ ...baseEnv(appPath), MARKET_RESEARCH_WORKER: "1" });
@@ -314,7 +338,7 @@ test("journal: ENOENT → reader returns empty state → ok", async () => {
     const r = await mod.checkJournalSanity();
     assert.equal(r.ok, true);
     assert.equal(r.journalExists, false);
-    assert.equal(r.journalVersion, 2);
+    assert.equal(r.journalVersion, 3);
     assert.equal(r.triggerPolicyVerified, true);
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
@@ -329,15 +353,15 @@ test("journal: valid persisted v1 is migration-compatible in preflight", async (
     const r = await mod.checkJournalSanity();
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     assert.equal(r.journalExists, true);
-    assert.equal(r.journalVersion, 2, "candidate reader must migrate v1 in memory");
+    assert.equal(r.journalVersion, 3, "candidate reader must migrate v1 in memory");
     assert.equal(r.triggerPolicyVerified, true);
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
-test("journal: v2 trigger policy drift is rejected", async () => {
+test("journal: v3 trigger policy drift is rejected", async () => {
   const { tmpDir, appPath } = await createMockApp();
   const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
-  const state = makeV2Journal([], {
+  const state = makeV3Journal([], {
     triggerDryRun: makeTriggerDryRun({ policy: { ...EXPECTED_TRIGGER_POLICY, dailyCap: 9 } }),
   });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(state), "utf8");
@@ -349,13 +373,13 @@ test("journal: v2 trigger policy drift is rejected", async () => {
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
-test("journal: v2 trigger aggregate drift is rejected", async () => {
+test("journal: v3 trigger aggregate drift is rejected", async () => {
   const { tmpDir, appPath } = await createMockApp();
   const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
   const totals = emptyAggregate();
   totals.evaluated = 1;
   totals.wouldTrigger = 1;
-  const state = makeV2Journal([], {
+  const state = makeV3Journal([], {
     triggerDryRun: makeTriggerDryRun({ totals }),
   });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(state), "utf8");
@@ -386,7 +410,9 @@ export async function readMarketEventScoutState(p) {
     suppressed: 0,
   })))}, triggerDryRun:${JSON.stringify(makeTriggerDryRun())} };
   fs.writeFileSync(p, JSON.stringify(state));
-  return state;
+  // Model the app reader's in-memory v2 → v3 migration. The raw write is
+  // intentionally v2 so this test still exercises the ENOENT creation race.
+  return { ...state, version:3, triggerDispatches:[] };
 }`;
   const { tmpDir, appPath } = await createMockApp({ readerCode });
   const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
@@ -504,7 +530,7 @@ test("commission: stale lastSuccessAt → 0 successes", async () => {
   const sources = makeSources(
     PINNED_SOURCES.map(() => ({ lastSuccessAt: stale, baselineComplete: true })),
   );
-  const j = makeV2Journal(sources, { updatedAt: now });
+  const j = makeV3Journal(sources, { updatedAt: now });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(j), "utf-8");
   try {
     const mod = await importHelper();
@@ -527,7 +553,7 @@ test("commission: wrong count (5≠7) → allAttempted false", async () => {
     MARKET_SCOUT_COMMISSION_POLL_MS: "200",
   });
   const src5 = makeSources().slice(0, 5);
-  const j = makeV2Journal(src5, { updatedAt: now });
+  const j = makeV3Journal(src5, { updatedAt: now });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(j), "utf-8");
   try {
     const mod = await importHelper();
@@ -539,7 +565,7 @@ test("commission: wrong count (5≠7) → allAttempted false", async () => {
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
-test("commission: persisted v1 stays pending until a scheduler write commits v2", async () => {
+test("commission: persisted v1 stays pending until a scheduler write commits v3", async () => {
   const { tmpDir, appPath } = await createMockApp();
   const now = Date.now();
   const save = setEnv({
@@ -563,18 +589,18 @@ test("commission: persisted v1 stays pending until a scheduler write commits v2"
     version: 1, updatedAt: now, decisions: [], sources: initialSources,
   }), "utf8");
   setTimeout(async () => {
-    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(initialSources, { updatedAt: now + 1000 })), "utf8");
+    await fs.writeFile(jpath, JSON.stringify(makeV3Journal(initialSources, { updatedAt: now + 1000 })), "utf8");
   }, 150);
   setTimeout(async () => {
     const advanced = makeSources(overrides).map(source => source.sourceId === "nasdaq-trade-halts"
       ? { ...source, lastAttemptAt: now + 2000 } : source);
-    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(advanced, { updatedAt: now + 2000 })), "utf8");
+    await fs.writeFile(jpath, JSON.stringify(makeV3Journal(advanced, { updatedAt: now + 2000 })), "utf8");
   }, 350);
   try {
     const mod = await importHelper();
     const r = await mod.commissionPoll();
     assert.equal(r.ok, true, JSON.stringify(r.errors));
-    assert.equal(r.journalVersion, 2);
+    assert.equal(r.journalVersion, 3);
     assert.equal(r.triggerPolicyVerified, true);
     assert.equal(r.schedulerAdvanced, true);
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
@@ -599,7 +625,7 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     { baselineComplete: false },  //
     { baselineComplete: false },  //
   ];
-  const r1 = makeV2Journal(makeSources(overrides), { updatedAt: now });
+  const r1 = makeV3Journal(makeSources(overrides), { updatedAt: now });
   const jpath = path.join(tmpDir, "market-event-scout.json");
   await fs.writeFile(jpath, JSON.stringify(r1), "utf-8");
   // Round 2 after delay
@@ -607,7 +633,7 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     const t2 = Date.now() + 4000;
     const r2s = makeSources(overrides).map(s =>
       s.sourceId === "nasdaq-trade-halts" ? { ...s, lastAttemptAt: t2 } : s);
-    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(r2s, { updatedAt: t2 })), "utf-8");
+    await fs.writeFile(jpath, JSON.stringify(makeV3Journal(r2s, { updatedAt: t2 })), "utf-8");
   }, 1500);
   try {
     const mod = await importHelper();
@@ -618,7 +644,7 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     assert.equal(r.successCount, 4);
     assert.equal(r.hostCount, 3);
     assert.equal(r.schedulerAdvanced, true);
-    assert.equal(r.journalVersion, 2);
+    assert.equal(r.journalVersion, 3);
     assert.equal(r.triggerPolicyVerified, true);
     assert.ok(!JSON.stringify(r).includes("SENTINEL"));
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
