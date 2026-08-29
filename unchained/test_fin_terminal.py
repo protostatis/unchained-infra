@@ -474,7 +474,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "723c0f4d9a434f3e8c3bedb3700a1b133c9ea1f3",
+            "c2bb48a33978b9a2b4e9b71210d41c5e2f93f7a5",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
