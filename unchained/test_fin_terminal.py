@@ -474,7 +474,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "723c0f4d9a434f3e8c3bedb3700a1b133c9ea1f3",
+            "c2bb48a33978b9a2b4e9b71210d41c5e2f93f7a5",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -986,7 +986,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("MARKET_SCOUT_ENABLED=1", self.public_compose)
 
     def test_market_scout_trigger_dry_run_contract_is_pinned(self):
-        self.assertIn("EXPECTED_JOURNAL_VERSION = 2", self.market_scout_helper)
+        self.assertIn("EXPECTED_JOURNAL_VERSION = 3", self.market_scout_helper)
         self.assertIn("minPriority: 80", self.market_scout_helper)
         self.assertIn("ttlMs: 2 * 60 * 60 * 1000", self.market_scout_helper)
         self.assertIn("targetCooldownMs: 6 * 60 * 60 * 1000", self.market_scout_helper)
@@ -994,8 +994,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("evaluateMarketEventTriggerCandidate", self.market_scout_helper)
         self.assertIn("proposeMarketEventTriggerRoute", self.market_scout_helper)
         self.assertIn("valid persisted v1", self.route_doc)
-        self.assertIn("raw schema v2", self.route_doc)
-        self.assertIn("does not dispatch model", self.route_doc)
+        self.assertIn("raw schema v3", self.route_doc)
+        self.assertIn("nvidia/nemotron-3.5-lightning:free", self.route_doc)
+        self.assertIn("Real execution is separate and default-off", self.route_doc)
+        self.assertIn("fails closed without a paid fallback", self.route_doc)
 
     def test_market_scout_supports_forward_disable(self):
         """Commission helper handles disabled state: prints SKIPPED and exits 0."""

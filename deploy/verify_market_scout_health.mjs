@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 //
 // verify_market_scout_health.mjs — production commissioning proof for the
-// no-dispatch market-event trigger dry run on the authenticated singleton.
+// guarded market-event trigger scout on the authenticated singleton.
 //
 // Streamed through `docker exec -i -e ... <container> node --input-type=module -`.
 // Supports MARKET_SCOUT_VERIFY_MODE = preflight | commission. Exports functions
@@ -54,7 +54,10 @@ const PINNED_SOURCE_MAP = Object.freeze({
 });
 const PINNED_SOURCE_IDS = Object.keys(PINNED_SOURCE_MAP);
 const EXPECTED_SOURCE_COUNT = PINNED_SOURCE_IDS.length;
-const EXPECTED_JOURNAL_VERSION = 2;
+const EXPECTED_JOURNAL_VERSION = 3;
+const EXPECTED_SCOUT_DISPATCH_MODEL = "nvidia/nemotron-3.5-lightning:free";
+const EXPECTED_SCOUT_DISPATCH_PER_RUN = "1";
+const EXPECTED_SCOUT_DISPATCH_DAILY_CAP = "4";
 const EXPECTED_TRIGGER_POLICY = Object.freeze({
   version: 1,
   minPriority: 80,
@@ -116,6 +119,7 @@ export function assessTriggerDryRunContract(state) {
   let aggregateVerified = false;
 
   if (state?.version !== EXPECTED_JOURNAL_VERSION) add("journal reader version mismatch");
+  if (!Array.isArray(state?.triggerDispatches)) add("trigger dispatch outbox missing");
   if (!dryRun || typeof dryRun !== "object" || Array.isArray(dryRun)) {
     add("trigger dry-run state missing");
   } else {
@@ -188,6 +192,17 @@ export async function validateInvariants() {
   const se = safeEnv("MARKET_SCOUT_ENABLED");
   if (se !== EXPECTED_SCOUT_ENABLED && se !== "0")
     add(`MARKET_SCOUT_ENABLED invalid`);
+
+  const dispatch = safeEnv("MARKET_SCOUT_DISPATCH_ENABLED") || "0";
+  if (dispatch !== "1" && dispatch !== "0") add(`MARKET_SCOUT_DISPATCH_ENABLED invalid`);
+  if (dispatch === "1" && se !== EXPECTED_SCOUT_ENABLED)
+    add(`MARKET_SCOUT_DISPATCH_ENABLED requires MARKET_SCOUT_ENABLED=1`);
+  if (dispatch === "1" && safeEnv("MARKET_SCOUT_MODEL_ID") !== EXPECTED_SCOUT_DISPATCH_MODEL)
+    add(`MARKET_SCOUT_MODEL_ID invariant failed`);
+  if (dispatch === "1" && safeEnv("MARKET_SCOUT_DISPATCH_PER_RUN") !== EXPECTED_SCOUT_DISPATCH_PER_RUN)
+    add(`MARKET_SCOUT_DISPATCH_PER_RUN invariant failed`);
+  if (dispatch === "1" && safeEnv("MARKET_SCOUT_DISPATCH_DAILY_CAP") !== EXPECTED_SCOUT_DISPATCH_DAILY_CAP)
+    add(`MARKET_SCOUT_DISPATCH_DAILY_CAP invariant failed`);
 
   if (!enabled)
     return { ok: errors.length === 0, errors, scoutEnabled: false };
@@ -370,9 +385,9 @@ async function inspectPersistedJournalEnvelope(jpath) {
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     return { ok: false, missing: false, pendingMigration: false, malformed: true };
-  if (raw.version === 1)
+  if (raw.version === 1 || raw.version === 2)
     return { ok: false, missing: false, pendingMigration: true, malformed: false };
-  if (raw.version !== EXPECTED_JOURNAL_VERSION || !Object.hasOwn(raw, "triggerDryRun"))
+  if (raw.version !== EXPECTED_JOURNAL_VERSION || !Object.hasOwn(raw, "triggerDryRun") || !Object.hasOwn(raw, "triggerDispatches"))
     return { ok: false, missing: false, pendingMigration: false, malformed: true };
   return { ok: true, missing: false, pendingMigration: false, malformed: false,
     journalVersion: EXPECTED_JOURNAL_VERSION };

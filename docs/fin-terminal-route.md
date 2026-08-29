@@ -109,18 +109,19 @@ When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
 `docker-compose.yml`.
 
-## Market-event scout (singleton-only trigger dry run)
+## Market-event scout (singleton-only guarded dispatch)
 
 The authenticated singleton retrieves public financial-event feeds via the
-internal Unbrowser MCP and evaluates a no-dispatch trigger dry run. Validated
+internal Unbrowser MCP and evaluates a bounded trigger dry run. Validated
 targets map to ticker BRIEF, macro EVENTS BRIEF, or SIGNALS/Market Story BRIEF
-proposals. The fixed policy requires P80, a two-hour publication TTL, a six-hour
-target cooldown, and no more than eight `would-trigger` outcomes per UTC day.
-It persists decisions, candidates, gate reasons, and safe aggregates to
-`/data/market-terminal/market-event-scout.json`, but does not dispatch model
-inference, reserve tokens, write precache entries, or mutate canvases. It never
-runs on public gateways, public session workers, workspace runtimes, or the
-local CLI.
+proposals. The fixed evaluation policy requires P80, a two-hour publication TTL,
+a six-hour target cooldown, and no more than eight `would-trigger` outcomes per
+UTC day. Real execution is separate and default-off: when enabled it uses only
+`nvidia/nemotron-3.5-lightning:free`, accepts at most one job per poll and four
+attempts per UTC day, and fails closed without a paid fallback. It persists
+decisions, candidates, gate reasons, aggregates, and the candidate-ID dispatch
+outbox to `/data/market-terminal/market-event-scout.json`. It never runs on
+public gateways, public session workers, workspace runtimes, or the local CLI.
 
 ### Preflight (automated, pre-commit)
 
@@ -135,6 +136,12 @@ preflight validates deterministic invariants:
 - `MARKET_SCOUT_LOCAL_CLI` is `0`.
 - `MARKET_SCOUT_ENABLED` is exactly `1` or `0`. When `0` (forward-disable),
   all enabled-only checks below are skipped and preflight passes cleanly.
+- `MARKET_SCOUT_DISPATCH_ENABLED` is exactly `0` or `1`; `1` requires
+  `MARKET_SCOUT_ENABLED=1` and `MARKET_SCOUT_MODEL_ID` exactly
+  `nvidia/nemotron-3.5-lightning:free`.
+- When dispatch is enabled, `MARKET_SCOUT_DISPATCH_PER_RUN` must be exactly
+  `1` and `MARKET_SCOUT_DISPATCH_DAILY_CAP` must be exactly `4`; these limits
+  are not operator-overridable.
 - When enabled (`1`), additional invariants:
   - `UNBROWSER_MCP_REQUIRED` is `1`, `UNBROWSER_MCP_URL` is exactly
     `http://unbrowser-mcp:8767/mcp`.
@@ -147,9 +154,9 @@ preflight validates deterministic invariants:
     and remove).
   - If a journal already exists, the app's strict reader accepts it and it
     has no unknown source IDs. A valid persisted journal v1 is accepted only
-    through the candidate app's in-memory v2 migration; retained decisions are
+    through the candidate app's in-memory v3 migration; retained decisions are
     not backfilled as candidates.
-  - The strict reader returns the v2 trigger-dry-run envelope, exact policy,
+  - The strict reader returns the v3 trigger-dry-run/outbox envelope, exact policy,
     bounded record arrays, and internally consistent aggregate counters.
 
 A preflight failure prevents the deployment from committing metadata.
@@ -169,9 +176,9 @@ is needed.
 Commissioning polls the journal file read-only (via the app's strict reader)
 for up to 20 minutes and requires:
 
-1. The on-disk journal has been atomically persisted as raw schema v2 with a
-   `triggerDryRun` envelope. A still-persisted v1 journal is pending, not a
-   success, until the scheduler writes v2.
+1. The on-disk journal has been atomically persisted as raw schema v3 with
+   `triggerDryRun` and `triggerDispatches` envelopes. A still-persisted v1 or v2
+   journal is pending, not a success, until the scheduler writes v3.
 2. The strict reader verifies the exact dry-run policy and aggregate contract.
 3. Exactly seven known source IDs present in the journal (exact expected set).
 4. All seven have a fresh `lastAttemptAt` timestamp from the current
@@ -206,12 +213,12 @@ response is a **forward-disable** deployment — setting `MARKET_SCOUT_ENABLED=0
 in `docker-compose.yml` — not a broad rollback. Third-party feed failure
 does not trigger the existing rollback mechanism.
 
-Journal v2 is intentionally fail-closed for application versions that predate
-the trigger dry run. For a planned rollback to a pre-v2 app, forward-disable
-the scout first. If an unrelated pre-commit deployment failure automatically
-restores a pre-v2 image after v2 was already written, the core terminal remains
+Journal v3 is intentionally fail-closed for application versions that predate
+the trigger outbox. For a planned rollback to a pre-v3 app, forward-disable the
+scout first. If an unrelated pre-commit deployment failure automatically
+restores a pre-v3 image after v3 was already written, the core terminal remains
 available but that old scout cannot resume; deploy `MARKET_SCOUT_ENABLED=0` or
-restore a v2-compatible app rather than modifying the journal by hand.
+restore a v3-compatible app rather than modifying the journal by hand.
 
 ### Forward-disable runbook
 

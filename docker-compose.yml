@@ -166,7 +166,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#723c0f4d9a434f3e8c3bedb3700a1b133c9ea1f3"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#c2bb48a33978b9a2b4e9b71210d41c5e2f93f7a5"
       args:
         PUBLIC_BASE_PATH: /fin-terminal/
     expose:
@@ -187,9 +187,9 @@ services:
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_RESEARCH_PROMPT=compact
-      # Enable singleton scout polling; the pinned app only records trigger
-      # admission outcomes and has no dispatch path. Other runtimes stay off.
-      # Pre-cache uses the default `single` strategy (each exact identity via
+      # Enable singleton scout polling. Execution is a separate default-off
+      # kill switch and is restricted to the free NVIDIA scout model. Other
+      # runtimes stay off. Pre-cache uses the default `single` strategy (each exact identity via
       # the proven compact path, BRIEFs first). MAX_JOBS=1 is the cautious
       # first-day rollout: confirm a quality-usable archive identity and a
       # real warm-cache hit before raising it toward 24.
@@ -200,6 +200,10 @@ services:
       - MARKET_PRECACHE_BUDGET=500000
       - MARKET_PRECACHE_RUN_LIMIT=100000
       - MARKET_SCOUT_ENABLED=1
+      - MARKET_SCOUT_DISPATCH_ENABLED=${FIN_TERMINAL_MARKET_SCOUT_DISPATCH_ENABLED:-0}
+      - MARKET_SCOUT_MODEL_ID=${FIN_TERMINAL_MARKET_SCOUT_MODEL_ID:-nvidia/nemotron-3.5-lightning:free}
+      - MARKET_SCOUT_DISPATCH_PER_RUN=1
+      - MARKET_SCOUT_DISPATCH_DAILY_CAP=4
       - MARKET_SCOUT_LOCAL_CLI=0
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
       - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
