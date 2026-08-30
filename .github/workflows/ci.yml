@@ -37,6 +37,7 @@ jobs:
         run: |
           bash -n dev.sh
           bash -n deploy.sh
+          bash -n deploy/activate_browser_terminal_canary.sh
           bash -n deploy/deploy_source_guard.sh
           bash -n deploy/public_terminal_pilot_remote.sh
           docker compose \
