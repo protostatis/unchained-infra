@@ -202,6 +202,11 @@ fi
 # replaced; the preflight receives a process-scoped false override.
 if [[ "$old_enabled" == "true" ]]; then
     FIN_TERMINAL_BROWSER_ENABLED=false "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
+    # Recreate and functionally health-check the MCP sidecar on upgrades too.
+    # The browser backend can remain on the old image while this dependency is
+    # replaced, but a stale sidecar must not survive an application upgrade.
+    docker compose "${compose_args[@]}" up -d --build fin-terminal-browser-mcp
+    wait_for_health fin-terminal-browser-mcp
     docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
         --force-recreate fin-terminal-browser
 else

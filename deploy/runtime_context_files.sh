@@ -38,6 +38,7 @@ UNCHAINED_RUNTIME_FILES=(
     "api.py"
     "mcp_server.py"
     "unbrowser_mcp_router.py"
+    "unbrowser_mcp_healthcheck.py"
     "unbrowser_ssrf_proxy.py"
     "orchestrator.py"
     "cdp.py"
