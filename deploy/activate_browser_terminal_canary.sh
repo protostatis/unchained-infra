@@ -114,6 +114,23 @@ wait_for_health() {
     return 1
 }
 
+wait_for_public_status() {
+    local status
+    for _ in $(seq 1 30); do
+        status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 10 "$public_url" || true)"
+        case "$status" in
+            401|403)
+                printf '%s\n' "$status"
+                return 0
+                ;;
+        esac
+        sleep 2
+    done
+    echo "timed out waiting for enabled browser route (last HTTP status: $status)" >&2
+    return 1
+}
+
 backup_dir="$(mktemp -d "$remote_dir/.browser-canary-activation.XXXXXX")"
 chmod 700 "$backup_dir"
 cp -p -- "$env_file" "$backup_dir/.env"
@@ -165,14 +182,7 @@ set_env_value FIN_TERMINAL_BROWSER_ENABLED true
 docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
     --force-recreate caddy
 
-status="$(curl --silent --show-error --max-time 20 -o /dev/null -w '%{http_code}' "$public_url")"
-case "$status" in
-    401|403) ;;
-    *)
-        echo "enabled browser route returned unexpected HTTP status $status" >&2
-        exit 1
-        ;;
-esac
+status="$(wait_for_public_status)"
 
 completed=true
 echo "browser-terminal canary enabled; unauthenticated probe returned HTTP $status"
