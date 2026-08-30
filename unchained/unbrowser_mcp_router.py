@@ -390,7 +390,11 @@ class WorkerPool:
                 self.config.unbrowser_command,
                 "--mcp",
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                # Preserve child diagnostics in the sidecar log. stdout is
+                # still suppressed because the MCP transport is stdio-backed;
+                # stderr is the only useful signal when a worker exits before
+                # returning an MCP response.
+                stderr=None,
                 env=environment,
                 start_new_session=True,
             )
@@ -524,13 +528,15 @@ class MCPHTTPRouter:
             raise
         except SessionCapacityError:
             return JSONResponse({"error": "unbrowser MCP session capacity is full"}, status_code=429)
-        except WorkerStartupError:
+        except WorkerStartupError as exc:
             if worker is not None:
                 await self.pool.finish(worker, close=True)
+            LOGGER.warning("unbrowser MCP worker startup failed: %s", str(exc)[:240])
             return JSONResponse({"error": "unbrowser MCP is temporarily unavailable"}, status_code=503)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             if worker is not None:
                 await self.pool.finish(worker, close=True)
+            LOGGER.warning("unbrowser MCP worker request failed: %s", str(exc)[:240])
             return JSONResponse({"error": "unbrowser MCP worker is unavailable"}, status_code=502)
         except Exception:  # noqa: BLE001 - do not surface process or session details.
             if worker is not None:

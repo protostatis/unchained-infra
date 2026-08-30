@@ -46,11 +46,11 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      test: ["CMD", "python3", "unbrowser_mcp_healthcheck.py"]
       interval: 30s
-      timeout: 3s
+      timeout: 15s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
   fin-terminal-browser:
     image: ${FIN_TERMINAL_BROWSER_IMAGE:?FIN_TERMINAL_BROWSER_IMAGE_required}
@@ -99,7 +99,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready?dependencies=1').then(async r=>{const body=await r.json().catch(()=>null);if(!r.ok||body?.dependencies?.mcp!==true)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 3
