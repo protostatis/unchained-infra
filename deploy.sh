@@ -360,6 +360,7 @@ test -s "$backup_dir/docker-compose.yml"
         Dockerfile.unbrowser-mcp
         docker-compose.yml
         docker-compose.public-terminal.yml
+        docker-compose.browser-terminal.yml
         Caddyfile
         deploy/terminal_runtime_reconciler.py
         deploy/terminal-runtime-reconciler.service
@@ -935,6 +936,7 @@ done < "$backup_dir/runtime-images.tsv"
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
       "$remote_dir/docker-compose.yml" "$remote_dir/docker-compose.public-terminal.yml" \
+      "$remote_dir/docker-compose.browser-terminal.yml" \
       "$remote_dir/Caddyfile" "$remote_dir/.env" \
       "$remote_dir/deploy/terminal_runtime_reconciler.py" \
       "$remote_dir/deploy/terminal-runtime-reconciler.service"
@@ -986,22 +988,58 @@ EOF
 set -euo pipefail
 cd "$1"
 # Recreate Caddy from the restored Compose definition so rolled-back
-# environment values and network attachments cannot linger. Preserve opt-in
-# public-terminal containers by including their overlay when it can be rendered;
+# environment values and network attachments cannot linger. Preserve every
+# opt-in terminal pilot by including each renderable overlay and its profile;
 # otherwise omit --remove-orphans rather than deleting an independently rolled
 # pilot during an unrelated default-stack rollback.
 compose_args=(-f docker-compose.yml)
-remove_orphans=(--remove-orphans)
-if [[ -f docker-compose.public-terminal.yml ]]; then
-    if docker compose -f docker-compose.yml -f docker-compose.public-terminal.yml \
+compose_profiles=()
+optional_overlays=(
+    "docker-compose.public-terminal.yml:fin-terminal-public-pilot"
+    "docker-compose.browser-terminal.yml:fin-terminal-browser-canary"
+)
+renderable_overlays=()
+all_optional_renderable=true
+for optional in "${optional_overlays[@]}"; do
+    overlay="${optional%%:*}"
+    profile="${optional##*:}"
+    if [[ ! -f "$overlay" ]]; then
+        echo "    $overlay is missing; preserving possible orphan containers." >&2
+        all_optional_renderable=false
+        continue
+    fi
+    if docker compose --profile "$profile" -f docker-compose.yml -f "$overlay" \
         config --quiet >/dev/null 2>&1; then
-        compose_args+=(-f docker-compose.public-terminal.yml)
+        renderable_overlays+=("$overlay")
+        compose_profiles+=(--profile "$profile")
     else
-        echo "    Public-terminal overlay is not renderable; preserving orphan containers." >&2
-        remove_orphans=()
+        echo "    $overlay is not renderable; preserving its orphan containers." >&2
+        all_optional_renderable=false
+    fi
+done
+if [[ "$all_optional_renderable" == "true" && "${#renderable_overlays[@]}" -gt 0 ]]; then
+    combined_args=(-f docker-compose.yml)
+    for overlay in "${renderable_overlays[@]}"; do
+        combined_args+=(-f "$overlay")
+    done
+    if docker compose "${compose_profiles[@]}" "${combined_args[@]}" config --quiet >/dev/null 2>&1; then
+        compose_args=("${combined_args[@]}")
+    else
+        echo "    Optional terminal overlays cannot be rendered together; preserving orphan containers." >&2
+        compose_profiles=()
+        compose_args=(-f docker-compose.yml)
+        all_optional_renderable=false
     fi
 fi
-docker compose "${compose_args[@]}" up -d --no-deps --no-build \
+if [[ "$all_optional_renderable" != "true" ]]; then
+    compose_profiles=()
+    compose_args=(-f docker-compose.yml)
+fi
+remove_orphans=()
+if [[ "$all_optional_renderable" == "true" ]]; then
+    remove_orphans=(--remove-orphans)
+fi
+docker compose "${compose_profiles[@]}" "${compose_args[@]}" up -d --no-deps --no-build \
     --force-recreate "${remove_orphans[@]}" caddy
 for attempt in $(seq 1 24); do
     container="$(docker compose ps -q caddy)"

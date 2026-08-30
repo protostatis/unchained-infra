@@ -22,12 +22,15 @@ services:
       - FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN_required}
       - FIN_TERMINAL_PUBLIC_ENABLED=${FIN_TERMINAL_PUBLIC_ENABLED:-false}
       - FIN_TERMINAL_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FIN_TERMINAL_BROWSER_ENABLED=${FIN_TERMINAL_BROWSER_ENABLED:-false}
+      - FIN_TERMINAL_BROWSER_PROXY_TOKEN=${FIN_TERMINAL_BROWSER_PROXY_TOKEN:-}
     networks:
       - edge
       - app
       - unbrowser_mcp
       - fin_terminal
       - fin_terminal_public
+      - fin_terminal_browser
     restart: unless-stopped
     logging:
       driver: json-file
@@ -424,6 +427,12 @@ networks:
   # network is retired; this network is deliberately separate from the
   # signed-in terminal network.
   fin_terminal_public:
+    internal: true
+  # Caddy ↔ authenticated browser-terminal canary only. The browser service
+  # attaches here through docker-compose.browser-terminal.yml; it is kept
+  # separate from the Pi singleton network so a canary cannot cross-talk with
+  # the current production terminal.
+  fin_terminal_browser:
     internal: true
   app:
     internal: true

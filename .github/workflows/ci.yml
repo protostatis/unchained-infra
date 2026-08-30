@@ -42,6 +42,7 @@ jobs:
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.public-terminal.yml \
+            -f docker-compose.browser-terminal.yml \
             config --no-interpolate --quiet
           python deploy/test_runtime_context_files.py
           python deploy/test_deploy_source_guard.py

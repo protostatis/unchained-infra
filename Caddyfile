@@ -161,7 +161,12 @@ unbrowser.unchainedsky.com {
 
 	log {
 		output stderr
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>headers>Mcp-Session-Id delete
+			}
+		}
 	}
 
 	request_body {
@@ -200,6 +205,50 @@ unbrowser.unchainedsky.com {
 	redir @primary_site_paths https://unchainedsky.com{uri} 308
 	@unbrowser_subpath path /unbrowser /unbrowser/
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
+	# Authenticated browser-owned terminal canary. It is deliberately a
+	# different path and service from both the Pi singleton and the workspace
+	# control plane. Keep the route disabled until the profiled services have
+	# passed their direct commissioning checks.
+	@fin_terminal_browser_disabled {
+		path /fin-terminal-browser /fin-terminal-browser/*
+		expression `!{$FIN_TERMINAL_BROWSER_ENABLED:false}`
+	}
+	handle @fin_terminal_browser_disabled {
+		header Cache-Control "no-store"
+		respond "Not found" 404
+	}
+	@fin_terminal_browser_base {
+		path /fin-terminal-browser
+		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
+	}
+	redir @fin_terminal_browser_base https://unbrowser.unchainedsky.com/fin-terminal-browser/{?query} 308
+	@fin_terminal_browser {
+		path /fin-terminal-browser/*
+		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
+	}
+	handle @fin_terminal_browser {
+		uri strip_prefix /fin-terminal-browser
+		route {
+			# Never trust identity or service-auth headers supplied by a client.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Control-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			forward_auth web:8080 {
+				uri /internal/fin-terminal/auth
+				copy_headers X-Fin-Terminal-User
+			}
+			# Browser credentials are only for forward_auth. The broker receives
+			# the opaque principal and the canary-only service token below.
+			request_header -Cookie
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			reverse_proxy fin-terminal-browser:8787 {
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}
+			}
+		}
+	}
 	# Authenticated persistent terminal. The path prefix is stripped upstream so
 	# the Vite-built client and its WebSocket both resolve beneath /fin-terminal/.
 	# When the workspace canary is enabled, /fin-terminal/ routes to the

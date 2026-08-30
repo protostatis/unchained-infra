@@ -109,6 +109,54 @@ When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
 `docker-compose.yml`.
 
+## Browser-owned canary
+
+The browser-owned implementation is staged separately at:
+
+- `https://unbrowser.unchainedsky.com/fin-terminal-browser/`
+
+It is not the production `/fin-terminal/` implementation and must not reuse the
+workspace control-plane service. The optional
+`docker-compose.browser-terminal.yml` overlay starts two profiled services:
+
+- `fin-terminal-browser`: a prebuilt `Dockerfile.browser-terminal` image with
+  `TERMINAL_RUNTIME_MODE=browser` and a dedicated persistent volume;
+- `fin-terminal-browser-mcp`: a dedicated Unbrowser MCP instance/network so a
+  canary cannot consume the singleton terminal's MCP session pool.
+
+The overlay requires `FIN_TERMINAL_BROWSER_IMAGE` to be an immutable image
+reference (`repository@sha256:<64 hex chars>`) and
+`FIN_TERMINAL_BROWSER_PROXY_TOKEN` to be independent from the Pi terminal
+token. The route is fail-closed while `FIN_TERMINAL_BROWSER_ENABLED=false` and
+returns a no-store 404 rather than the landing page.
+
+Commission the services before enabling the edge route:
+
+```bash
+./deploy/browser_terminal_canary_preflight.sh
+docker compose --profile fin-terminal-browser-canary \
+  -f docker-compose.yml -f docker-compose.browser-terminal.yml \
+  up -d fin-terminal-browser-mcp fin-terminal-browser
+docker compose --profile fin-terminal-browser-canary \
+  -f docker-compose.yml -f docker-compose.browser-terminal.yml ps
+```
+
+The preflight also starts the digest-pinned browser image on an isolated
+network and checks its production `/api/ready` startup contract. The broker and
+dedicated MCP service use the reviewed 120-second idle and 900-second absolute
+session limits; do not change one side without changing the other.
+
+Confirm both services are healthy, then set
+`FIN_TERMINAL_BROWSER_ENABLED=true` in the host `.env` and recreate Caddy with
+the same two Compose files. Roll back by setting the flag to `false` and
+recreating Caddy; the Pi `/fin-terminal/` route is unchanged throughout the
+canary.
+
+The browser route uses the same `web:8080/internal/fin-terminal/auth`
+allowlist gate, strips client identity/API credentials, and injects only the
+browser canary proxy token. It has no WebSocket path and the browser broker
+must never receive `OPENROUTER_API_KEY` or an account cookie.
+
 ## Market-event scout (singleton-only guarded dispatch)
 
 The authenticated singleton retrieves public financial-event feeds via the

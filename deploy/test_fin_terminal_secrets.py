@@ -177,6 +177,36 @@ class FinTerminalSecretsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be true or false"):
             ensure_fin_terminal_secrets(self.env_path)
 
+        self._write_valid(extra="FIN_TERMINAL_BROWSER_ENABLED=1")
+        with self.assertRaisesRegex(ValueError, "FIN_TERMINAL_BROWSER_ENABLED"):
+            ensure_fin_terminal_secrets(self.env_path)
+
+    def test_browser_route_materializes_a_disabled_flag(self):
+        self._write_valid()
+
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
+
+        content = self.env_path.read_text(encoding="utf-8")
+        self.assertEqual(content.count("FIN_TERMINAL_BROWSER_ENABLED="), 1)
+        self.assertIn("FIN_TERMINAL_BROWSER_ENABLED=false\n", content)
+
+    def test_does_not_rotate_browser_token_while_route_is_enabled(self):
+        tokens = self._valid_tokens()
+        tokens["FIN_TERMINAL_BROWSER_PROXY_TOKEN"] = "short"
+        self._write(
+            "\n".join(
+                [
+                    "OPENROUTER_API_KEY=provider-secret",
+                    "FIN_TERMINAL_BROWSER_ENABLED=true",
+                    *(f"{name}={value}" for name, value in tokens.items()),
+                ]
+            )
+            + "\n"
+        )
+
+        with self.assertRaisesRegex(ValueError, "disable the browser route"):
+            ensure_fin_terminal_secrets(self.env_path)
+
     def test_first_deployment_materializes_disabled_public_flag(self):
         self._write_valid()
 
