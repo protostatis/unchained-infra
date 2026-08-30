@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Activate the authenticated browser-terminal canary on the production host.
-# This script is streamed over verified SSH by the protected GitHub Action; it
-# intentionally changes only the browser-canary env values and Caddy/service
-# state, leaving the Pi-owned /fin-terminal/ route untouched.
+# Activate or upgrade the authenticated browser-terminal canary on the
+# production host. This script is streamed over verified SSH by the protected
+# GitHub Action; it intentionally changes only the browser-canary env values
+# and Caddy/service state, leaving the Pi-owned /fin-terminal/ route untouched.
 
 set -euo pipefail
 umask 077
@@ -36,6 +36,12 @@ compose_args=(
     exit 1
 }
 cd "$remote_dir"
+
+exec 9>>"$remote_dir/.deploy.lock"
+if ! flock -n 9; then
+    echo "deployment lock is already held" >&2
+    exit 75
+fi
 
 get_env_value() {
     local name="$1"
@@ -135,33 +141,53 @@ backup_dir="$(mktemp -d "$remote_dir/.browser-canary-activation.XXXXXX")"
 chmod 700 "$backup_dir"
 cp -p -- "$env_file" "$backup_dir/.env"
 completed=false
+old_enabled=""
 rollback() {
     if [[ "$completed" == "true" ]]; then
         rm -rf -- "$backup_dir"
         return
     fi
     echo "activation failed; restoring the previous browser-canary state" >&2
-    docker compose "${compose_args[@]}" stop fin-terminal-browser fin-terminal-browser-mcp >/dev/null 2>&1 || true
     cp -p -- "$backup_dir/.env" "$env_file" || true
     chmod 600 "$env_file" || true
-    # Recreate only from the base stack: the previous .env may not have had
-    # browser image/token values, so the optional overlay may not render during
-    # rollback. The base Caddy route defaults to disabled.
-    docker compose -f "$remote_dir/docker-compose.yml" up -d --no-deps --no-build \
-        --pull never --force-recreate caddy >/dev/null 2>&1 || true
+    if [[ "$old_enabled" == "true" ]]; then
+        # The previous route was live. Restore the old digest and backend before
+        # asking Caddy to resolve the service again; never roll a live upgrade
+        # back to the disabled base-stack route.
+        if ! docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
+            --force-recreate fin-terminal-browser; then
+            echo "ERROR: failed to recreate the previous browser canary image" >&2
+        elif ! wait_for_health fin-terminal-browser; then
+            echo "ERROR: previous browser canary image did not become healthy" >&2
+        elif ! docker compose "${compose_args[@]}" exec -T caddy caddy reload \
+            --config /etc/caddy/Caddyfile </dev/null; then
+            echo "ERROR: Caddy could not reload the restored browser canary route" >&2
+        fi
+    else
+        docker compose "${compose_args[@]}" stop fin-terminal-browser fin-terminal-browser-mcp >/dev/null 2>&1 || true
+        # Recreate only from the base stack: the previous .env may not have had
+        # browser image/token values, so the optional overlay may not render during
+        # rollback. The base Caddy route defaults to disabled.
+        docker compose -f "$remote_dir/docker-compose.yml" up -d --no-deps --no-build \
+            --pull never --force-recreate caddy >/dev/null 2>&1 || true
+    fi
     rm -rf -- "$backup_dir"
 }
 trap rollback EXIT
 
 old_enabled="$(get_env_value FIN_TERMINAL_BROWSER_ENABLED || true)"
-if [[ "$old_enabled" == "true" ]]; then
-    echo "browser-terminal canary is already enabled" >&2
+if [[ "$old_enabled" != "true" && "$old_enabled" != "false" ]]; then
+    echo "FIN_TERMINAL_BROWSER_ENABLED must be true or false" >&2
     exit 1
 fi
 
 set_env_value FIN_TERMINAL_BROWSER_IMAGE "$image"
 browser_token="$(get_env_value FIN_TERMINAL_BROWSER_PROXY_TOKEN || true)"
 if [[ -z "$browser_token" ]]; then
+    if [[ "$old_enabled" == "true" ]]; then
+        echo "cannot upgrade an enabled canary without its existing browser proxy token" >&2
+        exit 1
+    fi
     browser_token="$(openssl rand -hex 32)"
     set_env_value FIN_TERMINAL_BROWSER_PROXY_TOKEN "$browser_token"
 fi
@@ -171,16 +197,31 @@ if [[ "${#browser_token}" -lt 32 || "$browser_token" == "$pi_token" ]]; then
     exit 1
 fi
 
-# Keep the route disabled while preflight and service health checks run.
-set_env_value FIN_TERMINAL_BROWSER_ENABLED false
-"$remote_dir/deploy/browser_terminal_canary_preflight.sh"
-docker compose "${compose_args[@]}" up -d --build fin-terminal-browser-mcp fin-terminal-browser
-wait_for_health fin-terminal-browser-mcp
+# Keep a first activation disabled during preflight and service health checks.
+# During an upgrade, the existing route remains live while only the backend is
+# replaced; the preflight receives a process-scoped false override.
+if [[ "$old_enabled" == "true" ]]; then
+    FIN_TERMINAL_BROWSER_ENABLED=false "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
+    docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
+        --force-recreate fin-terminal-browser
+else
+    set_env_value FIN_TERMINAL_BROWSER_ENABLED false
+    "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
+    docker compose "${compose_args[@]}" up -d --build fin-terminal-browser-mcp fin-terminal-browser
+    wait_for_health fin-terminal-browser-mcp
+fi
 wait_for_health fin-terminal-browser
 
-set_env_value FIN_TERMINAL_BROWSER_ENABLED true
-docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
-    --force-recreate caddy
+if [[ "$old_enabled" == "true" ]]; then
+    # Caddy stays running during the replacement and is gracefully reloaded only
+    # after the new backend is healthy, refreshing the service resolution.
+    docker compose "${compose_args[@]}" exec -T caddy caddy reload \
+        --config /etc/caddy/Caddyfile </dev/null
+else
+    set_env_value FIN_TERMINAL_BROWSER_ENABLED true
+    docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
+        --force-recreate caddy
+fi
 
 status="$(wait_for_public_status)"
 
