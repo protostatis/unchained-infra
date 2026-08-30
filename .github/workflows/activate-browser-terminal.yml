@@ -90,7 +90,11 @@ jobs:
             -o StrictHostKeyChecking=yes
           )
           ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
-            "bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/" \
+            "mkdir -p /home/ec2-user/unchained/deploy"
+          scp "${ssh_opts[@]}" -p deploy/browser_terminal_canary_preflight.sh \
+            "ec2-user@$EC2_HOST:/home/ec2-user/unchained/deploy/browser_terminal_canary_preflight.sh"
+          ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
+            "chmod 700 /home/ec2-user/unchained/deploy/browser_terminal_canary_preflight.sh && bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/" \
             < deploy/activate_browser_terminal_canary.sh
 
       - name: Remove deployment SSH files
