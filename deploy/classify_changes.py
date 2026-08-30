@@ -55,6 +55,7 @@ COMPOSE_FILES = {
 # so changing it must not rebuild or restart the default production stack.
 OPTIONAL_COMPOSE_FILES = {
     "docker-compose.public-terminal.yml",
+    "docker-compose.browser-terminal.yml",
 }
 
 # Caddy-only changes — graceful reload, no other service touched.

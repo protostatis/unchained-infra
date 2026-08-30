@@ -1,0 +1,116 @@
+# Authenticated browser-owned terminal canary. This overlay is intentionally
+# separate from the default stack: the Pi-backed singleton remains the only
+# owner of /fin-terminal/ until the browser canary is commissioned.
+#
+# FIN_TERMINAL_BROWSER_IMAGE must be an immutable image reference, for example:
+#   ghcr.io/protostatis/unbrowser-fin-terminal-browser@sha256:<64 hex chars>
+# Build and publish Dockerfile.browser-terminal from a reviewed application
+# commit before enabling this overlay.
+
+services:
+  fin-terminal-browser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    depends_on:
+      unbrowser-egress:
+        condition: service_healthy
+    environment:
+      # These reviewed lifecycle limits must match the broker's mapping TTLs.
+      - UNBROWSER_MCP_MAX_SESSIONS=8
+      - UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS=120
+      - UNBROWSER_MCP_MAX_SESSION_SECONDS=900
+    networks:
+      - fin_terminal_browser_mcp
+      - unbrowser_egress_proxy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+      - /home/unchained:rw,nosuid,nodev,noexec,size=134217728,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 64
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 128m
+    restart: unless-stopped
+    profiles: ["fin-terminal-browser-canary"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  fin-terminal-browser:
+    image: ${FIN_TERMINAL_BROWSER_IMAGE:?FIN_TERMINAL_BROWSER_IMAGE_required}
+    expose:
+      - "8787"
+    depends_on:
+      fin-terminal-browser-mcp:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8787
+      - MARKET_ROOT=/app
+      - MARKET_DATA_DIR=/data
+      - PUBLIC_BASE_PATH=/fin-terminal-browser/
+      - TERMINAL_RUNTIME_MODE=browser
+      - UNBROWSER_MCP_URL=http://fin-terminal-browser-mcp:8767/mcp
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}
+      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
+      - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
+      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_BROWSER_PROXY_TOKEN:?FIN_TERMINAL_BROWSER_PROXY_TOKEN_required}
+    volumes:
+      - fin_terminal_browser_data:/data
+    networks:
+      - fin_terminal_browser
+      - fin_terminal_browser_mcp
+      - fin_terminal_browser_egress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 256m
+    stop_grace_period: 30s
+    restart: unless-stopped
+    profiles: ["fin-terminal-browser-canary"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  fin_terminal_browser_data:
+
+networks:
+  fin_terminal_browser_mcp:
+    internal: true
+  # Only the browser broker joins this direct-egress network. The MCP service
+  # reaches the internet through the shared SSRF proxy instead.
+  fin_terminal_browser_egress:

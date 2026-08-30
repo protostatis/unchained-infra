@@ -34,6 +34,7 @@ class TestChangedServices(unittest.TestCase):
 
     def test_opt_in_compose_overlay_does_not_restart_default_services(self):
         self.assertEqual(classify_path("docker-compose.public-terminal.yml"), set())
+        self.assertEqual(classify_path("docker-compose.browser-terminal.yml"), set())
 
     def test_classifier_knows_fin_terminal_service(self):
         self.assertIn("fin-terminal", SERVICES)

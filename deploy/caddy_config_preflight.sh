@@ -25,12 +25,15 @@ validate_staged_config() {
 
     local compose_file="$stage_dir/docker-compose.yml"
     local public_terminal_compose_file="$stage_dir/docker-compose.public-terminal.yml"
+    local browser_terminal_compose_file="$stage_dir/docker-compose.browser-terminal.yml"
     local candidate_file="$stage_dir/Caddyfile"
     local env_file="$stage_dir/.env"
     [[ -f "$compose_file" && ! -L "$compose_file" ]] \
         || die "staged docker-compose.yml is missing or symlinked"
     [[ -f "$public_terminal_compose_file" && ! -L "$public_terminal_compose_file" ]] \
         || die "staged docker-compose.public-terminal.yml is missing or symlinked"
+    [[ -f "$browser_terminal_compose_file" && ! -L "$browser_terminal_compose_file" ]] \
+        || die "staged docker-compose.browser-terminal.yml is missing or symlinked"
     [[ -f "$candidate_file" && ! -L "$candidate_file" ]] \
         || die "staged Caddyfile is missing or symlinked"
     [[ -f "$env_file" && ! -L "$env_file" ]] \
@@ -52,10 +55,11 @@ validate_staged_config() {
     }
     trap cleanup_validation EXIT
 
-    # Validate the optional overlay's merged structure without requiring its
-    # external Turnstile credentials. deploy.sh stages but never activates it.
+    # Validate optional overlays' merged structure without requiring external
+    # Turnstile credentials or the browser image. deploy.sh stages but never
+    # activates either profiled overlay.
     docker compose --project-directory "$stage_dir" \
-        -f "$compose_file" -f "$public_terminal_compose_file" \
+        -f "$compose_file" -f "$public_terminal_compose_file" -f "$browser_terminal_compose_file" \
         config --no-interpolate --quiet >/dev/null </dev/null
 
     docker compose --project-directory "$stage_dir" --env-file "$env_file" \
@@ -96,6 +100,7 @@ name_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 caddy_boolean_flags = {
     "FIN_TERMINAL_PUBLIC_ENABLED",
     "FIN_TERMINAL_WORKSPACE_ENABLED",
+    "FIN_TERMINAL_BROWSER_ENABLED",
 }
 with open(environment_path, "x", encoding="utf-8", newline="\n") as handle:
     for name, value in sorted(environment.items()):
@@ -229,7 +234,7 @@ promote_staged_config() {
 
     local file
     for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml \
-        docker-compose.public-terminal.yml Caddyfile .env; do
+        docker-compose.public-terminal.yml docker-compose.browser-terminal.yml Caddyfile .env; do
         [[ -f "$stage_dir/$file" && ! -L "$stage_dir/$file" ]] \
             || die "staged $file is missing or symlinked"
     done
@@ -239,7 +244,7 @@ promote_staged_config() {
         || die "live .env is missing or symlinked"
 
     for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml \
-        docker-compose.public-terminal.yml; do
+        docker-compose.public-terminal.yml docker-compose.browser-terminal.yml; do
         copy_atomically "$stage_dir/$file" "$remote_dir/$file" 0644
     done
 

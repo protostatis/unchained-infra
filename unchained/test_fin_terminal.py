@@ -91,6 +91,9 @@ class CaddyConfigPreflightTests(unittest.TestCase):
         remote_dir.joinpath("docker-compose.public-terminal.yml").write_text(
             "services: {}\n"
         )
+        remote_dir.joinpath("docker-compose.browser-terminal.yml").write_text(
+            "services: {}\n"
+        )
         stage_dir.joinpath("Caddyfile").write_text("candidate config\n")
         stage_dir.joinpath(".env").write_text(
             "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n"
@@ -102,6 +105,9 @@ class CaddyConfigPreflightTests(unittest.TestCase):
         stage_dir.joinpath("docker-compose.yml").write_text("services: {}\n")
         stage_dir.joinpath("docker-compose.public-terminal.yml").write_text(
             "services:\n  public: {}\n"
+        )
+        stage_dir.joinpath("docker-compose.browser-terminal.yml").write_text(
+            "services:\n  browser: {}\n"
         )
         return remote_dir, stage_dir
 
@@ -299,6 +305,10 @@ esac
                 (remote_dir / "docker-compose.public-terminal.yml").read_text(),
                 "services:\n  public: {}\n",
             )
+            self.assertEqual(
+                (remote_dir / "docker-compose.browser-terminal.yml").read_text(),
+                "services:\n  browser: {}\n",
+            )
 
     def test_validation_requires_the_staged_public_terminal_overlay(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -374,6 +384,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.caddy_preflight = cls.repo_root.joinpath(
             "deploy", "caddy_config_preflight.sh"
         ).read_text()
+        cls.browser_canary_preflight = cls.repo_root.joinpath(
+            "deploy", "browser_terminal_canary_preflight.sh"
+        ).read_text()
         cls.workflow = cls.repo_root.joinpath(
             ".github", "workflows", "ci.yml"
         ).read_text()
@@ -419,6 +432,24 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertNotIn("sampling {", self.caddy)
 
+    def test_browser_canary_route_is_independent_and_fail_closed(self):
+        subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        route = subdomain.split(
+            "# Authenticated browser-owned terminal canary.", 1
+        )[1].split("# Authenticated persistent terminal.", 1)[0]
+        self.assertIn("FIN_TERMINAL_BROWSER_ENABLED", route)
+        self.assertIn("respond \"Not found\" 404", route)
+        self.assertIn("uri strip_prefix /fin-terminal-browser", route)
+        self.assertIn("forward_auth web:8080", route)
+        self.assertIn("reverse_proxy fin-terminal-browser:8787", route)
+        self.assertIn(
+            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}",
+            route,
+        )
+        for header in ("X-Fin-Terminal-User", "X-Fin-Terminal-Proxy-Token", "Cookie", "Authorization", "Proxy-Authorization"):
+            self.assertIn(f"request_header -{header}", route)
+        self.assertNotIn("reverse_proxy fin-terminal-workspace-control", route)
+
     def test_caddy_runtime_is_pinned_and_force_recreated(self):
         self.assertIn(
             "caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9",
@@ -460,6 +491,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("docker run --rm", self.caddy_preflight)
         self.assertIn("--network none", self.caddy_preflight)
         self.assertIn("docker-compose.public-terminal.yml", self.caddy_preflight)
+        self.assertIn("docker-compose.browser-terminal.yml", self.caddy_preflight)
         self.assertIn("config --no-interpolate --quiet", self.caddy_preflight)
         self.assertNotIn("docker compose run --rm --no-deps caddy", self.deploy)
         self.assertLess(stage_index, validate_index)
@@ -501,6 +533,21 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- unbrowser_mcp", service)
         self.assertNotIn("- fin_terminal_demo", service)
         self.assertNotIn("- app", service)
+
+    def test_browser_canary_overlay_is_profiled_and_isolated(self):
+        overlay = self.repo_root.joinpath("docker-compose.browser-terminal.yml").read_text()
+        self.assertIn("fin-terminal-browser-canary", overlay)
+        self.assertIn("FIN_TERMINAL_BROWSER_IMAGE", overlay)
+        self.assertIn("TERMINAL_RUNTIME_MODE=browser", overlay)
+        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal-browser/", overlay)
+        self.assertIn("fin_terminal_browser_mcp", overlay)
+        self.assertIn("fin_terminal_browser_egress", overlay)
+        self.assertIn("fin_terminal_browser_data", overlay)
+        self.assertNotIn("PI_CODING_AGENT_DIR", overlay)
+        self.assertNotIn("fin_terminal_egress", overlay)
+        self.assertIn('docker image pull "$image"', self.browser_canary_preflight)
+        self.assertIn("--env PUBLIC_BASE_PATH=/fin-terminal-browser/", self.browser_canary_preflight)
+        self.assertIn("/api/ready", self.browser_canary_preflight)
 
     def test_retired_demo_returns_404_tombstones(self):
         """All retired demo URLs must return direct 404 with no-store, no redirects."""
@@ -688,8 +735,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_public_live_overlay_is_staged_but_not_auto_started(self):
         self.assertIn('"docker-compose.public-terminal.yml"', self.runtime_context)
+        self.assertIn('"docker-compose.browser-terminal.yml"', self.runtime_context)
         for release_item in (
             "docker-compose.public-terminal.yml",
+            "docker-compose.browser-terminal.yml",
             "Caddyfile",
             "deploy/terminal_runtime_reconciler.py",
             "deploy/terminal-runtime-reconciler.service",
@@ -698,6 +747,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.assertIn(release_item, self.deploy)
         self.assertIn(
             '"$remote_dir/docker-compose.public-terminal.yml"', self.deploy
+        )
+        self.assertIn(
+            '"$remote_dir/docker-compose.browser-terminal.yml"', self.deploy
         )
         self.assertNotIn("--profile fin-terminal-public-pilot", self.deploy)
         self.assertIn("profiles: [\"fin-terminal-public-pilot\"]", self.public_compose)
@@ -918,6 +970,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('docker image tag "$rollback_ref" "$image_ref"', self.deploy)
         self.assertIn('[[ "$restored_id" == "$image_id" ]]', self.deploy)
         self.assertIn("release_remote_rollback_images", self.deploy)
+        self.assertIn('"docker-compose.browser-terminal.yml:fin-terminal-browser-canary"', self.deploy)
+        self.assertIn('otherwise omit --remove-orphans rather than deleting an independently rolled', self.deploy)
+        self.assertIn('compose_profiles+=(--profile "$profile")', self.deploy)
         self.assertNotIn('docker compose build "${runtime_services[@]}"', self.deploy)
 
     def test_normal_deploy_requires_public_pilot_disabled_before_snapshot(self):

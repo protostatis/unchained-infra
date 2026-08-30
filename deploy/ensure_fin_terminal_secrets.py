@@ -18,6 +18,7 @@ RETIRED_TOKEN_NAMES = (
 
 TOKEN_NAMES = (
     "FIN_TERMINAL_PROXY_TOKEN",
+    "FIN_TERMINAL_BROWSER_PROXY_TOKEN",
     "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
     "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
     "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
@@ -202,6 +203,16 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
             _env_value(lines, "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET"),
         )
 
+    browser_enabled_count = sum(
+        line.startswith("FIN_TERMINAL_BROWSER_ENABLED=") for line in lines
+    )
+    if browser_enabled_count > 1:
+        raise ValueError("duplicate FIN_TERMINAL_BROWSER_ENABLED definitions")
+    browser_enabled_value = _env_value(lines, "FIN_TERMINAL_BROWSER_ENABLED")
+    if browser_enabled_value not in {"", "false", "true"}:
+        raise ValueError("FIN_TERMINAL_BROWSER_ENABLED must be true or false")
+    browser_enabled = browser_enabled_value == "true"
+
     tokens = {name: _env_value(lines, name) for name in TOKEN_NAMES}
     existing_values = {value for value in tokens.values() if value}
     protected_values = {openrouter_key}
@@ -219,6 +230,11 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
                 raise ValueError(
                     f"{name} is invalid while FIN_TERMINAL_PUBLIC_ENABLED=true; "
                     "disable the public route before rotating it"
+                )
+            if browser_enabled and name == "FIN_TERMINAL_BROWSER_PROXY_TOKEN":
+                raise ValueError(
+                    "FIN_TERMINAL_BROWSER_PROXY_TOKEN is invalid while "
+                    "FIN_TERMINAL_BROWSER_ENABLED=true; disable the browser route before rotating it"
                 )
             value = _new_token(excluding=protected_values | existing_values)
             tokens[name] = value
@@ -241,6 +257,8 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     # interpolation default for an operational state transition.
     if public_enabled_count == 0:
         updated.append("FIN_TERMINAL_PUBLIC_ENABLED=false")
+    if browser_enabled_count == 0:
+        updated.append("FIN_TERMINAL_BROWSER_ENABLED=false")
     updated.extend(f"{name}={tokens[name]}" for name in TOKEN_NAMES)
     content = "\n".join(updated) + "\n"
     _replace_env_atomically(env_path, content, opened)

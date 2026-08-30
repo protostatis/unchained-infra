@@ -225,6 +225,8 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `HOSTED_AGENT_SERVICE_TOKEN` | web, trial-agent | Required dedicated bearer token for internal credit callbacks and scoped scheduler calls; generate independently from every other key |
 | `OPENROUTER_API_KEY` | trial-agent, fin-terminal | Shared provider credential for hosted inference and private terminal research |
 | `FIN_TERMINAL_PROXY_TOKEN` | caddy, fin-terminal | Required independent token authenticating edge-to-persistent-terminal requests |
+| `FIN_TERMINAL_BROWSER_PROXY_TOKEN` | caddy, fin-terminal-browser | Required independent token authenticating edge-to-browser-broker requests |
+| `FIN_TERMINAL_BROWSER_ENABLED` | caddy | Explicit feature flag for the authenticated browser-terminal canary; defaults to `false` |
 | `FIN_TERMINAL_ALLOWED_EMAILS` | web | Optional approved operator emails added to the admin allowlist |
 | `HOSTED_MAX_ACTIVE_TURNS` | web | Optional global hosted-turn limit (default: `16`) |
 | `HOSTED_MAX_ACTIVE_TURNS_PER_USER` | web | Optional per-account hosted-turn limit (default: `3`) |
