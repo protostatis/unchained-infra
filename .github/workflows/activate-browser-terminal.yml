@@ -1,0 +1,98 @@
+name: Activate authenticated browser-terminal canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_enable:
+        description: "Confirm enabling /fin-terminal-browser/ for the approved allowlist"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: activate-browser-terminal-production
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: inputs.confirm_enable
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://unbrowser.unchainedsky.com/fin-terminal-browser/
+    steps:
+      - name: Checkout deployed infra revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Resolve pinned browser image
+        id: release
+        run: |
+          set -eu
+          image="$(awk -F= '$1 == "FIN_TERMINAL_BROWSER_IMAGE" { print substr($0, index($0, "=") + 1); exit }' .env.browser-terminal.example)"
+          if [[ ! "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::browser image is not digest-pinned"
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Require verified SSH inputs
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          for name in EC2_HOST EC2_SSH_KEY SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::${name} is required"
+              exit 1
+            fi
+          done
+
+      - name: Prepare verified SSH configuration
+        id: ssh
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          ssh_dir="$RUNNER_TEMP/unchained-browser-canary-ssh"
+          mkdir -p "$ssh_dir"
+          umask 077
+          printf '%s\n' "$EC2_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh-keygen -l -f "$ssh_dir/known_hosts" >/dev/null
+          echo "key=$ssh_dir/key" >> "$GITHUB_OUTPUT"
+          echo "known_hosts=$ssh_dir/known_hosts" >> "$GITHUB_OUTPUT"
+
+      - name: Commission and enable browser canary
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          KEY_PATH: ${{ steps.ssh.outputs.key }}
+          KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
+        run: |
+          set -eu
+          ssh_opts=(
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=4
+            -i "$KEY_PATH"
+            -o "UserKnownHostsFile=$KNOWN_HOSTS"
+            -o StrictHostKeyChecking=yes
+          )
+          ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
+            "bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/" \
+            < deploy/activate_browser_terminal_canary.sh
+
+      - name: Remove deployment SSH files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/unchained-browser-canary-ssh"
