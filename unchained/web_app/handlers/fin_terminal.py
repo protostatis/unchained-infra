@@ -21,27 +21,25 @@ def _terminal_principal(user_id: str) -> str:
     return f"ft-{digest}"
 
 
-async def handle_fin_terminal_auth(request: web.Request) -> web.Response:
-    """Authorize an approved admin/allowlisted user for Caddy forward_auth."""
+def _auth_response(request: web.Request, *, allowlisted: bool) -> web.Response:
+    """Authorize an account and return the opaque principal for Caddy."""
     core = _core()
     auth_info = core._authenticate(request)
     if not auth_info:
         return web.Response(status=401, headers=_NO_STORE_HEADERS)
 
-    email = str(auth_info.get("email", "")).strip().lower()
     user_id = str(auth_info.get("user_id", "")).strip()
-    allowed_emails = {
-        str(value).strip().lower()
-        for value in getattr(core, "FIN_TERMINAL_ALLOWED_EMAILS", ())
-        if str(value).strip()
-    }
-    if (
-        auth_info.get("status") != "approved"
-        or not user_id
-        or not email
-        or email not in allowed_emails
-    ):
+    if auth_info.get("status") != "approved" or not user_id:
         return web.Response(status=403, headers=_NO_STORE_HEADERS)
+    if allowlisted:
+        email = str(auth_info.get("email", "")).strip().lower()
+        allowed_emails = {
+            str(value).strip().lower()
+            for value in getattr(core, "FIN_TERMINAL_ALLOWED_EMAILS", ())
+            if str(value).strip()
+        }
+        if not email or email not in allowed_emails:
+            return web.Response(status=403, headers=_NO_STORE_HEADERS)
 
     return web.Response(
         status=204,
@@ -50,3 +48,13 @@ async def handle_fin_terminal_auth(request: web.Request) -> web.Response:
             "X-Fin-Terminal-User": _terminal_principal(user_id),
         },
     )
+
+
+async def handle_fin_terminal_auth(request: web.Request) -> web.Response:
+    """Authorize an approved admin/allowlisted user for the Pi terminal."""
+    return _auth_response(request, allowlisted=True)
+
+
+async def handle_fin_terminal_browser_auth(request: web.Request) -> web.Response:
+    """Authorize any approved signed-in UnchainedSky account for the browser terminal."""
+    return _auth_response(request, allowlisted=False)

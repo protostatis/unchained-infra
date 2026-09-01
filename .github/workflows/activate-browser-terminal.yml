@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_enable:
-        description: "Confirm enabling /fin-terminal-browser/ for the approved allowlist"
+        description: "Confirm enabling /fin-terminal-browser/ for approved signed-in accounts"
         required: true
         default: false
         type: boolean
@@ -47,9 +47,10 @@ jobs:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          BROWSER_SMOKE_COOKIE: ${{ secrets.FIN_TERMINAL_BROWSER_SMOKE_COOKIE }}
         run: |
           set -eu
-          for name in EC2_HOST EC2_SSH_KEY SSH_KNOWN_HOSTS; do
+          for name in EC2_HOST EC2_SSH_KEY SSH_KNOWN_HOSTS BROWSER_SMOKE_COOKIE; do
             if [[ -z "${!name}" ]]; then
               echo "::error::${name} is required"
               exit 1
@@ -76,6 +77,7 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           IMAGE: ${{ steps.release.outputs.image }}
+          BROWSER_SMOKE_COOKIE: ${{ secrets.FIN_TERMINAL_BROWSER_SMOKE_COOKIE }}
           KEY_PATH: ${{ steps.ssh.outputs.key }}
           KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
         run: |
@@ -89,12 +91,19 @@ jobs:
             -o "UserKnownHostsFile=$KNOWN_HOSTS"
             -o StrictHostKeyChecking=yes
           )
+          local_cookie_path="$RUNNER_TEMP/unchained-browser-canary-smoke-cookie"
+          remote_cookie_path="/tmp/unchained-browser-canary-smoke-cookie"
+          umask 077
+          printf '%s' "$BROWSER_SMOKE_COOKIE" > "$local_cookie_path"
+          cleanup_remote_cookie() {
+            ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" "rm -f '$remote_cookie_path'" >/dev/null 2>&1 || true
+            rm -f "$local_cookie_path"
+          }
+          trap cleanup_remote_cookie EXIT
+          scp "${ssh_opts[@]}" -p "$local_cookie_path" \
+            "ec2-user@$EC2_HOST:$remote_cookie_path"
           ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
-            "mkdir -p /home/ec2-user/unchained/deploy"
-          scp "${ssh_opts[@]}" -p deploy/browser_terminal_canary_preflight.sh \
-            "ec2-user@$EC2_HOST:/home/ec2-user/unchained/deploy/browser_terminal_canary_preflight.sh"
-          ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
-            "chmod 700 /home/ec2-user/unchained/deploy/browser_terminal_canary_preflight.sh && bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/" \
+            "chmod 600 '$remote_cookie_path' && bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/ '$remote_cookie_path' '$GITHUB_SHA'" \
             < deploy/activate_browser_terminal_canary.sh
 
       - name: Remove deployment SSH files

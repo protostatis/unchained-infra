@@ -34,6 +34,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
         "/internal/fin-terminal/auth",
         "web_app.handlers.fin_terminal:handle_fin_terminal_auth",
     ),
+    (
+        "GET",
+        "/internal/fin-terminal/browser-auth",
+        "web_app.handlers.fin_terminal:handle_fin_terminal_browser_auth",
+    ),
     ("GET", "/", "handle_index"),
     ("GET", "/unbrowser", "web_app.handlers.pages:handle_unbrowser_page"),
     ("GET", "/go/unbrowser-connect", "web_app.handlers.pages:handle_unbrowser_outbound"),

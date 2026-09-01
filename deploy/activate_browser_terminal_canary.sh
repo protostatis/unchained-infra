@@ -7,14 +7,16 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 3 ]]; then
-    echo "usage: $0 REMOTE_DIR IMAGE PUBLIC_URL" >&2
+if [[ "$#" -ne 5 ]]; then
+    echo "usage: $0 REMOTE_DIR IMAGE PUBLIC_URL SMOKE_COOKIE_FILE EXPECTED_INFRA_SHA" >&2
     exit 2
 fi
 
 remote_dir="$1"
 image="$2"
 public_url="$3"
+smoke_cookie_file="$4"
+expected_infra_sha="$5"
 env_file="$remote_dir/.env"
 compose_args=(
     --profile fin-terminal-browser-canary
@@ -23,6 +25,11 @@ compose_args=(
 )
 
 [[ "$remote_dir" = /* ]] || { echo "REMOTE_DIR must be absolute" >&2; exit 2; }
+[[ "$smoke_cookie_file" = /* ]] || { echo "SMOKE_COOKIE_FILE must be absolute" >&2; exit 2; }
+[[ "$expected_infra_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "EXPECTED_INFRA_SHA must be a 40-character lowercase Git SHA" >&2
+    exit 2
+}
 [[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]] || {
     echo "IMAGE must be an immutable digest-pinned reference" >&2
     exit 2
@@ -31,8 +38,13 @@ compose_args=(
     echo "PUBLIC_URL must be the canonical HTTPS browser-terminal URL" >&2
     exit 2
 }
-[[ -f "$env_file" && ! -L "$env_file" ]] || {
-    echo "production .env is missing or symlinked" >&2
+[[ -f "$smoke_cookie_file" && ! -L "$smoke_cookie_file" ]] || {
+    echo "SMOKE_COOKIE_FILE is missing or symlinked" >&2
+    exit 1
+}
+smoke_cookie="$(<"$smoke_cookie_file")"
+[[ -n "$smoke_cookie" && "${#smoke_cookie}" -le 16384 && "$smoke_cookie" != *$'\n'* && "$smoke_cookie" != *$'\r'* ]] || {
+    echo "SMOKE_COOKIE_FILE must contain one bounded cookie value" >&2
     exit 1
 }
 cd "$remote_dir"
@@ -42,6 +54,24 @@ if ! flock -n 9; then
     echo "deployment lock is already held" >&2
     exit 75
 fi
+
+host_infra_sha="$(git -C "$remote_dir" rev-parse HEAD 2>/dev/null || true)"
+[[ "$host_infra_sha" == "$expected_infra_sha" ]] || {
+    echo "host deployment worktree is not at the reviewed infra revision" >&2
+    echo "expected: $expected_infra_sha" >&2
+    echo "actual:   ${host_infra_sha:-unavailable}" >&2
+    exit 1
+}
+host_infra_status="$(git -C "$remote_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)"
+[[ -z "$host_infra_status" ]] || {
+    echo "host deployment worktree is dirty; refusing to mix reviewed and local infra files" >&2
+    printf '%s\n' "$host_infra_status" >&2
+    exit 1
+}
+[[ -f "$env_file" && ! -L "$env_file" ]] || {
+    echo "production .env is missing or symlinked" >&2
+    exit 1
+}
 
 get_env_value() {
     local name="$1"
@@ -126,7 +156,7 @@ wait_for_public_status() {
         status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 "$public_url" || true)"
         case "$status" in
-            401|403)
+        401)
                 printf '%s\n' "$status"
                 return 0
                 ;;
@@ -137,23 +167,60 @@ wait_for_public_status() {
     return 1
 }
 
+wait_for_authenticated_status() {
+    local status session_status
+    local session_url="${public_url%/}/api/browser/v1/session"
+    for _ in $(seq 1 30); do
+        status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 10 --cookie "$smoke_cookie" "$public_url" || true)"
+        session_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 10 --cookie "$smoke_cookie" "$session_url" || true)"
+        if [[ "$status" == "200" && "$session_status" == "200" ]]; then
+            printf '%s/%s\n' "$status" "$session_status"
+            return 0
+        fi
+        if [[ "$status" == "401" || "$status" == "403" || "$session_status" == "401" || "$session_status" == "403" ]]; then
+            echo "authenticated smoke probe was denied (page HTTP $status, session HTTP $session_status)" >&2
+            return 1
+        fi
+        sleep 2
+    done
+    echo "timed out waiting for authenticated browser route (last page/session status: $status/$session_status)" >&2
+    return 1
+}
+
 backup_dir="$(mktemp -d "$remote_dir/.browser-canary-activation.XXXXXX")"
 chmod 700 "$backup_dir"
 cp -p -- "$env_file" "$backup_dir/.env"
 completed=false
 old_enabled=""
+old_mcp_image_ref=""
+old_mcp_image_id=""
 rollback() {
     if [[ "$completed" == "true" ]]; then
         rm -rf -- "$backup_dir"
         return
     fi
     echo "activation failed; restoring the previous browser-canary state" >&2
-    cp -p -- "$backup_dir/.env" "$env_file" || true
-    chmod 600 "$env_file" || true
+    if ! cp -p -- "$backup_dir/.env" "$env_file"; then
+        echo "ERROR: failed to restore the previous browser-canary environment" >&2
+    elif ! chmod 600 "$env_file"; then
+        echo "ERROR: failed to restore production .env permissions" >&2
+    fi
     if [[ "$old_enabled" == "true" ]]; then
         # The previous route was live. Restore the old digest and backend before
         # asking Caddy to resolve the service again; never roll a live upgrade
         # back to the disabled base-stack route.
+        if [[ -z "$old_mcp_image_ref" || -z "$old_mcp_image_id" ]]; then
+            echo "ERROR: previous MCP sidecar image was not captured; refusing an incomplete rollback" >&2
+        elif ! docker tag "$old_mcp_image_id" "$old_mcp_image_ref"; then
+            echo "ERROR: failed to restore the previous MCP sidecar image tag" >&2
+        elif ! docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
+            --force-recreate fin-terminal-browser-mcp; then
+            echo "ERROR: failed to recreate the previous MCP sidecar" >&2
+        elif ! wait_for_health fin-terminal-browser-mcp; then
+            echo "ERROR: previous MCP sidecar did not become healthy" >&2
+        fi
         if ! docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
             --force-recreate fin-terminal-browser; then
             echo "ERROR: failed to recreate the previous browser canary image" >&2
@@ -179,6 +246,19 @@ old_enabled="$(get_env_value FIN_TERMINAL_BROWSER_ENABLED || true)"
 if [[ "$old_enabled" != "true" && "$old_enabled" != "false" ]]; then
     echo "FIN_TERMINAL_BROWSER_ENABLED must be true or false" >&2
     exit 1
+fi
+if [[ "$old_enabled" == "true" ]]; then
+    old_mcp_container="$(docker compose "${compose_args[@]}" ps -q fin-terminal-browser-mcp)"
+    if [[ -z "$old_mcp_container" ]]; then
+        echo "enabled canary has no running MCP sidecar to snapshot" >&2
+        exit 1
+    fi
+    old_mcp_image_ref="$(docker inspect --format '{{.Config.Image}}' "$old_mcp_container" 2>/dev/null || true)"
+    old_mcp_image_id="$(docker inspect --format '{{.Image}}' "$old_mcp_container" 2>/dev/null || true)"
+    if [[ -z "$old_mcp_image_ref" || -z "$old_mcp_image_id" ]]; then
+        echo "could not snapshot the running MCP sidecar image" >&2
+        exit 1
+    fi
 fi
 
 set_env_value FIN_TERMINAL_BROWSER_IMAGE "$image"
@@ -229,6 +309,7 @@ else
 fi
 
 status="$(wait_for_public_status)"
+authenticated_status="$(wait_for_authenticated_status)"
 
 completed=true
-echo "browser-terminal canary enabled; unauthenticated probe returned HTTP $status"
+echo "browser-terminal canary enabled; unauthenticated probe returned HTTP $status; authenticated probe returned HTTP $authenticated_status"

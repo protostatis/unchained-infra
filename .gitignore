@@ -39,3 +39,6 @@ rhythm/
 .env
 .env.*
 !.env.*.example
+
+# Deployment runtime lock
+.deploy.lock
