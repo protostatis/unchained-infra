@@ -150,12 +150,30 @@ Confirm both services are healthy, then set
 `FIN_TERMINAL_BROWSER_ENABLED=true` in the host `.env` and recreate Caddy with
 the same two Compose files. Roll back by setting the flag to `false` and
 recreating Caddy; the Pi `/fin-terminal/` route is unchanged throughout the
-canary.
+canary. The protected activation workflow additionally refuses a dirty or stale
+host infra worktree and requires a dedicated approved-account cookie smoke
+before completing activation.
 
-The browser route uses the same `web:8080/internal/fin-terminal/auth`
-allowlist gate, strips client identity/API credentials, and injects only the
-browser canary proxy token. It has no WebSocket path and the browser broker
-must never receive `OPENROUTER_API_KEY` or an account cookie.
+The browser route uses the dedicated `web:8080/internal/fin-terminal/browser-auth`
+gate. Any approved signed-in UnchainedSky account is admitted; pending or
+rejected accounts and sessions without a stable user ID are denied. The
+principal is derived from that stable user ID, not the user's email. Caddy
+strips client identity/API credentials and injects only the browser canary
+proxy token. It has no WebSocket path and the browser broker must never receive
+`OPENROUTER_API_KEY` or an account cookie.
+
+The browser service also persists a daily provider-budget ledger under `/data`.
+Its JSON ledger uses a SQLite sidecar transaction lock so overlapping broker
+processes cannot lose reservations.
+By default, each account may make 40 research requests and 5 screenshot imports
+per UTC day, while the canary reserves no more than $25 of estimated provider
+cost globally. The `FIN_TERMINAL_BROWSER_*` overrides in the Compose overlay may
+lower or raise these reviewed limits; provider-side spend limits remain required.
+The protected activation workflow also requires the
+`FIN_TERMINAL_BROWSER_SMOKE_COOKIE` production secret for a dedicated approved
+test account. It must see both the expected logged-out `401` and an authenticated
+`200` before the route is considered enabled; the cookie is copied to the host
+only for the smoke check and then removed.
 
 ## Market-event scout (singleton-only guarded dispatch)
 

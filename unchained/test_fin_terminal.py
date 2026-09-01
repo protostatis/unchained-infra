@@ -68,6 +68,45 @@ class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(auth_info["user_id"], principal)
         self.assertNotIn(auth_info["email"].lower(), principal)
 
+    async def test_browser_auth_allows_any_approved_signed_in_user(self):
+        auth_info = {
+            "user_id": "u-unlisted-but-approved",
+            "status": "approved",
+        }
+
+        with patch.object(fin_terminal, "_core", return_value=self._core(auth_info)):
+            response = await fin_terminal.handle_fin_terminal_browser_auth(_Request())
+
+        self.assertEqual(response.status, 204)
+        self.assertRegex(response.headers["X-Fin-Terminal-User"], r"^ft-[0-9a-f]{32}$")
+
+    async def test_browser_auth_requires_an_approved_account_and_stable_id(self):
+        for auth_info in (
+            {"email": "member@example.net", "status": "approved"},
+            {"user_id": "u-pending", "email": "member@example.net", "status": "pending"},
+        ):
+            with patch.object(fin_terminal, "_core", return_value=self._core(auth_info)):
+                response = await fin_terminal.handle_fin_terminal_browser_auth(_Request())
+            self.assertEqual(response.status, 403)
+
+    async def test_browser_principal_is_stable_and_pi_allowlist_remains_separate(self):
+        first = {"user_id": "u-stable", "email": "first@example.net", "status": "approved"}
+        renamed = {"user_id": "u-stable", "email": "renamed@example.net", "status": "approved"}
+        other = {"user_id": "u-other", "email": "other@example.net", "status": "approved"}
+
+        principals = []
+        for auth_info in (first, renamed, other):
+            with patch.object(fin_terminal, "_core", return_value=self._core(auth_info)):
+                response = await fin_terminal.handle_fin_terminal_browser_auth(_Request())
+            self.assertEqual(response.status, 204)
+            principals.append(response.headers["X-Fin-Terminal-User"])
+
+        self.assertEqual(principals[0], principals[1])
+        self.assertNotEqual(principals[0], principals[2])
+        with patch.object(fin_terminal, "_core", return_value=self._core(first)):
+            pi_response = await fin_terminal.handle_fin_terminal_auth(_Request())
+        self.assertEqual(pi_response.status, 403)
+
 
 class CaddyConfigPreflightTests(unittest.TestCase):
     deployment_id = "a" * 24
@@ -384,11 +423,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.caddy_preflight = cls.repo_root.joinpath(
             "deploy", "caddy_config_preflight.sh"
         ).read_text()
+        cls.browser_activation = cls.repo_root.joinpath(
+            "deploy", "activate_browser_terminal_canary.sh"
+        ).read_text()
         cls.browser_canary_preflight = cls.repo_root.joinpath(
             "deploy", "browser_terminal_canary_preflight.sh"
         ).read_text()
         cls.workflow = cls.repo_root.joinpath(
             ".github", "workflows", "ci.yml"
+        ).read_text()
+        cls.browser_activation_workflow = cls.repo_root.joinpath(
+            ".github", "workflows", "activate-browser-terminal.yml"
         ).read_text()
         cls.route_doc = cls.repo_root.joinpath(
             "docs", "fin-terminal-route.md"
@@ -408,6 +453,14 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn("handle /internal/*", self.caddy)
         self.assertIn('respond "Not found" 404', self.caddy)
+        self.assertIn(
+            (
+                "GET",
+                "/internal/fin-terminal/browser-auth",
+                "web_app.handlers.fin_terminal:handle_fin_terminal_browser_auth",
+            ),
+            ROUTE_SPECS,
+        )
 
     def test_caddy_strips_client_headers_then_runs_forward_auth(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
@@ -441,6 +494,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", route)
         self.assertIn("uri strip_prefix /fin-terminal-browser", route)
         self.assertIn("forward_auth web:8080", route)
+        self.assertIn("uri /internal/fin-terminal/browser-auth", route)
         self.assertIn("reverse_proxy fin-terminal-browser:8787", route)
         self.assertIn(
             "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}",
@@ -449,6 +503,20 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         for header in ("X-Fin-Terminal-User", "X-Fin-Terminal-Proxy-Token", "Cookie", "Authorization", "Proxy-Authorization"):
             self.assertIn(f"request_header -{header}", route)
         self.assertNotIn("reverse_proxy fin-terminal-workspace-control", route)
+
+    def test_browser_activation_requires_both_auth_smoke_and_host_revision(self):
+        self.assertIn("401)", self.browser_activation)
+        self.assertIn('"$status" == "403"', self.browser_activation)
+        self.assertIn("wait_for_authenticated_status", self.browser_activation)
+        self.assertIn("/api/browser/v1/session", self.browser_activation)
+        self.assertIn("host deployment worktree is not at the reviewed infra revision", self.browser_activation)
+        self.assertIn("old_mcp_image_ref", self.browser_activation)
+        self.assertIn("old_mcp_image_id", self.browser_activation)
+        self.assertIn("--force-recreate fin-terminal-browser-mcp", self.browser_activation)
+        self.assertIn("EXPECTED_INFRA_SHA", self.browser_activation)
+        self.assertIn("FIN_TERMINAL_BROWSER_SMOKE_COOKIE", self.browser_activation_workflow)
+        self.assertIn("'$GITHUB_SHA'", self.browser_activation_workflow)
+        self.assertIn("remote_cookie_path=\"/tmp/unchained-browser-canary-smoke-cookie\"", self.browser_activation_workflow)
 
     def test_caddy_runtime_is_pinned_and_force_recreated(self):
         self.assertIn(

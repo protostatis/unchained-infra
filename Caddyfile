@@ -235,8 +235,10 @@ unbrowser.unchainedsky.com {
 			request_header -X-Fin-Terminal-Control-Token
 			request_header -Authorization
 			request_header -Proxy-Authorization
+			# Browser-owned terminal access is for every approved signed-in account;
+			# the legacy Pi singleton keeps its separate allowlist endpoint below.
 			forward_auth web:8080 {
-				uri /internal/fin-terminal/auth
+				uri /internal/fin-terminal/browser-auth
 				copy_headers X-Fin-Terminal-User
 			}
 			# Browser credentials are only for forward_auth. The broker receives
