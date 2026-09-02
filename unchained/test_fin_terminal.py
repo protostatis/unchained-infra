@@ -509,7 +509,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"$status" == "403"', self.browser_activation)
         self.assertIn("wait_for_authenticated_status", self.browser_activation)
         self.assertIn("/api/browser/v1/session", self.browser_activation)
-        self.assertIn("host deployment worktree is not at the reviewed infra revision", self.browser_activation)
+        self.assertIn("validate_deployed_release_identity", self.browser_activation)
+        self.assertIn("deployed release revision does not match", self.browser_activation)
+        self.assertIn("O_NOFOLLOW", self.browser_activation)
         self.assertIn("old_mcp_image_ref", self.browser_activation)
         self.assertIn("old_mcp_image_id", self.browser_activation)
         self.assertIn("--force-recreate fin-terminal-browser-mcp", self.browser_activation)
@@ -1065,6 +1067,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn('rm -f -- "$remote_dir/.deploy-current"', self.deploy)
+        self.assertIn('chmod 600 "$tmp"', self.deploy)
         metadata_index = self.deploy.rindex("write_deploy_metadata\n")
         committed_index = self.deploy.index("DEPLOY_SUCCEEDED=true", metadata_index)
         release_index = self.deploy.index(
@@ -1142,6 +1145,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
         self.assertLess(health_call, preflight_call)
         self.assertLess(preflight_call, metadata_call)
+
         self.assertIn("verify_market_scout_preflight", self.deploy)
         self.assertIn("_resolve_fin_terminal_container", self.deploy)
 
@@ -1213,6 +1217,106 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "\n  fin-terminal-workspace-unbrowser-mcp:\n", 1
         )[1].split("\nvolumes:\n", 1)[0]
         self.assertNotIn("MARKET_SCOUT_ENABLED", ws_mcp)
+
+
+class BrowserActivationReleaseIdentityTests(unittest.TestCase):
+    """Exercise the activation guard without touching Docker or production."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo_root = Path(__file__).resolve().parents[1]
+        cls.script = cls.repo_root / "deploy" / "activate_browser_terminal_canary.sh"
+        cls.expected_sha = "a" * 40
+        cls.valid_metadata = (
+            f"revision={cls.expected_sha}\n"
+            "deploy_id=" + "b" * 24 + "\n"
+            "deployed_at=2026-09-02T00:00:00Z\n"
+        )
+
+    def _run(self, metadata=None, *, symlink=False, directory=False, mode=0o600):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            remote_dir = Path(temp_dir)
+            mock_bin = remote_dir / "bin"
+            mock_bin.mkdir()
+            flock = mock_bin / "flock"
+            flock.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            flock.chmod(0o755)
+            cookie = remote_dir / "cookie"
+            cookie.write_text("uc_session=fixture\n", encoding="utf-8")
+            cookie.chmod(0o600)
+            marker = remote_dir / ".deploy-current"
+            if directory:
+                marker.mkdir()
+            elif symlink:
+                target = remote_dir / "marker-target"
+                target.write_text(metadata or self.valid_metadata, encoding="utf-8")
+                target.chmod(mode)
+                marker.symlink_to(target)
+            elif metadata is not None:
+                marker.write_text(metadata, encoding="utf-8")
+                marker.chmod(mode)
+            return subprocess.run(
+                [
+                    "bash",
+                    str(self.script),
+                    str(remote_dir),
+                    "ghcr.io/example/browser@sha256:" + "c" * 64,
+                    "https://example.test/fin-terminal-browser/",
+                    str(cookie),
+                    self.expected_sha,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(remote_dir),
+                env={
+                    **os.environ,
+                    "PATH": f"{mock_bin}:{os.environ.get('PATH', '')}",
+                },
+            )
+
+    def test_valid_marker_passes_release_identity_guard(self):
+        result = self._run(self.valid_metadata)
+        output = result.stdout + result.stderr
+        self.assertNotIn("deployed release metadata", output)
+        self.assertNotIn("does not match", output)
+        self.assertNotIn("host deployment worktree", output)
+
+    def test_release_identity_guard_rejects_unsafe_or_invalid_markers(self):
+        cases = (
+            (None, {}, "deployed release metadata is missing or unsafe"),
+            (self.valid_metadata, {"symlink": True}, "missing or unsafe"),
+            (self.valid_metadata, {"directory": True}, "not a regular file"),
+            (self.valid_metadata + "x" * 1024, {}, "too large"),
+            (self.valid_metadata, {"mode": 0o644}, "mode 0600"),
+            (
+                self.valid_metadata.replace(
+                    "deployed_at=", "revision=" + "d" * 40 + "\ndeployed_at="
+                ),
+                {},
+                "duplicate field",
+            ),
+            (self.valid_metadata + "extra=value\n", {}, "unknown field"),
+            (
+                self.valid_metadata.replace(
+                    "revision=" + self.expected_sha, "revision=bad"
+                ),
+                {},
+                "lowercase Git SHA",
+            ),
+            (
+                self.valid_metadata.replace(
+                    "revision=" + self.expected_sha, "revision=" + "e" * 40
+                ),
+                {},
+                "does not match",
+            ),
+        )
+        for metadata, options, expected in cases:
+            with self.subTest(expected=expected):
+                result = self._run(metadata, **options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
