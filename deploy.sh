@@ -1277,6 +1277,7 @@ deploy_id="$3"
 tmp="$remote_dir/.deploy-current.tmp"
 printf 'revision=%s\ndeploy_id=%s\ndeployed_at=%s\n' \
     "$revision" "$deploy_id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+chmod 600 "$tmp"
 mv "$tmp" "$remote_dir/.deploy-current"
 EOF
 }

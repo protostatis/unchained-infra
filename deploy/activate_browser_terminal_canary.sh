@@ -55,19 +55,83 @@ if ! flock -n 9; then
     exit 75
 fi
 
-host_infra_sha="$(git -C "$remote_dir" rev-parse HEAD 2>/dev/null || true)"
-[[ "$host_infra_sha" == "$expected_infra_sha" ]] || {
-    echo "host deployment worktree is not at the reviewed infra revision" >&2
-    echo "expected: $expected_infra_sha" >&2
-    echo "actual:   ${host_infra_sha:-unavailable}" >&2
-    exit 1
+validate_deployed_release_identity() {
+    REMOTE_DIR="$remote_dir" EXPECTED_INFRA_SHA="$expected_infra_sha" python3 - <<'PY'
+import datetime as dt
+import os
+import re
+import stat
+import sys
+
+path = os.path.join(os.environ["REMOTE_DIR"], ".deploy-current")
+expected = os.environ["EXPECTED_INFRA_SHA"]
+maximum_size = 1024
+
+
+def fail(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+except OSError:
+    fail("deployed release metadata is missing or unsafe")
+
+try:
+    metadata_stat = os.fstat(fd)
+    if not stat.S_ISREG(metadata_stat.st_mode):
+        fail("deployed release metadata is not a regular file")
+    if metadata_stat.st_uid != os.geteuid():
+        fail("deployed release metadata is not owned by the activation user")
+    if stat.S_IMODE(metadata_stat.st_mode) != 0o600:
+        fail("deployed release metadata must have mode 0600")
+    raw = os.read(fd, maximum_size + 1)
+finally:
+    os.close(fd)
+
+if len(raw) > maximum_size:
+    fail("deployed release metadata is too large")
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    fail("deployed release metadata is not valid UTF-8")
+if "\r" in text or not text.endswith("\n"):
+    fail("deployed release metadata has an invalid line ending")
+
+lines = text[:-1].split("\n")
+fields = {}
+for line in lines:
+    if not line or line.count("=") != 1:
+        fail("deployed release metadata contains an invalid field")
+    name, value = line.split("=", 1)
+    if name not in {"revision", "deploy_id", "deployed_at"}:
+        fail(f"deployed release metadata contains an unknown field: {name}")
+    if name in fields:
+        fail(f"deployed release metadata contains a duplicate field: {name}")
+    fields[name] = value
+
+if set(fields) != {"revision", "deploy_id", "deployed_at"}:
+    fail("deployed release metadata is missing a required field")
+if not re.fullmatch(r"[0-9a-f]{40}", fields["revision"]):
+    fail("deployed release metadata revision is not a lowercase Git SHA")
+if not re.fullmatch(r"[0-9a-f]{24}", fields["deploy_id"]):
+    fail("deployed release metadata deploy_id is not valid")
+if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", fields["deployed_at"]):
+    fail("deployed release metadata timestamp is not UTC")
+try:
+    dt.datetime.strptime(fields["deployed_at"], "%Y-%m-%dT%H:%M:%SZ")
+except ValueError:
+    fail("deployed release metadata timestamp is invalid")
+if fields["revision"] != expected:
+    fail(
+        "deployed release revision does not match the reviewed infra revision "
+        f"(expected {expected}, actual {fields['revision']})"
+    )
+PY
 }
-host_infra_status="$(git -C "$remote_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)"
-[[ -z "$host_infra_status" ]] || {
-    echo "host deployment worktree is dirty; refusing to mix reviewed and local infra files" >&2
-    printf '%s\n' "$host_infra_status" >&2
-    exit 1
-}
+
+validate_deployed_release_identity
 [[ -f "$env_file" && ! -L "$env_file" ]] || {
     echo "production .env is missing or symlinked" >&2
     exit 1
