@@ -18888,9 +18888,10 @@ body.first-look-canvas .install-nudge{border-radius:14px!important;background:rg
   body.first-look-canvas #live-window-bar{top:10px;left:10px;right:10px;height:34px}
   body.first-look-canvas #url-bar{top:44px;left:10px;right:10px}
   body.first-look-canvas #live-canvas-wrap{inset:72px 10px 10px 10px;border-radius:0 0 18px 18px!important}
-  body.first-look-canvas #chat-pane{left:10px;right:10px;top:auto;bottom:10px;width:auto;height:44dvh;min-height:320px;border-radius:22px!important}
-  body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;width:auto;height:auto;min-height:0;border-radius:999px!important}
-  body.first-look-canvas #chat{padding:12px!important;gap:8px!important}
+  body.first-look-canvas #chat-pane{left:10px;right:10px;top:auto;bottom:calc(10px + env(safe-area-inset-bottom));width:auto;height:44vh;height:44dvh;max-height:420px;max-height:min(420px,calc(100vh - 84px));max-height:min(420px,calc(100dvh - 84px));min-height:0!important;flex:none!important;border-radius:22px!important;overflow:hidden!important}
+  body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;width:auto;height:auto;min-height:0;max-height:none;border-radius:999px!important}
+  body.first-look-canvas #chat{min-height:0!important;padding:12px!important;gap:8px!important;overflow-y:auto!important}
+  body.first-look-canvas #inputbar{flex:0 0 auto!important;min-height:0!important}
   body.first-look-canvas #chat-hints{padding:0!important}
   body.first-look-canvas .hint-badge{margin-bottom:8px!important;font-size:10px!important;padding:5px 9px!important}
   body.first-look-canvas .hint-title{font-size:19px!important;margin-bottom:6px!important}
@@ -18910,7 +18911,7 @@ body.first-look-canvas .install-nudge{border-radius:14px!important;background:rg
   body.first-look-canvas #live-window-bar{top:10px}
   body.first-look-canvas #url-bar{top:44px}
   body.first-look-canvas #live-canvas-wrap{inset:72px 10px 10px 10px}
-  body.first-look-canvas #chat-pane{height:46dvh;min-height:320px}
+  body.first-look-canvas #chat-pane{height:46vh;height:46dvh}
   body.first-look-canvas .hint-title{font-size:17px!important}
   body.first-look-canvas .hint-badge{display:none!important}
   body.first-look-canvas .hint-item{min-height:40px!important;padding:8px 10px!important;font-size:12px!important}
@@ -18919,7 +18920,7 @@ body.first-look-canvas .install-nudge{border-radius:14px!important;background:rg
 }
 @media (max-width: 420px){
   body.first-look-canvas #topbar .nav a{padding:5px 8px!important;font-size:10px!important}
-  body.first-look-canvas #chat-pane{height:48dvh;min-height:300px}
+  body.first-look-canvas #chat-pane{height:48vh;height:48dvh}
   body.first-look-canvas .hint-title{display:none!important}
   body.first-look-canvas .hint-item:nth-child(3){display:none!important}
 }
@@ -21558,6 +21559,9 @@ let agentShellBrowserReady = false;
 let agentShellChatReady = false;
 let agentShellTurnActive = false;
 let agentShellBrowserUsedThisTurn = false;
+let agentShellTurnHasText = false;
+let agentViewManualLayoutRevision = 0;
+let agentViewResponseManualRevision = 0;
 let agentViewReturnFocus = null;
 
 function agentShellModeFromLocation() {
@@ -22923,6 +22927,7 @@ function startAgentViewSocket() {
 
 function openAgentView(options) {
   options = options || {};
+  if (!options.system) agentViewManualLayoutRevision++;
   const alreadyOpen = document.body.classList.contains('agent-view-open');
   if (!alreadyOpen) {
     resetAgentViewSemanticRecovery();
@@ -22949,6 +22954,7 @@ function openAgentView(options) {
 }
 
 function toggleAgentViewChat(forceOpen) {
+  agentViewManualLayoutRevision++;
   const open = typeof forceOpen === 'boolean'
     ? forceOpen
     : agentViewChatSurface !== 'chat';
@@ -23029,18 +23035,22 @@ function setAgentViewChatState(mode, surface) {
 }
 
 function expandAgentViewChat() {
+  agentViewManualLayoutRevision++;
   setAgentViewChatState('fullscreen', 'chat');
 }
 
 function exitAgentViewFullscreen() {
+  agentViewManualLayoutRevision++;
   setAgentViewChatState('docked', 'chat');
 }
 
 function minimizeAgentViewChat() {
+  agentViewManualLayoutRevision++;
   setAgentViewChatState('minimized', 'browser');
 }
 
 function restoreAgentViewChat() {
+  agentViewManualLayoutRevision++;
   setAgentViewChatState('docked', 'chat');
 }
 
@@ -23049,25 +23059,40 @@ function beginAgentViewResponseTurn() {
   agentViewResponseRevealDone = false;
   agentShellTurnActive = true;
   agentShellBrowserUsedThisTurn = false;
+  agentShellTurnHasText = false;
+  agentViewResponseManualRevision = agentViewManualLayoutRevision;
   document.body.classList.remove('agent-shell-text-turn');
   if (agentShellTaskEnabled) {
     setAgentShellPhase('planning', 'Understanding your task');
   }
 }
 
-function maybeRevealAgentResponse() {
+function maybeRevealAgentResponse(outcome) {
   if (!agentViewResponseRevealPending || agentViewResponseRevealDone) return;
+  // Task-shell layout is committed only after the ordered stream reaches a
+  // terminal event. Text can arrive before a browser tool, so revealing here
+  // would produce a fullscreen -> browser flash on mobile.
+  if (agentShellTaskEnabled && agentShellTurnActive) return;
   if (!_agentViewIsMobile() || !document.body.classList.contains('agent-view-open')) return;
+  if (agentShellTaskEnabled && agentViewManualLayoutRevision !== agentViewResponseManualRevision) {
+    agentViewResponseRevealDone = true;
+    return;
+  }
   if (agentViewChatMode === 'minimized') {
     agentViewResponseRevealDone = true;
     return;
   }
   agentViewResponseRevealDone = true;
+  if (agentShellTaskEnabled && outcome && outcome !== 'done') {
+    setAgentViewChatState('docked', 'chat');
+    return;
+  }
   if (agentShellTaskEnabled && agentViewChatMode === 'fullscreen') {
     if (!agentShellBrowserUsedThisTurn) document.body.classList.add('agent-shell-text-turn');
     return;
   }
   if (agentShellTaskEnabled && !agentShellBrowserUsedThisTurn) {
+    if (!agentShellTurnHasText) return;
     document.body.classList.add('agent-shell-text-turn');
     setAgentViewChatState('fullscreen', 'chat');
     return;
@@ -23077,6 +23102,7 @@ function maybeRevealAgentResponse() {
 
 function closeAgentView(options) {
   options = options || {};
+  if (!options.system) agentViewManualLayoutRevision++;
   document.body.classList.remove('agent-view-open');
   document.body.classList.remove('agent-shell-history-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
@@ -23156,7 +23182,6 @@ function completeAgentShellTurn(outcome) {
 
 const _agentViewAddUserBubble = addUserBubble;
 addUserBubble = function() {
-  if (typeof sending !== 'undefined' && sending) beginAgentViewResponseTurn();
   return _agentViewAddUserBubble.apply(this, arguments);
 };
 
@@ -23164,13 +23189,9 @@ const _agentViewAppendText = appendText;
 appendText = function() {
   const result = _agentViewAppendText.apply(this, arguments);
   if (agentShellTaskEnabled && agentShellTurnActive) {
+    agentShellTurnHasText = true;
     setAgentShellPhase('writing', agentShellBrowserUsedThisTurn ? 'Preparing the result' : 'Writing an answer');
-    if (!agentShellBrowserUsedThisTurn && document.body.classList.contains('agent-view-open')) {
-      document.body.classList.add('agent-shell-text-turn');
-      setAgentViewChatState('fullscreen', 'chat');
-    }
   }
-  maybeRevealAgentResponse();
   return result;
 };
 
@@ -23515,24 +23536,40 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
             )
         replacements = [
             TemplateReplacement(
+                "  sending = true;\n",
+                "  sending = true;\n  beginAgentViewResponseTurn();\n",
+                "agent view response turn start",
+            ),
+            TemplateReplacement(
                 "  if (BROWSER_TOOLS.has(name)) {",
                 "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity(name);",
                 "agent view auto-open on browser activity",
             ),
             TemplateReplacement(
-                "          } else if (evt.type === 'done') {\n",
-                "          } else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();\n",
-                "agent view tool-only response reveal",
+                "            appendText(bubble, 'Error: ' + evt.data);\n",
+                "            appendText(bubble, 'Error: ' + evt.data);\n"
+                "            if (typeof chatReconnectPrimaryEventRendered === 'function') {\n"
+                "              chatReconnectPrimaryEventRendered(evt);\n"
+                "            } else {\n"
+                "              completeAgentShellTurn('error');\n"
+                "              maybeRevealAgentResponse('error');\n"
+                "            }\n",
+                "agent task ordered error completion",
             ),
             TemplateReplacement(
-                "          } else if (evt.type === 'cancelled') {\n",
-                "          } else if (evt.type === 'cancelled') {\n            completeAgentShellTurn('cancelled');\n",
-                "agent task shell cancellation completion",
-            ),
-            TemplateReplacement(
-                "          } else if (evt.type === 'error') {\n",
-                "          } else if (evt.type === 'error') {\n            completeAgentShellTurn('error');\n",
-                "agent task shell error completion",
+                "          }\n        }\n      }\n    }\n  } catch(e) {",
+                "          }\n"
+                "          if (typeof chatReconnectPrimaryEventRendered === 'function') {\n"
+                "            chatReconnectPrimaryEventRendered(evt);\n"
+                "          } else if (evt.type === 'done') {\n"
+                "            completeAgentShellTurn();\n"
+                "            maybeRevealAgentResponse('done');\n"
+                "          } else if (evt.type === 'cancelled') {\n"
+                "            completeAgentShellTurn('cancelled');\n"
+                "            maybeRevealAgentResponse('cancelled');\n"
+                "          }\n"
+                "        }\n      }\n    }\n  } catch(e) {",
+                "agent task ordered primary event acknowledgement",
             ),
             TemplateReplacement(
                 "  } catch(e) {\n    const thinking = bubble.querySelector('.thinking');",

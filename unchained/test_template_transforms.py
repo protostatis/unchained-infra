@@ -169,7 +169,7 @@ class TestTemplateTransforms(unittest.TestCase):
                     1,
                 )
                 self.assertIn("function setAgentViewChatState(mode, surface)", html)
-                self.assertIn("function maybeRevealAgentResponse()", html)
+                self.assertIn("function maybeRevealAgentResponse(outcome)", html)
                 self.assertIn("beginAgentViewResponseTurn()", html)
                 self.assertIn(
                     "if (agentViewChatMode === 'fullscreen') { exitAgentViewFullscreen(); return; }",
@@ -292,7 +292,7 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("agentViewResponseRevealDone = true;\n    return;", runtime)
         self.assertIn("setAgentViewChatState('docked', 'chat');", runtime)
         self.assertIn(
-            "} else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();",
+            "chatReconnectPrimaryEventRendered(evt);",
             templates.CHAT_CODEX_HTML,
         )
 
@@ -682,13 +682,30 @@ expect(!body.classList.contains('agent-shell-chat-only'), 'Connected shell incor
 
 beginAgentViewResponseTurn();
 appendText({}, 'text-only answer');
-expect(body.classList.contains('agent-view-chat-expanded'), 'Text-only Auto turn did not expand chat');
-ensureAgentViewForBrowserActivity('ddm');
-expect(body.classList.contains('agent-view-chat-expanded'), 'Non-navigation work collapsed fullscreen chat');
-expect(agentShellBrowserUsedThisTurn, 'Non-navigation work was not tracked as browser activity');
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Text chunk expanded chat before turn completion');
+expect(agentShellTurnHasText, 'Text chunk was not recorded for the active turn');
 ensureAgentViewForBrowserActivity('navigate');
-expect(!body.classList.contains('agent-view-chat-expanded'), 'Navigation did not restore the browser surface');
-expect(!body.classList.contains('agent-view-chat-open'), 'Mobile navigation left the chat surface open');
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Navigation exposed a transient fullscreen chat');
+expect(!body.classList.contains('agent-view-chat-open'), 'Navigation left the chat surface open');
+completeAgentShellTurn();
+maybeRevealAgentResponse('done');
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Browser turn unexpectedly expanded chat at completion');
+ensureAgentViewForBrowserActivity('ddm');
+expect(agentShellBrowserUsedThisTurn, 'Non-navigation work was not tracked as browser activity');
+
+beginAgentViewResponseTurn();
+appendText({}, 'text-only answer');
+completeAgentShellTurn();
+maybeRevealAgentResponse('done');
+expect(body.classList.contains('agent-view-chat-expanded'), 'Completed text-only turn did not expand chat');
+
+minimizeAgentViewChat();
+beginAgentViewResponseTurn();
+appendText({}, 'manual layout answer');
+completeAgentShellTurn();
+maybeRevealAgentResponse('done');
+expect(body.classList.contains('chat-minimized'), 'Terminal reveal overrode explicit minimize');
+restoreAgentViewChat();
 
 expandAgentViewChat();
 beginAgentViewResponseTurn();
@@ -1119,6 +1136,29 @@ if (!select.options.some(option => option.value === select.value)) {
         )
         self.assertIn("install and sign in to that CLI separately", templates.INSTALL_ONBOARD_HTML)
 
+    def test_first_look_mobile_chat_pane_is_bounded_bottom_sheet(self):
+        from web_app import templates
+
+        html = templates.FIRST_LOOK_PREVIEW_HTML
+        self.assertIn(
+            "body.first-look-canvas #chat-pane{left:10px;right:10px;top:auto;"
+            "bottom:calc(10px + env(safe-area-inset-bottom));width:auto;"
+            "height:44vh;height:44dvh;max-height:420px;"
+            "max-height:min(420px,calc(100vh - 84px));"
+            "max-height:min(420px,calc(100dvh - 84px));min-height:0!important;"
+            "flex:none!important;",
+            html,
+        )
+        self.assertIn(
+            "body.first-look-canvas #chat{min-height:0!important;",
+            html,
+        )
+        self.assertIn(
+            "body.first-look-canvas #inputbar{flex:0 0 auto!important;min-height:0!important}",
+            html,
+        )
+        self.assertNotIn("height:48dvh;min-height:300px", html)
+
     def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
         from web_app import templates
 
@@ -1211,6 +1251,11 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("headers.set('X-Request-ID', reqId)", asset)
         self.assertIn("preserveRejectedDraft();", asset)
         self.assertIn("finishTurn('error', false);", asset)
+        self.assertIn("observedSeq", asset)
+        self.assertIn("window.chatReconnectPrimaryEventRendered", asset)
+        monitor = asset[asset.index("function monitorNormalStream") : asset.index("// The primary POST stream")]
+        self.assertIn("observeNormalEvent(evt)", monitor)
+        self.assertNotIn("finishTurn(", monitor)
         self.assertNotIn("else setTimeout(reconcileTurn, 0);", asset)
         mismatch = asset[asset.index("if (data.req_id && data.req_id !== reconnect.reqId)") :]
         mismatch = mismatch[:mismatch.index("updateActivity(data);")]
@@ -1220,6 +1265,115 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertNotIn("localStorage", asset)
         self.assertNotIn("unchained_chat_active_turn_v1", asset)
         self.assertNotIn("<script", asset)
+
+    def test_signed_reconnect_monitor_waits_for_primary_terminal_ack(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for reconnect runtime checks")
+
+        asset = (
+            Path(__file__).with_name("web_app")
+            / "static"
+            / "signed-chat-reconnect.js"
+        ).read_text(encoding="utf-8")
+        harness = r"""
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  add(...values) { values.forEach(value => this.values.add(value)); }
+  remove(...values) { values.forEach(value => this.values.delete(value)); }
+  contains(value) { return this.values.has(value); }
+  toggle(value, force) {
+    const enabled = typeof force === 'boolean' ? force : !this.values.has(value);
+    if (enabled) this.values.add(value); else this.values.delete(value);
+    return enabled;
+  }
+}
+const body = {classList: new FakeClassList()};
+const elements = new Map();
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {
+    id,
+    classList: new FakeClassList(),
+    style: {},
+    textContent: '',
+    setAttribute() {},
+  });
+  return elements.get(id);
+}
+globalThis.document = {
+  body,
+  head: {appendChild() {}},
+  createElement() { return {textContent: ''}; },
+  getElementById(id) { return element(id); },
+  querySelectorAll() { return []; },
+};
+globalThis.window = {
+  crypto: {randomUUID() { return 'req-primary'; }},
+  location: {href: 'https://example.test/workspace'},
+};
+let sessionId = 'session-primary';
+let sending = false;
+let finishCount = 0;
+let revealedOutcomes = [];
+function addAsstBubble() { return {dataset: {}, isConnected: true}; }
+function setAgentViewState() {}
+function setAgentShellPhase() {}
+function completeAgentShellTurn() {}
+function maybeRevealAgentResponse(outcome) { revealedOutcomes.push(outcome); }
+function _finalizeGroup() {}
+function renderNavTrail() {}
+function showClaudeUpgradeCard() {}
+function maybeShowUpgrade() {}
+function expect(condition, message) { if (!condition) throw new Error('FAIL: ' + message); }
+const eventPayloads = [
+  {seq: 1, type: 'tool_start', name: 'navigate', input: 'https://example.test'},
+  {seq: 2, type: 'done'},
+];
+function eventBody() {
+  const chunks = [eventPayloads.map(evt => 'id: ' + evt.seq + '\ndata: ' + JSON.stringify(evt) + '\n\n') .join('')];
+  let index = 0;
+  return {getReader() { return {async read() {
+    if (index < chunks.length) return {done: false, value: Buffer.from(chunks[index++])};
+    return {done: true, value: undefined};
+  }}; }};
+}
+globalThis.window.fetch = async function() {
+  return {
+    ok: true,
+    body: eventBody(),
+    clone() { return {body: eventBody()}; },
+  };
+};
+"""
+        checks = r"""
+(async function() {
+  await window.chatReconnectFetch('/web/chat', {
+    method: 'POST',
+    body: JSON.stringify({session_id: sessionId, message: 'test'}),
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(finishCount === 0, 'normal-stream monitor finished before primary rendering');
+
+  window.chatReconnectPrimaryEventRendered(eventPayloads[0]);
+  expect(finishCount === 0, 'non-terminal primary event finished the turn');
+  window.chatReconnectPrimaryEventRendered(eventPayloads[1]);
+  expect(finishCount === 1, 'primary terminal acknowledgement did not finish the turn');
+})().catch(error => { console.error(error.stack || error); process.exit(1); });
+"""
+        # Keep the harness intentionally focused on the ownership boundary;
+        # layout behavior is covered by the Agent View runtime test above.
+        source = asset.replace(
+            "function finishTurn(outcome, terminal) {",
+            "function finishTurn(outcome, terminal) {\n    finishCount++;",
+            1,
+        )
+        result = subprocess.run(
+            [node],
+            input=harness + source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
         from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script
