@@ -6,7 +6,11 @@
     bubble: null,
     eventsController: null,
     historyLoads: 0,
+    // lastSeq is the last event rendered by the ordered renderer. The normal
+    // stream monitor has a separate cursor so observing an event cannot make
+    // a later reconnect skip an event the primary renderer has not rendered.
     lastSeq: 0,
+    observedSeq: 0,
     normalMonitor: false,
     openTools: [],
     pendingStepIds: [],
@@ -16,7 +20,6 @@
     retry: 0,
     retryTimer: null,
     restoring: false,
-    seenSeq: new Set(),
     sessionId: '',
     steps: new Map(),
     unboundTools: [],
@@ -73,15 +76,28 @@
     }
   }
 
-  function rememberEvent(evt) {
+  function eventSeq(evt) {
     const seq = Number(evt && evt.seq);
-    if (!Number.isFinite(seq) || seq <= 0) return true;
-    if (reconnect.seenSeq.has(seq) || seq <= reconnect.lastSeq) return false;
-    reconnect.seenSeq.add(seq);
-    reconnect.lastSeq = seq;
-    if (reconnect.seenSeq.size > 512) {
-      reconnect.seenSeq.delete(reconnect.seenSeq.values().next().value);
-    }
+    return Number.isFinite(seq) && seq > 0 ? seq : 0;
+  }
+
+  function alreadyRendered(evt) {
+    const seq = eventSeq(evt);
+    return !!seq && seq <= reconnect.lastSeq;
+  }
+
+  function markRendered(evt) {
+    const seq = eventSeq(evt);
+    if (!seq) return;
+    reconnect.lastSeq = Math.max(reconnect.lastSeq, seq);
+    reconnect.observedSeq = Math.max(reconnect.observedSeq, seq);
+  }
+
+  function observeNormalEvent(evt) {
+    const seq = eventSeq(evt);
+    if (!seq) return true;
+    if (seq <= reconnect.observedSeq) return false;
+    reconnect.observedSeq = seq;
     return true;
   }
 
@@ -194,7 +210,7 @@
     if (outcome === 'done' && typeof showClaudeUpgradeCard === 'function') showClaudeUpgradeCard();
     if (typeof maybeShowUpgrade === 'function') maybeShowUpgrade();
     if (typeof completeAgentShellTurn === 'function') completeAgentShellTurn(outcome);
-    if (typeof maybeRevealAgentResponse === 'function') maybeRevealAgentResponse();
+    if (typeof maybeRevealAgentResponse === 'function') maybeRevealAgentResponse(outcome);
   }
 
   function renderModelForced(evt) {
@@ -223,7 +239,7 @@
     if (!evt || typeof evt !== 'object') return;
     if (evt.seq == null && evt.id != null) evt = Object.assign({}, evt, {seq: evt.id});
     if (evt.req_id && reconnect.reqId && evt.req_id !== reconnect.reqId) return;
-    if (!rememberEvent(evt)) return;
+    if (alreadyRendered(evt)) return;
     reconnect.retry = 0;
     updateActivity(evt);
     const bubble = ensureBubble();
@@ -235,6 +251,7 @@
       } finally {
         reconnect.renderedStepId = '';
       }
+      markRendered(evt);
       return;
     }
     if (evt.type === 'tool_result') {
@@ -244,27 +261,37 @@
       // setToolResult (parseIntelBars(undefined)) and break the replay — that
       // would leave an interrupted turn unrecoverable until a manual refresh.
       if (tool) setToolResult(tool, evt.data == null ? '' : evt.data, !!evt.is_screenshot, evt.visible);
+      markRendered(evt);
       return;
     }
     if (evt.type === 'text') {
       appendText(bubble, String(evt.data || ''));
+      markRendered(evt);
       return;
     }
     if (evt.type === 'model_forced') {
       renderModelForced(evt);
+      markRendered(evt);
       return;
     }
     if (evt.type === 'cancelled') {
       appendText(bubble, '[Cancelled by user]');
+      markRendered(evt);
       finishTurn('cancelled', true);
       return;
     }
     if (evt.type === 'error') {
       appendText(bubble, 'Error: ' + String(evt.data || 'Request failed'));
+      markRendered(evt);
       finishTurn('error', true);
       return;
     }
-    if (evt.type === 'done') finishTurn('done', true);
+    if (evt.type === 'done') {
+      markRendered(evt);
+      finishTurn('done', true);
+      return;
+    }
+    markRendered(evt);
   }
 
   function parseSseBlock(block) {
@@ -368,15 +395,15 @@
       reconnect.sessionId = requestedSession;
       reconnect.reqId = String(data.req_id || '');
       reconnect.lastSeq = Math.max(0, Number(data.first_seq || 1) - 1);
+      reconnect.observedSeq = reconnect.lastSeq;
       reconnect.retry = 0;
-      reconnect.seenSeq.clear();
       resetRenderState();
       setTurnUi(true, String(data.current_action || data.phase || data.status || 'Reconnecting to turn'));
       if (typeof beginAgentViewResponseTurn === 'function') beginAgentViewResponseTurn();
       updateActivity(data);
       const events = Array.isArray(data.events) ? data.events : [];
       for (const evt of events) renderEvent(evt);
-      if (!events.length) reconnect.lastSeq = Math.max(reconnect.lastSeq, Number(data.last_seq) || 0);
+      if (!events.length) reconnect.observedSeq = Math.max(reconnect.observedSeq, Number(data.last_seq) || 0);
       if (isCurrentTurn()) subscribeEvents();
     } catch(e) {
       // Keep the local UI locked until an authoritative response says no turn is active.
@@ -463,10 +490,10 @@
     reconnect.draftMessage = String(body && body.message || '');
     reconnect.eventsController = null;
     reconnect.lastSeq = 0;
+    reconnect.observedSeq = 0;
     reconnect.normalMonitor = true;
     reconnect.reqId = randomRequestId();
     reconnect.retry = 0;
-    reconnect.seenSeq.clear();
     reconnect.sessionId = requestedSession;
     reconnect.steps.clear();
     reconnect.openTools = [];
@@ -480,11 +507,8 @@
     readSse(response.body, function(evt) {
       if (!isCurrentTurn() || reconnect.reqId !== reqId) return;
       if (evt.req_id && evt.req_id !== reqId) return;
-      if (!rememberEvent(evt)) return;
+      if (!observeNormalEvent(evt)) return;
       if (evt.type === 'tool_start') noteNormalToolStart(evt);
-      if (evt.type === 'done') finishTurn('done', true);
-      if (evt.type === 'cancelled') finishTurn('cancelled', true);
-      if (evt.type === 'error') finishTurn('error', true);
     }).catch(function() {}).finally(function() {
       if (isCurrentTurn() && reconnect.reqId === reqId) {
         reconnect.normalMonitor = false;
@@ -492,6 +516,20 @@
       }
     });
   }
+
+  // The primary POST stream is the only owner of ordered rendering and
+  // terminal layout for a normal send. The clone monitor above only observes
+  // the journal so it cannot finish a turn before an earlier tool event has
+  // reached the DOM.
+  window.chatReconnectPrimaryEventRendered = function(evt) {
+    if (!isCurrentTurn()) return;
+    if (evt && evt.req_id && evt.req_id !== reconnect.reqId) return;
+    if (alreadyRendered(evt)) return;
+    markRendered(evt);
+    if (evt && evt.type === 'done') finishTurn('done', true);
+    else if (evt && evt.type === 'cancelled') finishTurn('cancelled', true);
+    else if (evt && evt.type === 'error') finishTurn('error', true);
+  };
 
   const originalAddToolCall = window.addToolCall;
   if (typeof originalAddToolCall === 'function') {
