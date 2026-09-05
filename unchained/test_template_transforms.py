@@ -1157,6 +1157,20 @@ if (!select.options.some(option => option.value === select.value)) {
             "body.first-look-canvas #inputbar{flex:0 0 auto!important;min-height:0!important}",
             html,
         )
+        self.assertIn(
+            "body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;"
+            "width:max-content;max-width:calc(100vw - 20px);height:auto;",
+            html,
+        )
+        self.assertIn(
+            "body.first-look-chat-collapsed .chat-control-btn{padding:11px 15px;"
+            "flex:0 0 auto;white-space:nowrap}",
+            html,
+        )
+        self.assertIn(
+            "body.first-look-chat-collapsed #chat-pane{height:auto!important}",
+            html,
+        )
         self.assertNotIn("height:48dvh;min-height:300px", html)
 
     def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
