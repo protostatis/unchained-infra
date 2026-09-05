@@ -18833,13 +18833,13 @@ body.first-look-canvas #chat-pane{
   outline:none;border-color:rgba(255,107,74,0.6);color:#ffd5cb;background:rgba(255,107,74,0.12);
 }
 body.first-look-chat-collapsed #chat-pane{
-  top:auto;bottom:18px;width:auto;min-height:0;border-radius:999px!important;
+  top:auto;bottom:18px;width:max-content;max-width:calc(100vw - 20px);min-height:0;border-radius:999px!important;
   background:rgba(7,10,15,0.78)!important;
 }
 body.first-look-chat-collapsed #chat,
 body.first-look-chat-collapsed #inputbar{display:none!important}
-body.first-look-chat-collapsed .chat-controls{margin:0;gap:6px}
-body.first-look-chat-collapsed .chat-control-btn{padding:11px 15px}
+body.first-look-chat-collapsed .chat-controls{margin:0;gap:6px;flex:0 0 auto;white-space:nowrap}
+body.first-look-chat-collapsed .chat-control-btn{padding:11px 15px;flex:0 0 auto;white-space:nowrap}
 body.first-look-canvas #chat{padding:22px!important;gap:12px!important}
 body.first-look-canvas #chat-hints{
   height:auto!important;min-height:0!important;align-items:stretch!important;text-align:left!important;
@@ -18889,7 +18889,7 @@ body.first-look-canvas .install-nudge{border-radius:14px!important;background:rg
   body.first-look-canvas #url-bar{top:44px;left:10px;right:10px}
   body.first-look-canvas #live-canvas-wrap{inset:72px 10px 10px 10px;border-radius:0 0 18px 18px!important}
   body.first-look-canvas #chat-pane{left:10px;right:10px;top:auto;bottom:calc(10px + env(safe-area-inset-bottom));width:auto;height:44vh;height:44dvh;max-height:420px;max-height:min(420px,calc(100vh - 84px));max-height:min(420px,calc(100dvh - 84px));min-height:0!important;flex:none!important;border-radius:22px!important;overflow:hidden!important}
-  body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;width:auto;height:auto;min-height:0;max-height:none;border-radius:999px!important}
+  body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;width:max-content;max-width:calc(100vw - 20px);height:auto;min-height:0;max-height:none;border-radius:999px!important}
   body.first-look-canvas #chat{min-height:0!important;padding:12px!important;gap:8px!important;overflow-y:auto!important}
   body.first-look-canvas #inputbar{flex:0 0 auto!important;min-height:0!important}
   body.first-look-canvas #chat-hints{padding:0!important}
@@ -18924,6 +18924,7 @@ body.first-look-canvas .install-nudge{border-radius:14px!important;background:rg
   body.first-look-canvas .hint-title{display:none!important}
   body.first-look-canvas .hint-item:nth-child(3){display:none!important}
 }
+body.first-look-chat-collapsed #chat-pane{height:auto!important}
 </style>"""
 
 
