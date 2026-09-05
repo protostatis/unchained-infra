@@ -1,6 +1,11 @@
-# Financial terminal route
+# Financial terminal routes
 
-The singleton financial terminal is served at:
+The primary authenticated financial terminal is served at:
+
+- `https://unbrowser.unchainedsky.com/fin-terminal-browser/`
+
+The former Pi-backed singleton remains available at the deprecated legacy route
+for rollback and maintenance only:
 
 - `https://unbrowser.unchainedsky.com/fin-terminal/`
 
@@ -109,20 +114,21 @@ When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
 `docker-compose.yml`.
 
-## Browser-owned canary
+## Browser-owned production route
 
-The browser-owned implementation is staged separately at:
+The browser-owned implementation is the primary production target and is
+deployed separately at:
 
 - `https://unbrowser.unchainedsky.com/fin-terminal-browser/`
 
-It is not the production `/fin-terminal/` implementation and must not reuse the
-workspace control-plane service. The optional
+It is the production browser implementation and must not reuse the deprecated
+Pi singleton or the workspace control-plane service. The optional
 `docker-compose.browser-terminal.yml` overlay starts two profiled services:
 
 - `fin-terminal-browser`: a prebuilt `Dockerfile.browser-terminal` image with
   `TERMINAL_RUNTIME_MODE=browser` and a dedicated persistent volume;
-- `fin-terminal-browser-mcp`: a dedicated Unbrowser MCP instance/network so a
-  canary cannot consume the singleton terminal's MCP session pool.
+- `fin-terminal-browser-mcp`: a dedicated Unbrowser MCP instance/network so the
+  browser service cannot consume the singleton terminal's MCP session pool.
 
 The overlay requires `FIN_TERMINAL_BROWSER_IMAGE` to be an immutable image
 reference (`repository@sha256:<64 hex chars>`) and
@@ -149,8 +155,8 @@ session limits; do not change one side without changing the other.
 Confirm both services are healthy, then set
 `FIN_TERMINAL_BROWSER_ENABLED=true` in the host `.env` and recreate Caddy with
 the same two Compose files. Roll back by setting the flag to `false` and
-recreating Caddy; the Pi `/fin-terminal/` route is unchanged throughout the
-canary. The protected activation workflow additionally refuses a dirty or stale
+recreating Caddy; the deprecated Pi `/fin-terminal/` route is unchanged
+throughout activation. The protected activation workflow additionally refuses a dirty or stale
 host infra worktree and requires a dedicated approved-account cookie smoke
 before completing activation.
 
@@ -158,7 +164,7 @@ The browser route uses the dedicated `web:8080/internal/fin-terminal/browser-aut
 gate. Any approved signed-in UnchainedSky account is admitted; pending or
 rejected accounts and sessions without a stable user ID are denied. The
 principal is derived from that stable user ID, not the user's email. Caddy
-strips client identity/API credentials and injects only the browser canary
+strips client identity/API credentials and injects only the browser route's
 proxy token. It has no WebSocket path and the browser broker must never receive
 `OPENROUTER_API_KEY` or an account cookie.
 
@@ -166,7 +172,7 @@ The browser service also persists a daily provider-budget ledger under `/data`.
 Its JSON ledger uses a SQLite sidecar transaction lock so overlapping broker
 processes cannot lose reservations.
 By default, each account may make 40 research requests and 5 screenshot imports
-per UTC day, while the canary reserves no more than $25 of estimated provider
+per UTC day, while the browser route reserves no more than $25 of estimated provider
 cost globally. The `FIN_TERMINAL_BROWSER_*` overrides in the Compose overlay may
 lower or raise these reviewed limits; provider-side spend limits remain required.
 The protected activation workflow also requires the
