@@ -232,12 +232,33 @@ wait_for_public_status() {
     return 1
 }
 
+wait_for_unauthenticated_workspace_status() {
+    local status
+    local terminal_url="${public_url%/}/terminal/"
+    for _ in $(seq 1 30); do
+        status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 10 "$terminal_url" || true)"
+        if [[ "$status" == "401" ]]; then
+            printf '%s\n' "$status"
+            return 0
+        fi
+        if [[ "$status" == "200" || "$status" == "403" ]]; then
+            echo "unauthenticated browser workspace was not denied (HTTP $status)" >&2
+            return 1
+        fi
+        sleep 2
+    done
+    echo "timed out waiting for unauthenticated browser workspace denial (last HTTP status: $status)" >&2
+    return 1
+}
+
 wait_for_authenticated_status() {
     local status session_status
+    local terminal_url="${public_url%/}/terminal/"
     local session_url="${public_url%/}/api/browser/v1/session"
     for _ in $(seq 1 30); do
         status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --connect-timeout 5 --max-time 10 --cookie "$smoke_cookie" "$public_url" || true)"
+            --connect-timeout 5 --max-time 10 --cookie "$smoke_cookie" "$terminal_url" || true)"
         session_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 --cookie "$smoke_cookie" "$session_url" || true)"
         if [[ "$status" == "200" && "$session_status" == "200" ]]; then
@@ -250,7 +271,7 @@ wait_for_authenticated_status() {
         fi
         sleep 2
     done
-    echo "timed out waiting for authenticated browser route (last page/session status: $status/$session_status)" >&2
+    echo "timed out waiting for authenticated browser workspace (last page/session status: $status/$session_status)" >&2
     return 1
 }
 
@@ -373,7 +394,8 @@ else
 fi
 
 status="$(wait_for_public_status)"
+unauthenticated_status="$(wait_for_unauthenticated_workspace_status)"
 authenticated_status="$(wait_for_authenticated_status)"
 
 completed=true
-echo "browser-terminal canary enabled; unauthenticated probe returned HTTP $status; authenticated probe returned HTTP $authenticated_status"
+echo "browser-terminal canary enabled; discovery HTTP $status; unauthenticated workspace HTTP $unauthenticated_status; authenticated workspace/session HTTP $authenticated_status"

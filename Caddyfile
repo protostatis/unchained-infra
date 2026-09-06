@@ -222,6 +222,7 @@ unbrowser.unchainedsky.com {
 	# can understand the product before signing in. The terminal entrypoint and
 	# every API remain behind the browser-auth gate below.
 	@fin_terminal_browser_discovery {
+		method GET HEAD
 		path /fin-terminal-browser/
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
@@ -233,12 +234,14 @@ unbrowser.unchainedsky.com {
 			request_header -X-Fin-Terminal-Control-Token
 			request_header -Authorization
 			request_header -Proxy-Authorization
+			request_header -Cookie
 			reverse_proxy fin-terminal-browser:8787 {
 				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}
 			}
 		}
 	}
 	@fin_terminal_browser_assets {
+		method GET HEAD
 		path /fin-terminal-browser/assets/* /fin-terminal-browser/favicon.svg
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
@@ -250,6 +253,7 @@ unbrowser.unchainedsky.com {
 			request_header -X-Fin-Terminal-Control-Token
 			request_header -Authorization
 			request_header -Proxy-Authorization
+			request_header -Cookie
 			reverse_proxy fin-terminal-browser:8787 {
 				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}
 			}

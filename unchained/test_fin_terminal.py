@@ -478,6 +478,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("FIN_TERMINAL_BROWSER_ENABLED", route)
         self.assertIn("respond \"Not found\" 404", route)
         self.assertIn("uri strip_prefix /fin-terminal-browser", route)
+        self.assertIn("method GET HEAD", route)
         self.assertIn("path /fin-terminal-browser/", route)
         self.assertIn("path /fin-terminal-browser/assets/* /fin-terminal-browser/favicon.svg", route)
         self.assertIn("forward_auth web:8080", route)
@@ -490,12 +491,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         for header in ("X-Fin-Terminal-User", "X-Fin-Terminal-Proxy-Token", "Cookie", "Authorization", "Proxy-Authorization"):
             self.assertIn(f"request_header -{header}", route)
+        self.assertGreaterEqual(route.count("request_header -Cookie"), 3)
         self.assertNotIn("reverse_proxy fin-terminal-workspace-control", route)
 
     def test_browser_activation_requires_both_auth_smoke_and_host_revision(self):
         self.assertIn("200)", self.browser_activation)
         self.assertIn('"$status" == "403"', self.browser_activation)
+        self.assertIn("wait_for_unauthenticated_workspace_status", self.browser_activation)
         self.assertIn("wait_for_authenticated_status", self.browser_activation)
+        self.assertIn("${public_url%/}/terminal/", self.browser_activation)
         self.assertIn("/api/browser/v1/session", self.browser_activation)
         self.assertIn("validate_deployed_release_identity", self.browser_activation)
         self.assertIn("deployed release revision does not match", self.browser_activation)
