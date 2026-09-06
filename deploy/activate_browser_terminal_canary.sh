@@ -2,7 +2,8 @@
 # Activate or upgrade the authenticated browser-terminal canary on the
 # production host. This script is streamed over verified SSH by the protected
 # GitHub Action; it intentionally changes only the browser-canary env values
-# and Caddy/service state, leaving the Pi-owned /fin-terminal/ route untouched.
+# and Caddy/service state. The old Pi-owned /fin-terminal/ container has been
+# retired; this script owns only the browser-terminal route.
 
 set -euo pipefail
 umask 077
@@ -335,9 +336,8 @@ if [[ -z "$browser_token" ]]; then
     browser_token="$(openssl rand -hex 32)"
     set_env_value FIN_TERMINAL_BROWSER_PROXY_TOKEN "$browser_token"
 fi
-pi_token="$(get_env_value FIN_TERMINAL_PROXY_TOKEN || true)"
-if [[ "${#browser_token}" -lt 32 || "$browser_token" == "$pi_token" ]]; then
-    echo "browser proxy token is missing, too short, or not independent" >&2
+if [[ "${#browser_token}" -lt 32 ]]; then
+    echo "browser proxy token is missing or too short" >&2
     exit 1
 fi
 

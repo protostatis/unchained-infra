@@ -6,7 +6,7 @@ Facebook / GitHub, exactly-once workspace/import, new-account-only credit, and
 account-scoped wake/sleep canary scaffolding.
 
 All behavior is inert while `FIN_TERMINAL_WORKSPACE_ENABLED` is `false`. The
-existing six-seat pilot, the signed-in singleton terminal, and the normal
+existing six-seat pilot, the authenticated browser terminal, and the normal
 auth/credit flows are untouched.
 
 ## Architecture
@@ -270,7 +270,7 @@ unless an operator intentionally shares it. Each runtime is provisioned with
   `fin_ws_<slug>_data`. Sibling runtimes are never placed on a shared network;
   sleep/delete detach the shared services and remove the per-account networks.
 - `/fin-terminal/` routes to the private-workspace leg **only when**
-  `FIN_TERMINAL_WORKSPACE_ENABLED=true` **and** the runtime provider is
-  validated; otherwise it fails closed (no CTA) and the signed-in singleton
-  (`fin-terminal:8787`) serves when the flag is off (rollback by turning the
-  flag off). It never renders the marketing index.
+   `FIN_TERMINAL_WORKSPACE_ENABLED=true` **and** the runtime provider is
+   validated; otherwise it fails closed with an explicit 404. The retired
+   singleton is never used as a fallback and the path never renders the
+   marketing index.

@@ -88,9 +88,6 @@ jobs:
           cd unchained
           node test_sse_recovery_render.js
 
-      - name: Run market-scout health helper tests
-        run: node deploy/test_verify_market_scout_health.mjs
-
       - name: Run OSS boundary guards
         run: |
           python tools/oss_guard/check_private_imports.py

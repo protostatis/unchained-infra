@@ -4,7 +4,9 @@ This optional overlay runs six real, disposable Pi-backed terminals for public
 visitors. The normal deployment stages and validates the overlay but never
 starts its profiled services. `FIN_TERMINAL_PUBLIC_ENABLED` defaults to
 `false`, so Caddy returns a 404 instead of proxying a dead pilot upstream.
-The signed-in `/fin-terminal/` application is unchanged. The former static
+The authenticated browser-owned terminal is served separately at
+`/fin-terminal-browser/`. The private workspace route at `/fin-terminal/` is
+independent and returns 404 when its feature flag is disabled. The former static
 replay at `/fin-terminal-demo/` is retired and returns 404.
 
 ## Architecture
