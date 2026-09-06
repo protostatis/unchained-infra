@@ -39,7 +39,20 @@ caddy = services.get("caddy")
 browser_mcp = services.get("fin-terminal-browser-mcp")
 singleton = services.get("fin-terminal")
 if not all(isinstance(service, dict) for service in (browser, browser_mcp, caddy)):
-    raise SystemExit("browser canary services are missing from the rendered Compose config")
+    missing = [
+        name
+        for name, service in (
+            ("fin-terminal-browser", browser),
+            ("fin-terminal-browser-mcp", browser_mcp),
+            ("caddy", caddy),
+        )
+        if not isinstance(service, dict)
+    ]
+    rendered = ",".join(sorted(services)) or "<none>"
+    raise SystemExit(
+        "browser canary services are missing from the rendered Compose config "
+        f"(missing: {','.join(missing)}; rendered: {rendered})"
+    )
 if singleton is not None:
     raise SystemExit("retired fin-terminal service is still present in the rendered Compose config")
 
