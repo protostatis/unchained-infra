@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_enable:
-        description: "Confirm enabling /fin-terminal-browser/ as the authenticated terminal"
+        description: "Confirm enabling /fin-terminal-browser/ discovery and terminal routes"
         required: true
         default: false
         type: boolean

@@ -221,14 +221,14 @@ wait_for_public_status() {
         status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 "$public_url" || true)"
         case "$status" in
-        401)
+        200)
                 printf '%s\n' "$status"
                 return 0
                 ;;
         esac
         sleep 2
     done
-    echo "timed out waiting for enabled browser route (last HTTP status: $status)" >&2
+    echo "timed out waiting for enabled browser discovery page (last HTTP status: $status)" >&2
     return 1
 }
 
