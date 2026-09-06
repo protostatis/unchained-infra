@@ -62,7 +62,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         ):
             env.pop(name, None)
         env.update({
-            "FIN_TERMINAL_PROXY_TOKEN": "test",
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN": "test",
             "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test",
             "PRIVATE_CORE_TOKEN": "test",
             "TRIAL_AGENT_KEY": "test",

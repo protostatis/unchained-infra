@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the browser-terminal canary overlay before its first activation.
+# Validate the browser-terminal overlay before activation.
 # This intentionally performs no Compose mutation and requires the edge flag to
 # remain disabled while the image and network contract are being checked.
 
@@ -38,8 +38,10 @@ browser = services.get("fin-terminal-browser")
 caddy = services.get("caddy")
 browser_mcp = services.get("fin-terminal-browser-mcp")
 singleton = services.get("fin-terminal")
-if not all(isinstance(service, dict) for service in (browser, browser_mcp, caddy, singleton)):
+if not all(isinstance(service, dict) for service in (browser, browser_mcp, caddy)):
     raise SystemExit("browser canary services are missing from the rendered Compose config")
+if singleton is not None:
+    raise SystemExit("retired fin-terminal service is still present in the rendered Compose config")
 
 image = browser.get("image")
 if not isinstance(image, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}", image):
@@ -75,12 +77,10 @@ if "unbrowser_egress_proxy" not in browser_mcp.get("networks", {}):
 caddy_environment = caddy.get("environment", {})
 if not isinstance(caddy_environment, dict) or str(caddy_environment.get("FIN_TERMINAL_BROWSER_ENABLED", "")).lower() != "false":
     raise SystemExit("FIN_TERMINAL_BROWSER_ENABLED must remain false during canary preflight")
-if not isinstance(singleton.get("environment", {}), dict):
-    raise SystemExit("singleton environment must render as a mapping")
 if caddy_environment.get("FIN_TERMINAL_BROWSER_PROXY_TOKEN") != environment.get("MARKET_PROXY_TOKEN"):
     raise SystemExit("Caddy and browser canary proxy tokens do not match")
-if not environment.get("MARKET_PROXY_TOKEN") or environment.get("MARKET_PROXY_TOKEN") == singleton["environment"].get("MARKET_PROXY_TOKEN"):
-    raise SystemExit("browser canary proxy token must be present and distinct from the Pi token")
+if not environment.get("MARKET_PROXY_TOKEN"):
+    raise SystemExit("browser canary proxy token must be present")
 
 print(image)
 PY
@@ -118,4 +118,4 @@ docker run --rm --network none --read-only \
         cat /tmp/browser-terminal.log
         exit 1
     '
-echo "browser-terminal canary image and disabled overlay contract are valid"
+echo "browser-terminal image and disabled overlay contract are valid"

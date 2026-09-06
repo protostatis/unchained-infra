@@ -122,7 +122,7 @@ class CaddyConfigPreflightTests(unittest.TestCase):
         stage_dir.mkdir(parents=True)
         remote_dir.joinpath("Caddyfile").write_text("old live config\n")
         remote_dir.joinpath(".env").write_text(
-            "FIN_TERMINAL_PROXY_TOKEN=old-token\n"
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN=old-token\n"
         )
         remote_dir.joinpath("Dockerfile").write_text("FROM old\n")
         remote_dir.joinpath("Dockerfile.unbrowser-mcp").write_text("FROM old\n")
@@ -135,7 +135,7 @@ class CaddyConfigPreflightTests(unittest.TestCase):
         )
         stage_dir.joinpath("Caddyfile").write_text("candidate config\n")
         stage_dir.joinpath(".env").write_text(
-            "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n"
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN=candidate-token\n"
         )
         stage_dir.joinpath("Dockerfile").write_text("FROM candidate\n")
         stage_dir.joinpath("Dockerfile.unbrowser-mcp").write_text(
@@ -168,7 +168,7 @@ read_token() {
     local env_file="$1" line
     while IFS= read -r line || [[ -n "$line" ]]; do
         case "$line" in
-            FIN_TERMINAL_PROXY_TOKEN=*)
+            FIN_TERMINAL_BROWSER_PROXY_TOKEN=*)
                 printf '%s' "${line#*=}"
                 return 0
                 ;;
@@ -192,7 +192,7 @@ case "$1" in
     compose)
         if env_file="$(env_file_arg "$@")"; then
             token="$(read_token "$env_file")"
-            printf '{"services":{"caddy":{"image":"example.test/caddy@sha256:expected","environment":{"FIN_TERMINAL_PROXY_TOKEN":"%s"}}}}\\n' "$token"
+            printf '{"services":{"caddy":{"image":"example.test/caddy@sha256:expected","environment":{"FIN_TERMINAL_BROWSER_PROXY_TOKEN":"%s"}}}}\\n' "$token"
         fi
         ;;
     image)
@@ -334,7 +334,7 @@ esac
             self.assertEqual(result.stdout.strip(), "environment_changed=true")
             self.assertEqual(live_caddy.stat().st_ino, before_inode)
             self.assertEqual(live_caddy.read_text(), "candidate config\n")
-            self.assertEqual((remote_dir / ".env").read_text(), "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n")
+            self.assertEqual((remote_dir / ".env").read_text(), "FIN_TERMINAL_BROWSER_PROXY_TOKEN=candidate-token\n")
             self.assertEqual((remote_dir / "Dockerfile").read_text(), "FROM candidate\n")
             self.assertEqual(
                 (remote_dir / "Dockerfile.unbrowser-mcp").read_text(),
@@ -374,7 +374,7 @@ esac
             fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
             live_env = remote_dir / ".env"
             stage_dir.joinpath(".env").write_text(
-                "FIN_TERMINAL_PROXY_TOKEN=old-token\n"
+                "FIN_TERMINAL_BROWSER_PROXY_TOKEN=old-token\n"
             )
             live_env.chmod(0o644)
 
@@ -438,9 +438,6 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.route_doc = cls.repo_root.joinpath(
             "docs", "fin-terminal-route.md"
         ).read_text()
-        cls.market_scout_helper = cls.repo_root.joinpath(
-            "deploy", "verify_market_scout_health.mjs"
-        ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
         self.assertIn(
@@ -462,34 +459,22 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             ROUTE_SPECS,
         )
 
-    def test_caddy_strips_client_headers_then_runs_forward_auth(self):
+    def test_retired_singleton_route_is_not_proxyable(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
-        route = subdomain.split("handle @fin_terminal_singleton {", 1)[1].split(
+        route = subdomain.split("@fin_terminal_retired {", 1)[1].split(
             "# The static fin-terminal replay demo is retired.", 1
         )[0]
-        self.assertIn("uri strip_prefix /fin-terminal", route)
-        strip_user = route.index("request_header -X-Fin-Terminal-User")
-        forward_auth = route.index("forward_auth web:8080")
-
-        self.assertLess(strip_user, forward_auth)
-        self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
-        self.assertIn("uri /internal/fin-terminal/auth", route)
-        self.assertIn("copy_headers X-Fin-Terminal-User", route)
-        for header in ("Cookie", "Authorization", "Proxy-Authorization"):
-            self.assertGreater(
-                route.index(f"request_header -{header}"), forward_auth
-            )
-        self.assertIn(
-            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
-            route,
-        )
+        self.assertIn('respond "Not found" 404', route)
+        self.assertIn('header Cache-Control "no-store"', route)
+        self.assertNotIn("reverse_proxy", route)
+        self.assertNotIn("FIN_TERMINAL_PROXY_TOKEN", self.caddy)
         self.assertNotIn("sampling {", self.caddy)
 
     def test_browser_canary_route_is_independent_and_fail_closed(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split(
-            "# Authenticated browser-owned terminal canary.", 1
-        )[1].split("# Authenticated persistent terminal.", 1)[0]
+            "# Authenticated browser-owned terminal.", 1
+        )[1].split("# Private workspace runtime.", 1)[0]
         self.assertIn("FIN_TERMINAL_BROWSER_ENABLED", route)
         self.assertIn("respond \"Not found\" 404", route)
         self.assertIn("uri strip_prefix /fin-terminal-browser", route)
@@ -534,9 +519,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
-        self.assertIn('[[ "$legacy_terminal_check" == "308 https://$public_host/fin-terminal/" ]]', self.deploy)
+        self.assertIn('[[ "$legacy_terminal_check" == "404 " ]]', self.deploy)
         self.assertIn('"https://$public_host/fin-terminal/"', self.deploy)
-        self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
+        self.assertIn('[[ "$terminal_status" == "404" ]]', self.deploy)
 
     def test_deploy_ssh_keeps_long_running_checks_alive(self):
         for option in (
@@ -570,39 +555,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertLess(validate_index, rebuild_index)
         self.assertLess(validate_index, reload_index)
 
-    def test_compose_pins_and_hardens_the_terminal(self):
-        service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
-            "\n  unbrowser-egress:\n", 1
-        )[0]
-
-        self.assertIn(
-            "78af158a0c7b0428e42f35082fe0df0d72a97eda",
-            service,
-        )
-        self.assertIn("deepseek/deepseek-v4-flash-0731", service)
-        self.assertIn("MARKET_RESEARCH_PROMPT=compact", service)
-        self.assertIn("MARKET_PRECACHE_ENABLED=1", service)
-        self.assertIn("MARKET_PRECACHE_STRATEGY=single", service)
-        self.assertIn("MARKET_PRECACHE_MAX_JOBS=1", service)
-        self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
-        self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
-        self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
-        self.assertIn("MARKET_SCOUT_ENABLED=1", service)
-        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", service)
-        self.assertNotIn("FIN_TERMINAL_OPENROUTER_API_KEY", service)
-        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal/", service)
-        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal/", service)
-        self.assertIn("PUBLIC_DEMO=0", service)
-        self.assertIn("ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com", service)
-        self.assertNotIn("https://unchainedsky.com", service)
-        self.assertIn("read_only: true", service)
-        self.assertIn("no-new-privileges:true", service)
-        self.assertIn("pids_limit: 128", service)
-        self.assertIn("mem_limit: 1g", service)
-        self.assertIn("- fin_terminal_egress", service)
-        self.assertIn("- unbrowser_mcp", service)
-        self.assertNotIn("- fin_terminal_demo", service)
-        self.assertNotIn("- app", service)
+    def test_retired_singleton_is_absent_from_default_compose(self):
+        self.assertNotIn("\n  fin-terminal:\n", self.compose)
+        self.assertNotIn("FIN_TERMINAL_PROXY_TOKEN", self.compose)
+        self.assertNotIn("fin_terminal_data:", self.compose)
+        self.assertNotIn("fin_terminal_egress:", self.compose)
+        self.assertNotIn("fin_terminal:\n", self.compose)
 
     def test_browser_canary_overlay_is_profiled_and_isolated(self):
         overlay = self.repo_root.joinpath("docker-compose.browser-terminal.yml").read_text()
@@ -905,16 +863,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
             route,
         )
-        # The authenticated singleton is feature-gated behind the workspace
-        # canary and strips its prefix before forward_auth.
-        self.assertIn("@fin_terminal_singleton {", route)
-        self.assertIn("uri strip_prefix /fin-terminal", route)
-        self.assertIn("forward_auth web:8080", route)
-        self.assertIn("@fin_terminal_base {", route)
-        self.assertIn(
-            "redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308",
-            route,
-        )
+        # The retired singleton path is an explicit 404 unless the separate
+        # private workspace feature is enabled.
+        self.assertIn("@fin_terminal_retired {", route)
+        self.assertIn('respond "Not found" 404', route)
+        self.assertNotIn("@fin_terminal_singleton {", route)
         # Retired demo returns 404 tombstone, never a redirect or upstream proxy
         self.assertIn("@fin_terminal_demo_retired path /fin-terminal-demo", route)
         self.assertIn("respond \"Not found\" 404", route)
@@ -941,9 +894,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
         self.assertNotIn("fin_terminal_demo", self.compose)
 
-    def test_legacy_terminal_routes_redirect_to_separate_canonical_paths(self):
-        canonical_terminal = "https://unbrowser.unchainedsky.com/fin-terminal/"
-
+    def test_legacy_terminal_routes_are_retired(self):
         # Legacy demo routes are retired — must return direct 404, not redirect
         self.assertIn('@legacy_fin_terminal_demo path /unbrowser/fin-terminal-demo', self.caddy)
         self.assertIn('@legacy_fin_terminal_demo_alias path /unbrowser/fin-terminal/demo', self.caddy)
@@ -951,16 +902,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("^/unbrowser/fin-terminal-demo(?:/(.*))?$", self.caddy)
         self.assertNotIn("^/unbrowser/fin-terminal/demo(?:/(.*))?$", self.caddy)
 
-        # Legacy authenticated terminal must still redirect
+        # Legacy authenticated terminal is also retired — no redirect or proxy.
         self.assertIn("@legacy_fin_terminal {", self.caddy)
-        self.assertIn(
-            "^/unbrowser/fin-terminal(?:/(.*))?$",
-            self.caddy,
-        )
-        self.assertIn(
-            f"redir @legacy_fin_terminal {canonical_terminal}{{re.legacy_fin_terminal.1}}{{?query}} 308",
-            self.caddy,
-        )
+        self.assertIn("path /unbrowser/fin-terminal /unbrowser/fin-terminal/*", self.caddy)
+        self.assertIn('respond "Not found" 404', self.caddy)
+        self.assertNotIn("redir @legacy_fin_terminal", self.caddy)
         self.assertIn("@legacy_unbrowser_page path /unbrowser /unbrowser/", self.caddy)
         self.assertIn(
             "redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308",
@@ -975,7 +921,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"https://$public_host/fin-terminal/"', self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
         self.assertIn('"https://$public_host/fin-terminal"', self.deploy)
-        self.assertIn('[[ "$terminal_base_check" != "308 https://$public_host/fin-terminal/" ]]', self.deploy)
+        self.assertIn('[[ "$terminal_base_check" != "404 " ]]', self.deploy)
 
         # Retired URLs checked for 404, not 200-content or 308-redirect.
         # Host-specific --resolve: each URL uses its own host, not a hardcoded one.
@@ -1007,7 +953,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_deploy_lifecycle_tracks_the_terminal(self):
         self.assertIn(
-            "unbrowser-mcp fin-terminal web",
+            "unbrowser-mcp web",
             self.deploy,
         )
         self.assertNotIn(
@@ -1026,8 +972,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("RETIRED_TOKEN_NAMES", self.secrets_helper)
         self.assertIn("retired_token_prefixes", self.secrets_helper)
         self.assertIn(
-            'add_services "caddy fin-terminal"', self.deploy
+            'add_services "caddy"', self.deploy
         )
+        self.assertIn("retire_fin_terminal_singleton", self.deploy)
         self.assertIn(
             'docker compose up -d --no-deps --no-build --force-recreate "$service"',
             self.deploy,
@@ -1076,115 +1023,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertLess(metadata_index, committed_index)
         self.assertLess(committed_index, release_index)
 
-    def test_route_doc_lists_retired_demo_404_not_200(self):
-        """Retired demo must be documented as returning 404, not conflated with root's 200."""
-        self.assertIn("must return `200`", self.route_doc)
-        self.assertIn("must return `404` (no-store, no redirect)", self.route_doc)
-        self.assertNotIn("both the Unbrowser root and\n`https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`", self.route_doc)
-
-    # ------------------------------------------------------------------
-    # Market-scout deployment contract tests
-    # ------------------------------------------------------------------
-
-    def test_market_scout_only_enabled_on_authenticated_singleton(self):
-        """Scout must be 1 on the singleton, 0 on gateway/worker/CLI."""
-        # Authenticated singleton: enabled
-        singleton = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
-            "\n  unbrowser-egress:\n", 1
-        )[0]
-        self.assertIn("MARKET_SCOUT_ENABLED=1", singleton)
-        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", singleton)
-        self.assertEqual(self.compose.count("MARKET_SCOUT_ENABLED=1"), 1)
-
-        # Public gateway: disabled
-        gateway = self.public_compose.split(
-            "\n  fin-terminal-public-gateway:\n", 1
-        )[1].split("\n  fin-terminal-public-seat-01:\n", 1)[0]
-        self.assertIn("MARKET_SCOUT_ENABLED=0", gateway)
-        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", gateway)
-
-        # Public worker: disabled
-        worker = self.public_compose.split(
-            "x-fin-terminal-public-worker: &fin-terminal-public-worker\n", 1
-        )[1].split("\nservices:\n", 1)[0]
-        self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
-        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
-        self.assertNotIn("MARKET_SCOUT_ENABLED=1", self.public_compose)
-
-    def test_market_scout_trigger_dry_run_contract_is_pinned(self):
-        self.assertIn("EXPECTED_JOURNAL_VERSION = 3", self.market_scout_helper)
-        self.assertIn("minPriority: 80", self.market_scout_helper)
-        self.assertIn("ttlMs: 2 * 60 * 60 * 1000", self.market_scout_helper)
-        self.assertIn("targetCooldownMs: 6 * 60 * 60 * 1000", self.market_scout_helper)
-        self.assertIn("dailyCap: 8", self.market_scout_helper)
-        self.assertIn("evaluateMarketEventTriggerCandidate", self.market_scout_helper)
-        self.assertIn("proposeMarketEventTriggerRoute", self.market_scout_helper)
-        self.assertIn("valid persisted v1", self.route_doc)
-        self.assertIn("raw schema v3", self.route_doc)
-        self.assertIn("nvidia/nemotron-3.5-lightning:free", self.route_doc)
-        self.assertIn("Real execution is separate and default-off", self.route_doc)
-        self.assertIn("fails closed without a paid fallback", self.route_doc)
-
-    def test_market_scout_supports_forward_disable(self):
-        """Commission helper handles disabled state: prints SKIPPED and exits 0."""
-        # Commission always invokes the helper; the helper decides skip vs. proceed.
-        self.assertIn("verify_market_scout_commission", self.deploy)
-        # The helper's commission CLI exits 0 when scout is disabled
-        # (prints COMMISSION SKIPPED — documented in route doc)
-        self.assertIn("forward-disable", self.route_doc)
-        self.assertIn("Commission will be skipped", self.route_doc)
-
-    def test_market_scout_preflight_runs_before_deploy_metadata_write(self):
-        """Preflight must run after health check but BEFORE write_deploy_metadata."""
-        # The preflight echo appears twice: once in the function body and
-        # once at the call site. We want the call site, which follows
-        # the health verification call.
-        health_call = self.deploy.index("verify_production_health \"$SERVICES_TO_REBUILD\"")
-        preflight_call = self.deploy.index("verify_market_scout_preflight", health_call)
-        metadata_call = self.deploy.rindex("write_deploy_metadata\n")
-
-        self.assertLess(health_call, preflight_call)
-        self.assertLess(preflight_call, metadata_call)
-
-        self.assertIn("verify_market_scout_preflight", self.deploy)
-        self.assertIn("_resolve_fin_terminal_container", self.deploy)
-
-    def test_market_scout_commission_runs_after_deploy_succeeded(self):
-        """Commission runs after DEPLOY_SUCCEEDED=true, only when fin-terminal rebuilt."""
-        succeeded_index = self.deploy.index("DEPLOY_SUCCEEDED=true")
-        # Commission call site (after DEPLOY_SUCCEEDED, inside the conditional)
-        commission_call = self.deploy.index(
-            "verify_market_scout_commission",
-            succeeded_index,
-        )
-
-        self.assertLess(succeeded_index, commission_call)
-        # Only runs when fin-terminal was selected
-        self.assertIn('grep -q \' fin-terminal \'', self.deploy)
-        self.assertIn("verify_market_scout_commission", self.deploy)
-
-    def test_market_scout_commission_no_auto_rollback(self):
-        """Commission failure must NOT trigger the broad existing rollback."""
-        # The commission failure block is after DEPLOY_SUCCEEDED=true.
-        succeeded_idx = self.deploy.index("DEPLOY_SUCCEEDED=true")
-        after_success = self.deploy[succeeded_idx:]
-        self.assertIn("MARKET-SCOUT COMMISSION FAILED", after_success)
-        self.assertIn("No automatic rollback occurs", after_success)
-        self.assertIn("forward-disable deployment", after_success)
-        # Verify the commission failure does NOT call rollback_remote_release
-        self.assertNotIn("rollback_remote_release", after_success.split("COMMISSION FAILED")[1] if "COMMISSION FAILED" in after_success else after_success)
-
-    def test_market_scout_helper_is_uploaded_with_deploy_helpers(self):
-        """verify_market_scout_health.mjs is uploaded alongside other helpers."""
-        self.assertIn("MARKET_SCOUT_HELPER=", self.deploy)
-        self.assertIn("verify_market_scout_health.mjs", self.deploy)
-        # The upload_deploy_helpers function references MARKET_SCOUT_HELPER
-        self.assertIn("MARKET_SCOUT_HELPER", self.deploy)
-        # The helper variable is defined before upload
-        helper_def = self.deploy.index("MARKET_SCOUT_HELPER=")
-        upload_call = self.deploy.index('echo "==> Uploading deploy helpers..."')
-        self.assertLess(helper_def, upload_call)
-
+    def test_route_doc_documents_browser_terminal_as_canonical(self):
+        """The browser-owned route is canonical and the singleton is retired."""
+        self.assertIn("/fin-terminal-browser/", self.route_doc)
+        self.assertIn("returns `200`", self.route_doc)
     def test_deploy_production_workflow_timeout_increased(self):
         """Deploy-production job timeout increased from 45 to 60 minutes."""
         self.assertIn("timeout-minutes: 60", self.workflow)
@@ -1192,32 +1034,6 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         deploy_job_start = self.workflow.index("deploy-production:")
         deploy_section = self.workflow[deploy_job_start:]
         self.assertIn("timeout-minutes: 60", deploy_section)
-
-    def test_market_scout_helper_tests_in_ci(self):
-        """CI must run the Node market-scout helper tests."""
-        self.assertIn(
-            "test_verify_market_scout_health.mjs",
-            self.workflow,
-        )
-        self.assertIn(
-            "market-scout health helper tests",
-            self.workflow,
-        )
-
-    def test_market_scout_preflight_only_on_singleton_not_workspace(self):
-        """Workspace runtime services still have scout disabled."""
-        # Workspace control: no MARKET_SCOUT_ENABLED at all
-        ws_control = self.public_compose.split(
-            "\n  fin-terminal-workspace-control:\n", 1
-        )[1].split("\n  fin-terminal-workspace-unbrowser-mcp:\n", 1)[0]
-        self.assertNotIn("MARKET_SCOUT_ENABLED", ws_control)
-
-        # Workspace MCP: no MARKET_SCOUT_ENABLED at all
-        ws_mcp = self.public_compose.split(
-            "\n  fin-terminal-workspace-unbrowser-mcp:\n", 1
-        )[1].split("\nvolumes:\n", 1)[0]
-        self.assertNotIn("MARKET_SCOUT_ENABLED", ws_mcp)
-
 
 class BrowserActivationReleaseIdentityTests(unittest.TestCase):
     """Exercise the activation guard without touching Docker or production."""

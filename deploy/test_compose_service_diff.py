@@ -36,8 +36,8 @@ class TestChangedServices(unittest.TestCase):
         self.assertEqual(classify_path("docker-compose.public-terminal.yml"), set())
         self.assertEqual(classify_path("docker-compose.browser-terminal.yml"), set())
 
-    def test_classifier_knows_fin_terminal_service(self):
-        self.assertIn("fin-terminal", SERVICES)
+    def test_classifier_excludes_retired_fin_terminal_service(self):
+        self.assertNotIn("fin-terminal", SERVICES)
         self.assertNotIn("fin-terminal-demo", SERVICES)
 
     def test_deployment_tooling_does_not_rebuild_runtime_services(self):

@@ -114,10 +114,10 @@ class FinTerminalSecretsTests(unittest.TestCase):
         for name in TOKEN_NAMES:
             self.assertIn(f"{name}={tokens[name]}", content3)
 
-    def test_replaces_provider_key_reused_as_proxy_token(self):
+    def test_replaces_provider_key_reused_as_browser_proxy_token(self):
         self._write(
             "OPENROUTER_API_KEY='shared-secret-value-that-is-long-enough'\n"
-            "FIN_TERMINAL_PROXY_TOKEN='shared-secret-value-that-is-long-enough'\n"
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN='shared-secret-value-that-is-long-enough'\n"
         )
 
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
@@ -128,20 +128,20 @@ class FinTerminalSecretsTests(unittest.TestCase):
             "shared-secret-value-that-is-long-enough",
         )
         self.assertNotEqual(
-            values["FIN_TERMINAL_PROXY_TOKEN"],
+            values["FIN_TERMINAL_BROWSER_PROXY_TOKEN"],
             values["OPENROUTER_API_KEY"],
         )
         self.assertEqual(len({values[name] for name in TOKEN_NAMES}), len(TOKEN_NAMES))
 
-    def test_replaces_short_proxy_token(self):
+    def test_replaces_short_browser_proxy_token(self):
         self._write(
             "OPENROUTER_API_KEY=provider-secret\n"
-            f"FIN_TERMINAL_PROXY_TOKEN={'a' * 63}\n"
+            f"FIN_TERMINAL_BROWSER_PROXY_TOKEN={'a' * 63}\n"
         )
 
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
         self.assertRegex(
-            self._values()["FIN_TERMINAL_PROXY_TOKEN"],
+            self._values()["FIN_TERMINAL_BROWSER_PROXY_TOKEN"],
             r"^[0-9a-f]{64}$",
         )
 

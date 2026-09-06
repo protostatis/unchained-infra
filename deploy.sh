@@ -123,11 +123,10 @@ COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
 FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
 CADDY_CONFIG_PREFLIGHT_TOOL="$SCRIPT_DIR/deploy/caddy_config_preflight.sh"
 HOSTED_CONTEXT_ROLLOUT_TOOL="$SCRIPT_DIR/deploy/validate_hosted_context_rollout.py"
-MARKET_SCOUT_HELPER="$SCRIPT_DIR/deploy/verify_market_scout_health.mjs"
 REMOTE_CONFIG_STAGE="$REMOTE_DIR/.deploy-staging/$DEPLOY_ID"
 REMOTE_CONFIG_STAGE_ACTIVE=false
 FIN_TERMINAL_SECRETS_CHANGED=false
-ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web scheduler trial-agent"
+ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
@@ -630,7 +629,7 @@ EOF
 
 upload_deploy_helpers() {
     local helper
-    for helper in "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" "$MARKET_SCOUT_HELPER"; do
+    for helper in "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL"; do
         if [[ ! -f "$helper" ]]; then
             echo "ERROR: missing deploy helper: $helper" >&2
             return 1
@@ -640,7 +639,7 @@ upload_deploy_helpers() {
 set -euo pipefail
 mkdir -p "$1"
 EOF
-    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" "$MARKET_SCOUT_HELPER" \
+    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" \
         "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/"
 }
 
@@ -664,119 +663,6 @@ EOF
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/deploy/"
 }
 
-# ---------------------------------------------------------------------------
-# Market-scout health verification — streamed through docker exec.
-# ---------------------------------------------------------------------------
-
-# Resolve exactly one running fin-terminal container, return its ID and
-# StartedAt timestamp. Fails if zero or multiple containers are running.
-_resolve_fin_terminal_container() {
-    remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-cd "$1"
-container="$(docker compose ps -q fin-terminal)"
-if [[ -z "$container" ]]; then
-    echo "ERROR: no fin-terminal container found" >&2
-    exit 1
-fi
-if [[ "$(echo "$container" | wc -l | tr -d ' ')" -ne 1 ]]; then
-    echo "ERROR: expected exactly one fin-terminal container, got multiple" >&2
-    exit 1
-fi
-[[ "$container" =~ ^[0-9a-f]{12,64}$ ]] || {
-    echo "ERROR: unexpected fin-terminal container ID format" >&2
-    exit 1
-}
-started_at="$(docker inspect --format '{{.State.StartedAt}}' "$container")"
-if [[ -z "$started_at" ]]; then
-    echo "ERROR: could not read fin-terminal container StartedAt" >&2
-    exit 1
-fi
-printf '%s\n%s\n' "$container" "$started_at"
-EOF
-}
-
-# Stream the market-scout health helper into the fin-terminal container and
-# run it in the given mode. The container ID is captured before and after
-# execution to confirm the container was not replaced during the check.
-_verify_market_scout_in_container() {
-    local mode="$1"
-    local container_id started_at result
-    # Read exactly two lines: container_id first, then started_at.
-    # Use explicit read-once per line — Bash 3 compatible, no short-circuit.
-    IFS= read -r container_id || { echo "ERROR: could not read fin-terminal container ID for market-scout $mode" >&2; return 1; }
-    IFS= read -r started_at  || { echo "ERROR: could not read fin-terminal started-at for market-scout $mode" >&2; return 1; }
-    [[ -n "$container_id" && -n "$started_at" ]]
-    echo "    Fin-terminal container: $container_id (started $started_at)"
-
-    # Reject a replacement or restart between discovery and docker exec. A
-    # Docker restart preserves the container ID but changes StartedAt.
-    if ! remote_bash "$container_id" "$started_at" <<'EOF'
-set -euo pipefail
-container_id="$1"
-expected_started_at="$2"
-running="$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)"
-actual_started_at="$(docker inspect --format '{{.State.StartedAt}}' "$container_id" 2>/dev/null || true)"
-[[ "$running" == "true" && "$actual_started_at" == "$expected_started_at" ]]
-EOF
-    then
-        echo "ERROR: fin-terminal container identity changed before market-scout $mode" >&2
-        return 1
-    fi
-
-    local quoted_helper quoted_mode quoted_started
-    printf -v quoted_helper '%q' "$REMOTE_DEPLOY_TOOLS_DIR/verify_market_scout_health.mjs"
-    printf -v quoted_mode '%q' "$mode"
-    printf -v quoted_started '%q' "$started_at"
-    if ! result="$(
-        "${SSH_CMD[@]}" \
-            "docker exec -i \
-                -e MARKET_SCOUT_VERIFY_MODE=$quoted_mode \
-                -e MARKET_SCOUT_CANDIDATE_STARTED_AT=$quoted_started \
-                $container_id node --input-type=module - < $quoted_helper"
-    )"; then
-        echo "ERROR: market-scout $mode failed" >&2
-        echo "$result" >&2
-        return 1
-    fi
-    # Print safe aggregate proof to production logs.
-    echo "$result"
-
-    # Confirm container ID unchanged after the check.
-    local post_container
-    post_container="$(remote_bash "$REMOTE_DIR" "$container_id" "$started_at" <<'EOF'
-set -euo pipefail
-cd "$1"
-post="$(docker compose ps -q fin-terminal)"
-post_started_at="$(docker inspect --format '{{.State.StartedAt}}' "$post" 2>/dev/null || true)"
-if [[ "$post" != "$2" || "$post_started_at" != "$3" ]]; then
-    echo "ERROR: fin-terminal container identity changed during market-scout check" >&2
-    exit 1
-fi
-printf '%s\n' "$post"
-EOF
-)" || {
-        echo "ERROR: fin-terminal container changed during market-scout $mode" >&2
-        return 1
-    }
-    echo "    Market-scout $mode OK"
-    return 0
-}
-
-verify_market_scout_preflight() {
-    echo "==> Running market-scout preflight verification..."
-    local container_info
-    container_info="$(_resolve_fin_terminal_container)" || return 1
-    _verify_market_scout_in_container preflight <<< "$container_info" || return 1
-}
-
-verify_market_scout_commission() {
-    echo "==> Running market-scout commission verification..."
-    local container_info
-    container_info="$(_resolve_fin_terminal_container)" || return 1
-    _verify_market_scout_in_container commission <<< "$container_info" || return 1
-}
-
 compare_compose_services() {
     remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" \
         "$REMOTE_DEPLOY_TOOLS_DIR/compose_service_diff.py" <<'EOF'
@@ -789,13 +675,14 @@ test -f "$diff_tool"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-# Resolve both files with the live project directory so interpolation uses the
-# same .env values. --no-path-resolution avoids false differences caused by
-# the backup file living under .deploy-backups rather than the release root.
+# Resolve each file with the live project directory while using the matching
+# release's .env. This is required when a removed service also removes a
+# required secret. --no-path-resolution avoids false differences caused by the
+# backup file living under .deploy-backups rather than the release root.
 docker compose --project-directory "$remote_dir" -f "$backup_dir/docker-compose.yml" \
-    config --format json --no-path-resolution > "$tmp_dir/old.json"
+    --env-file "$backup_dir/.env" config --format json --no-path-resolution > "$tmp_dir/old.json"
 docker compose --project-directory "$remote_dir" -f "$remote_dir/docker-compose.yml" \
-    config --format json --no-path-resolution > "$tmp_dir/new.json"
+    --env-file "$remote_dir/.env" config --format json --no-path-resolution > "$tmp_dir/new.json"
 python3 "$diff_tool" "$tmp_dir/old.json" "$tmp_dir/new.json"
 EOF
 }
@@ -805,9 +692,9 @@ add_services() {
     local service
     for service in $services; do
         case "$service" in
-            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web|scheduler|trial-agent|fin-terminal-demo)
-                # rollback-only: fin-terminal-demo is retired but accepted so a failed
-                # retirement deploy can restore the old snapshot and restart the demo.
+            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web|scheduler|trial-agent|fin-terminal|fin-terminal-demo)
+                # rollback-only: retired terminal services are accepted so a
+                # failed retirement deploy can restore the old snapshot.
                 ;;
             "")
                 continue
@@ -862,11 +749,11 @@ wait_for_state() {
 
 expected_state() {
     case "$1" in
-        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web)
+        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web)
             printf '%s\n' healthy
             ;;
-        fin-terminal-demo)
-            # rollback-only: retired demo may be restarted during restore
+        fin-terminal|fin-terminal-demo)
+            # rollback-only: retired terminal services may be restarted during restore
             printf '%s\n' healthy
             ;;
         scheduler|trial-agent)
@@ -882,8 +769,8 @@ expected_state() {
 # --no-deps prevents Compose from expanding this into a broad restart, while
 # --force-recreate guarantees restart-dependent readiness checks observe a new
 # container even when its rendered Compose configuration is unchanged.
-# Note: fin-terminal-demo appears here only for rollback compatibility — a
-# failed retirement deployment may restore the old snapshot and restart it.
+# Note: fin-terminal and fin-terminal-demo appear here only for rollback
+# compatibility — a failed retirement deployment may restore the old snapshot.
 for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent; do
     if ! selected "$service"; then
         continue
@@ -1080,6 +967,9 @@ selected() {
     [[ " $services " == *" $1 "* ]]
 }
 
+workspace_enabled="$(docker compose config --format json \
+    | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("services", {}).get("caddy", {}).get("environment", {}).get("FIN_TERMINAL_WORKSPACE_ENABLED", "false")).lower())')"
+
 container_state() {
     local service="$1" container
     container="$(docker compose ps -q "$service")"
@@ -1109,7 +999,7 @@ wait_for_state() {
 # reach "healthy", while process-only services below must reach "running".
 # The Compose service-list contract above fails deployment when either policy
 # needs to be updated for a newly added service.
-for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web; do
+for service in relay private-core mcp unbrowser-egress unbrowser-mcp web; do
     if ! selected "$service"; then
         continue
     fi
@@ -1150,22 +1040,22 @@ if [[ "${public_site_ready:-false}" != "true" ]]; then
     exit 1
 fi
 
-# The legacy authenticated-terminal URL must redirect to the canonical
-# subdomain route. This catches a healthy but stale Caddy process that is still
-# serving the previous route after a failed reload.
+# The old authenticated-terminal URL must be retired. This catches a healthy
+# but stale Caddy process that is still serving the previous route after a
+# failed reload.
 for attempt in $(seq 1 20); do
     legacy_terminal_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
         --output /dev/null --write-out '%{http_code} %{redirect_url}' \
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/unbrowser/fin-terminal/" || true)"
-    if [[ "$legacy_terminal_check" == "308 https://$public_host/fin-terminal/" ]]; then
+    if [[ "$legacy_terminal_check" == "404 " ]]; then
         break
     fi
     sleep 2
 done
-if [[ "$legacy_terminal_check" != "308 https://$public_host/fin-terminal/" ]]; then
-    echo "legacy authenticated fin-terminal redirect health check failed (result: ${legacy_terminal_check:-request-failed})" >&2
-    docker compose logs --tail 80 caddy web fin-terminal >&2 || true
+if [[ "$legacy_terminal_check" != "404 " ]]; then
+    echo "retired authenticated fin-terminal health check failed (result: ${legacy_terminal_check:-request-failed})" >&2
+    docker compose logs --tail 80 caddy web >&2 || true
     exit 1
 fi
 
@@ -1210,32 +1100,37 @@ if [[ "${unbrowser_discovery_ready:-false}" != "true" ]]; then
     exit 1
 fi
 
-# A logged-out request to the persistent terminal must reach forward_auth;
-# it must never silently become the anonymous kiosk session.
-for attempt in $(seq 1 20); do
-    terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code}' \
-        --resolve "$public_host:443:127.0.0.1" \
-        "https://$public_host/fin-terminal/" || true)"
-    if [[ "$terminal_status" == "401" ]]; then
-        break
+# A request to the retired persistent-terminal path must be a direct 404 when
+# the separate private-workspace feature is disabled; it must never silently
+# become an anonymous kiosk session or a stale singleton. When the workspace
+# feature is enabled, that route is owned by the workspace control plane and is
+# intentionally not asserted as a retired-path response here.
+if [[ "$workspace_enabled" != "true" ]]; then
+    for attempt in $(seq 1 20); do
+        terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+            --output /dev/null --write-out '%{http_code}' \
+            --resolve "$public_host:443:127.0.0.1" \
+            "https://$public_host/fin-terminal/" || true)"
+        if [[ "$terminal_status" == "404" ]]; then
+            break
+        fi
+        sleep 2
+    done
+    if [[ "$terminal_status" != "404" ]]; then
+        echo "retired subdomain fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+        docker compose logs --tail 80 caddy web >&2 || true
+        exit 1
     fi
-    sleep 2
-done
-if [[ "$terminal_status" != "401" ]]; then
-    echo "authenticated subdomain fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
-    docker compose logs --tail 80 caddy web fin-terminal >&2 || true
-    exit 1
-fi
 
-terminal_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-    --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-    --resolve "$public_host:443:127.0.0.1" \
-    "https://$public_host/fin-terminal" || true)"
-if [[ "$terminal_base_check" != "308 https://$public_host/fin-terminal/" ]]; then
-    echo "authenticated terminal base redirect health check failed (result: ${terminal_base_check:-request-failed})" >&2
-    docker compose logs --tail 80 caddy >&2 || true
-    exit 1
+    terminal_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+        --resolve "$public_host:443:127.0.0.1" \
+        "https://$public_host/fin-terminal" || true)"
+    if [[ "$terminal_base_check" != "404 " ]]; then
+        echo "retired terminal base health check failed (result: ${terminal_base_check:-request-failed})" >&2
+        docker compose logs --tail 80 caddy >&2 || true
+        exit 1
+    fi
 fi
 
 # The static fin-terminal replay demo is retired. Verify all its former
@@ -1616,7 +1511,7 @@ remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy fin-terminal mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
+expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
     echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2
@@ -1630,11 +1525,10 @@ EOF
 SERVICES_TO_REBUILD=""
 CADDY_RECREATE_REQUIRED=false
 if $FIN_TERMINAL_SECRETS_CHANGED; then
-    # Existing Caddy and terminal containers retain their old environment.
-    # Recreate all default terminal trust-boundary participants so generated
-    # persistent, replay, or public-edge credentials are never one-sided.
-    echo "==> Fin-terminal credentials changed; recreating Caddy and terminal services."
-    add_services "caddy fin-terminal"
+    # Caddy retains its old environment until recreated. Browser-terminal
+    # credentials are managed by the browser activation workflow.
+    echo "==> Terminal credentials changed; recreating Caddy."
+    add_services "caddy"
     CADDY_RECREATE_REQUIRED=true
 fi
 if $FORCE_FULL_DEPLOY; then
@@ -1858,6 +1752,131 @@ exit 1
 EOF
 fi
 
+# The old fin-terminal singleton is retired. If the backup Compose has the
+# singleton but the new Compose does not, retire only its old container and
+# dedicated network. Never down, wildcard delete, remove volumes, or touch
+# profile services.
+retire_fin_terminal_singleton() {
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" \
+        "$FIN_TERMINAL_PUBLIC_HOST" "$DEPLOY_HEALTH_HOST" <<'RETIRE_EOF'
+set -euo pipefail
+remote_dir="$1"
+backup_dir="$2"
+public_host="$3"
+health_host="$4"
+
+backup_compose="$backup_dir/docker-compose.yml"
+new_compose="$remote_dir/docker-compose.yml"
+backup_env="$backup_dir/.env"
+new_env="$remote_dir/.env"
+
+test -f "$backup_compose"
+test -f "$new_compose"
+test -f "$backup_env"
+test -f "$new_env"
+
+if ! docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        config --services | grep -qx fin-terminal; then
+    exit 0
+fi
+if docker compose --project-directory "$remote_dir" \
+        -f "$new_compose" --env-file "$new_env" \
+        config --services 2>/dev/null | grep -qx fin-terminal; then
+    exit 0
+fi
+
+echo "    Old release contains fin-terminal; retiring the singleton container..."
+
+# Verify new Caddy is routing the retired URLs to 404 before touching the old
+# container. The private workspace route may intentionally own the public path;
+# the legacy apex path must always be retired. Each host/path pair uses the
+# URL's own host for --resolve.
+workspace_enabled="$(docker compose --project-directory "$remote_dir" \
+    -f "$new_compose" --env-file "$new_env" config --format json \
+    | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("services", {}).get("caddy", {}).get("environment", {}).get("FIN_TERMINAL_WORKSPACE_ENABLED", "false")).lower())')"
+pre_retire_routes=(
+    "$health_host|/unbrowser/fin-terminal/"
+)
+if [[ "$workspace_enabled" != "true" ]]; then
+    pre_retire_routes+=("$public_host|/fin-terminal/")
+fi
+for route in "${pre_retire_routes[@]}"; do
+    IFS='|' read -r host url_path <<< "$route"
+    code="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$host:443:127.0.0.1" \
+        "https://$host$url_path" || true)"
+    if [[ "$code" != "404" ]]; then
+        echo "ERROR: retired fin-terminal URL https://$host$url_path returned $code (expected 404); aborting container retirement" >&2
+        exit 1
+    fi
+done
+
+old_containers="$(docker compose --project-directory "$remote_dir" \
+    -f "$backup_compose" --env-file "$backup_env" \
+    ps -aq fin-terminal 2>/dev/null || true)"
+old_containers="$(echo "$old_containers" | grep -E '^[0-9a-f]{12,}$' || true)"
+if [[ -z "$old_containers" ]]; then
+    echo "    No old fin-terminal container found (running or stopped)."
+else
+    count=$(echo "$old_containers" | wc -l | tr -d ' ')
+    if [[ "$count" -gt 1 ]]; then
+        echo "ERROR: found $count fin-terminal containers (expected at most 1); aborting" >&2
+        exit 1
+    fi
+    echo "    Stopping and removing old fin-terminal container..."
+    docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        stop fin-terminal 2>/dev/null || true
+    docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        rm -f fin-terminal 2>/dev/null || true
+    remaining="$(docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        ps -aq fin-terminal 2>/dev/null | grep -E '^[0-9a-f]{12,}$' || true)"
+    if [[ -n "$remaining" ]]; then
+        echo "ERROR: fin-terminal container still present after removal: $remaining" >&2
+        exit 1
+    fi
+fi
+
+# Remove only the Compose-owned legacy network after proving its labels and
+# emptiness. The fin_terminal_data volume is intentionally retained for a
+# later operator-reviewed archive decision.
+legacy_network=""
+if compose_json="$(docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        config --format json --no-path-resolution 2>/dev/null)"; then
+    legacy_network="$(echo "$compose_json" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("networks",{}).get("fin_terminal",{}).get("name",""))' 2>/dev/null || true)"
+fi
+if [[ -n "$legacy_network" && "$legacy_network" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    project_label="$(docker network inspect "$legacy_network" \
+        --format '{{index .Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+    network_label="$(docker network inspect "$legacy_network" \
+        --format '{{index .Labels "com.docker.compose.network"}}' 2>/dev/null || true)"
+    container_count="$(docker network inspect "$legacy_network" \
+        --format '{{len .Containers}}' 2>/dev/null || echo 0)"
+    if [[ "$project_label" == "unchained" && "$network_label" == "fin_terminal" ]]; then
+        if [[ "$container_count" == "0" ]]; then
+            if docker network rm "$legacy_network" >/dev/null 2>&1; then
+                echo "    Removed empty legacy network $legacy_network."
+            else
+                echo "    (could not remove proven-empty legacy network; leaving it harmless)"
+            fi
+        else
+            echo "    (legacy network has $container_count container(s); leaving it harmless)"
+        fi
+    else
+        echo "    (legacy network labels do not match; skipping removal)"
+    fi
+else
+    echo "    (could not determine legacy network name; nothing to remove)"
+fi
+RETIRE_EOF
+}
+
 # The fin-terminal-demo service is retired. If the backup Compose has the demo
 # but the new Compose does not, retire the old container and its dedicated
 # network. Never down, wildcard delete, remove volumes, or touch profile services.
@@ -1988,17 +2007,15 @@ fi
 RETIRE_EOF
 }
 
+retire_fin_terminal_singleton
 retire_fin_terminal_demo
 
 echo "==> Verifying production health..."
 verify_production_health "$SERVICES_TO_REBUILD"
 
-verify_market_scout_preflight
-
 write_deploy_metadata
 # Metadata is the transaction commit point. Nothing after this line may invoke
-# the broad release rollback. Post-commit scout commissioning can still make
-# the job red, but its recovery is a forward-disable deployment.
+# the broad release rollback.
 DEPLOY_SUCCEEDED=true
 release_remote_rollback_images \
     || echo "    (could not release retained rollback image tags; keeping them for recovery)"
@@ -2039,27 +2056,6 @@ set +e
 docker image prune -f --filter "until=168h" 2>&1 | tail -1
 docker builder prune -f --filter "until=24h" 2>&1 | tail -1
 EOF
-fi
-
-# Market-scout commission: only when fin-terminal was selected/recreated.
-# External feed success is NOT part of the rollback transaction. The core
-# deployment is committed; a commission failure signals that a forward-disable
-# deployment (MARKET_SCOUT_ENABLED=0) is needed — not a broad rollback. Status
-# and disk cleanup run first so a failed commission still leaves diagnostics
-# and the small production root disk in a safe state.
-if echo " $SERVICES_TO_REBUILD " | grep -q ' fin-terminal '; then
-    if ! verify_market_scout_commission; then
-        echo "" >&2
-        echo "============================================" >&2
-        echo "  MARKET-SCOUT COMMISSION FAILED" >&2
-        echo "  The core deployment is committed." >&2
-        echo "  No automatic rollback occurs." >&2
-        echo "  A forward-disable deployment" >&2
-        echo "  (MARKET_SCOUT_ENABLED=0) is required." >&2
-        echo "============================================" >&2
-        echo "" >&2
-        exit 1
-    fi
 fi
 
 echo ""

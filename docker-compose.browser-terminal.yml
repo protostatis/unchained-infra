@@ -1,6 +1,6 @@
-# Authenticated browser-owned terminal. This overlay is intentionally separate
-# from the default stack: the Pi-backed singleton at /fin-terminal/ is retained
-# only as a deprecated rollback path while /fin-terminal-browser/ is commissioned.
+# Authenticated browser-owned terminal. This overlay is kept separate from the
+# default stack because its services are activated explicitly after preflight;
+# it is the only replacement for the retired Pi-backed singleton.
 #
 # FIN_TERMINAL_BROWSER_IMAGE must be an immutable image reference, for example:
 #   ghcr.io/protostatis/unbrowser-fin-terminal-browser@sha256:<64 hex chars>

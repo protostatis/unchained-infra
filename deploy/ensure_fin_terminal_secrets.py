@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure production fin-terminal credentials are present and separated."""
+"""Ensure production terminal credentials are present and separated."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ import tempfile
 
 
 RETIRED_TOKEN_NAMES = (
+    "FIN_TERMINAL_PROXY_TOKEN",
     "FIN_TERMINAL_DEMO_PROXY_TOKEN",
 )
 
 TOKEN_NAMES = (
-    "FIN_TERMINAL_PROXY_TOKEN",
     "FIN_TERMINAL_BROWSER_PROXY_TOKEN",
     "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
     "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
@@ -289,9 +289,9 @@ def main(argv: list[str]) -> int:
         print(f"fin_terminal_credentials_changed={str(generated).lower()}")
         return 0
     if generated:
-        print("    Generated independent fin-terminal credential(s) on the host.")
+        print("    Generated independent browser-terminal credential(s) on the host.")
     else:
-        print("    Existing independent fin-terminal credentials retained.")
+        print("    Existing independent terminal credentials retained.")
     return 0
 
 

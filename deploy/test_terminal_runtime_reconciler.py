@@ -850,17 +850,17 @@ class CaddyHeaderContractTests(unittest.TestCase):
         self.assertNotIn("/fin-terminal-workspace/callback", caddyfile)
         self.assertIn("@fin_workspace_surface {", caddyfile)
 
-    def test_singleton_served_only_when_workspace_flag_off(self) -> None:
-        """The authenticated singleton must serve when the workspace flag is
-        OFF (negated matcher). Without the negation, /fin-terminal/ would fall
-        through to the landing page — a false marketing route."""
+    def test_singleton_route_is_retired_when_workspace_flag_off(self) -> None:
+        """The retired singleton path must be an explicit 404 when the
+        separate private workspace route is disabled."""
         caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
         self.assertIn(
             "expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`",
             caddyfile,
         )
-        self.assertIn("@fin_terminal_singleton {", caddyfile)
-        self.assertIn("@fin_terminal_base {", caddyfile)
+        self.assertIn("@fin_terminal_retired {", caddyfile)
+        self.assertIn('respond "Not found" 404', caddyfile)
+        self.assertNotIn("@fin_terminal_singleton {", caddyfile)
 
     def test_workspace_terminal_leg_maps_base_to_terminal_proxy(self) -> None:
         """When enabled, /fin-terminal/<rest> is stripped and rewritten to
@@ -915,8 +915,7 @@ class ComposeRenderTests(unittest.TestCase):
             "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
-            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
-            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN": "test-browser-proxy",
             "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
             "TRIAL_AGENT_KEY": "test-trial",
             "JWT_SECRET": "test-jwt",
@@ -975,8 +974,7 @@ class ComposeRenderTests(unittest.TestCase):
             "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
-            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
-            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN": "test-browser-proxy",
             "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
             "TRIAL_AGENT_KEY": "test-trial",
             "JWT_SECRET": "test-jwt",
@@ -1013,8 +1011,7 @@ class ComposeRenderTests(unittest.TestCase):
             "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
-            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
-            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN": "test-browser-proxy",
             "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
             "TRIAL_AGENT_KEY": "test-trial",
             "JWT_SECRET": "test-jwt",
@@ -1132,8 +1129,7 @@ class ComposeRenderTests(unittest.TestCase):
             "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
-            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
-            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "FIN_TERMINAL_BROWSER_PROXY_TOKEN": "test-browser-proxy",
             "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
             "TRIAL_AGENT_KEY": "test-trial",
             "JWT_SECRET": "test-jwt",

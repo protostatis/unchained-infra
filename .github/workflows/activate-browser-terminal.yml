@@ -1,10 +1,10 @@
-name: Activate authenticated browser-terminal canary
+name: Activate authenticated browser-terminal
 
 on:
   workflow_dispatch:
     inputs:
       confirm_enable:
-        description: "Confirm enabling /fin-terminal-browser/ for approved signed-in accounts"
+        description: "Confirm enabling /fin-terminal-browser/ as the authenticated terminal"
         required: true
         default: false
         type: boolean
@@ -73,7 +73,7 @@ jobs:
           echo "key=$ssh_dir/key" >> "$GITHUB_OUTPUT"
           echo "known_hosts=$ssh_dir/known_hosts" >> "$GITHUB_OUTPUT"
 
-      - name: Commission and enable browser canary
+      - name: Commission and enable browser terminal
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           IMAGE: ${{ steps.release.outputs.image }}

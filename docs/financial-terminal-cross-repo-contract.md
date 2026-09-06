@@ -347,10 +347,10 @@ Provider flush (host-side → runtime → control plane):
    content is durably acknowledged (equals the last snapshot written or
    persisted); otherwise flush fails closed and sleep is refused.
 
-When the workspace flag is OFF the signed-in singleton
-(`fin-terminal:8787` + `forward_auth`) serves `/fin-terminal/*` unchanged —
-Caddy's singleton matchers are the exact negation of the workspace matcher,
-so the path can never fall through to the landing page.
+When the workspace flag is OFF, `/fin-terminal/*` returns an explicit 404. The
+retired singleton (`fin-terminal:8787`) is not a fallback and Caddy can never
+fall through to the landing page. The active authenticated terminal is the
+separate browser-owned `/fin-terminal-browser/` route.
 
 ## 5. Environment variables
 

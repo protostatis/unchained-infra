@@ -59,10 +59,8 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy unbrowser-mcp:8767
 	}
 
-	# The authenticated terminal and the now-retired replay demo were separate
-	# applications at the dedicated Unbrowser host. Replay is retired so its
-	# legacy URLs return direct HTTP 404 (no redirect). The authenticated
-	# terminal redirect remains active.
+	# The old Pi-backed authenticated terminal and replay demo are retired.
+	# Their legacy URLs return direct HTTP 404 (no redirect).
 	@legacy_fin_terminal_demo path /unbrowser/fin-terminal-demo /unbrowser/fin-terminal-demo/*
 	handle @legacy_fin_terminal_demo {
 		header Cache-Control "no-store"
@@ -73,11 +71,11 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		header Cache-Control "no-store"
 		respond "Not found" 404
 	}
-	@legacy_fin_terminal {
-		path_regexp legacy_fin_terminal ^/unbrowser/fin-terminal(?:/(.*))?$
-		not path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*
+	@legacy_fin_terminal path /unbrowser/fin-terminal /unbrowser/fin-terminal/*
+	handle @legacy_fin_terminal {
+		header Cache-Control "no-store"
+		respond "Not found" 404
 	}
-	redir @legacy_fin_terminal https://unbrowser.unchainedsky.com/fin-terminal/{re.legacy_fin_terminal.1}{?query} 308
 	@legacy_unbrowser_page path /unbrowser /unbrowser/
 	redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308
 
@@ -205,10 +203,8 @@ unbrowser.unchainedsky.com {
 	redir @primary_site_paths https://unchainedsky.com{uri} 308
 	@unbrowser_subpath path /unbrowser /unbrowser/
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
-	# Authenticated browser-owned terminal canary. It is deliberately a
-	# different path and service from both the Pi singleton and the workspace
-	# control plane. Keep the route disabled until the profiled services have
-	# passed their direct commissioning checks.
+	# Authenticated browser-owned terminal. Keep the route disabled until the
+	# profiled services have passed their direct commissioning checks.
 	@fin_terminal_browser_disabled {
 		path /fin-terminal-browser /fin-terminal-browser/*
 		expression `!{$FIN_TERMINAL_BROWSER_ENABLED:false}`
@@ -235,8 +231,7 @@ unbrowser.unchainedsky.com {
 			request_header -X-Fin-Terminal-Control-Token
 			request_header -Authorization
 			request_header -Proxy-Authorization
-			# Browser-owned terminal access is for every approved signed-in account;
-			# the legacy Pi singleton keeps its separate allowlist endpoint below.
+			# Browser-owned terminal access is for every approved signed-in account.
 			forward_auth web:8080 {
 				uri /internal/fin-terminal/browser-auth
 				copy_headers X-Fin-Terminal-User
@@ -251,15 +246,12 @@ unbrowser.unchainedsky.com {
 			}
 		}
 	}
-	# Authenticated persistent terminal. The path prefix is stripped upstream so
-	# the Vite-built client and its WebSocket both resolve beneath /fin-terminal/.
-	# When the workspace canary is enabled, /fin-terminal/ routes to the
+	# Private workspace runtime. The old singleton route has been removed; when
+	# the workspace canary is enabled, /fin-terminal/ routes to the
 	# workspace control plane's private-workspace leg (authenticated account
-	# runtime, fail-closed when no validated runtime provider exists); the
-	# singleton remains reachable only by rolling the workspace flag off
-	# (feature-flagged canary with rollback). The singleton matchers are
-	# negated: they serve exactly when the workspace flag is OFF — never fall
-	# through to the landing page.
+	# runtime, fail-closed when no validated runtime provider exists).
+	# When the workspace flag is off, the retired path is an explicit 404 rather
+	# than a fallback to the landing page.
 	@fin_workspace_terminal_exact {
 		path /fin-terminal
 		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
@@ -273,8 +265,8 @@ unbrowser.unchainedsky.com {
 		# /fin-terminal/<rest> → /terminal/<rest>. The control plane proxies the
 		# account runtime's root-relative surface (/, /assets/*, /ws) unchanged
 		# after this handler strips the /terminal marker, so the runtime image
-		# built at PUBLIC_BASE_PATH=/fin-terminal/ stays coherent: the client's
-		# absolute /fin-terminal/* asset and /ws URLs round-trip through here.
+		# built at PUBLIC_BASE_PATH=/fin-terminal/ stays coherent for the private
+		# workspace runtime's internal compatibility surface.
 		uri strip_prefix /fin-terminal
 		rewrite * /terminal{http.request.uri.path}
 		route {
@@ -290,34 +282,13 @@ unbrowser.unchainedsky.com {
 			reverse_proxy fin-terminal-workspace-control:8790
 		}
 	}
-	@fin_terminal_base {
-		path /fin-terminal
+	@fin_terminal_retired {
+		path /fin-terminal /fin-terminal/*
 		expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
 	}
-	redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308
-	@fin_terminal_singleton {
-		path /fin-terminal/*
-		expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
-	}
-	handle @fin_terminal_singleton {
-		uri strip_prefix /fin-terminal
-		route {
-			# Never trust identity or service-auth headers supplied by a client.
-			request_header -X-Fin-Terminal-User
-			request_header -X-Fin-Terminal-Proxy-Token
-			forward_auth web:8080 {
-				uri /internal/fin-terminal/auth
-				copy_headers X-Fin-Terminal-User
-			}
-			# Browser credentials are only for forward_auth. The terminal trusts the
-			# opaque principal above and must never receive a session or API token.
-			request_header -Cookie
-			request_header -Authorization
-			request_header -Proxy-Authorization
-			reverse_proxy fin-terminal:8787 {
-				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
-			}
-		}
+	handle @fin_terminal_retired {
+		header Cache-Control "no-store"
+		respond "Not found" 404
 	}
 
 	# The static fin-terminal replay demo is retired. All requests to its
