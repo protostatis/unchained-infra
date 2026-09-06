@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_enable:
-        description: "Confirm enabling /fin-terminal-browser/ as the authenticated terminal"
+        description: "Confirm enabling /fin-terminal-browser/ discovery and terminal routes"
         required: true
         default: false
         type: boolean
@@ -35,11 +35,17 @@ jobs:
         id: release
         run: |
           set -eu
+          source_revision="$(awk -F= '$1 == "FIN_TERMINAL_BROWSER_SOURCE_REVISION" { print substr($0, index($0, "=") + 1); exit }' .env.browser-terminal.example)"
           image="$(awk -F= '$1 == "FIN_TERMINAL_BROWSER_IMAGE" { print substr($0, index($0, "=") + 1); exit }' .env.browser-terminal.example)"
+          if [[ ! "$source_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::browser source revision must be a 40-character lowercase Git SHA"
+            exit 1
+          fi
           if [[ ! "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::browser image is not digest-pinned"
             exit 1
           fi
+          echo "source_revision=$source_revision" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
       - name: Require verified SSH inputs
@@ -77,6 +83,7 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           IMAGE: ${{ steps.release.outputs.image }}
+          SOURCE_REVISION: ${{ steps.release.outputs.source_revision }}
           BROWSER_SMOKE_COOKIE: ${{ secrets.FIN_TERMINAL_BROWSER_SMOKE_COOKIE }}
           KEY_PATH: ${{ steps.ssh.outputs.key }}
           KNOWN_HOSTS: ${{ steps.ssh.outputs.known_hosts }}
@@ -103,7 +110,7 @@ jobs:
           scp "${ssh_opts[@]}" -p "$local_cookie_path" \
             "ec2-user@$EC2_HOST:$remote_cookie_path"
           ssh "${ssh_opts[@]}" "ec2-user@$EC2_HOST" \
-            "chmod 600 '$remote_cookie_path' && bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/ '$remote_cookie_path' '$GITHUB_SHA'" \
+            "chmod 600 '$remote_cookie_path' && bash -s -- /home/ec2-user/unchained '$IMAGE' https://unbrowser.unchainedsky.com/fin-terminal-browser/ '$remote_cookie_path' '$GITHUB_SHA' '$SOURCE_REVISION'" \
             < deploy/activate_browser_terminal_canary.sh
 
       - name: Remove deployment SSH files

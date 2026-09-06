@@ -478,7 +478,14 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("FIN_TERMINAL_BROWSER_ENABLED", route)
         self.assertIn("respond \"Not found\" 404", route)
         self.assertIn("uri strip_prefix /fin-terminal-browser", route)
+        self.assertIn("method GET HEAD", route)
+        self.assertIn("path /fin-terminal-browser/", route)
+        self.assertIn(
+            "path_regexp fin_terminal_browser_asset ^/fin-terminal-browser/(assets/[A-Za-z0-9._-]+|favicon\\.svg)$",
+            route,
+        )
         self.assertIn("forward_auth web:8080", route)
+        self.assertIn("path /fin-terminal-browser/*", route)
         self.assertIn("uri /internal/fin-terminal/browser-auth", route)
         self.assertIn("reverse_proxy fin-terminal-browser:8787", route)
         self.assertIn(
@@ -487,12 +494,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         for header in ("X-Fin-Terminal-User", "X-Fin-Terminal-Proxy-Token", "Cookie", "Authorization", "Proxy-Authorization"):
             self.assertIn(f"request_header -{header}", route)
+        self.assertGreaterEqual(route.count("request_header -Cookie"), 3)
         self.assertNotIn("reverse_proxy fin-terminal-workspace-control", route)
 
     def test_browser_activation_requires_both_auth_smoke_and_host_revision(self):
-        self.assertIn("401)", self.browser_activation)
+        self.assertIn("200)", self.browser_activation)
         self.assertIn('"$status" == "403"', self.browser_activation)
+        self.assertIn("wait_for_unauthenticated_workspace_status", self.browser_activation)
         self.assertIn("wait_for_authenticated_status", self.browser_activation)
+        self.assertIn("${public_url%/}/terminal/", self.browser_activation)
         self.assertIn("/api/browser/v1/session", self.browser_activation)
         self.assertIn("validate_deployed_release_identity", self.browser_activation)
         self.assertIn("deployed release revision does not match", self.browser_activation)
@@ -501,8 +511,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("old_mcp_image_id", self.browser_activation)
         self.assertIn("--force-recreate fin-terminal-browser-mcp", self.browser_activation)
         self.assertIn("EXPECTED_INFRA_SHA", self.browser_activation)
+        self.assertIn("EXPECTED_BROWSER_SHA", self.browser_activation)
+        self.assertIn("validate_browser_image_identity", self.browser_activation)
+        self.assertIn("org.opencontainers.image.revision", self.browser_activation)
         self.assertIn("FIN_TERMINAL_BROWSER_SMOKE_COOKIE", self.browser_activation_workflow)
         self.assertIn("'$GITHUB_SHA'", self.browser_activation_workflow)
+        self.assertIn("FIN_TERMINAL_BROWSER_SOURCE_REVISION", self.browser_activation_workflow)
+        self.assertIn("'$SOURCE_REVISION'", self.browser_activation_workflow)
         self.assertIn("remote_cookie_path=\"/tmp/unchained-browser-canary-smoke-cookie\"", self.browser_activation_workflow)
 
     def test_caddy_runtime_is_pinned_and_force_recreated(self):
@@ -1080,6 +1095,7 @@ class BrowserActivationReleaseIdentityTests(unittest.TestCase):
                     "https://example.test/fin-terminal-browser/",
                     str(cookie),
                     self.expected_sha,
+                    "b" * 40,
                 ],
                 capture_output=True,
                 text=True,

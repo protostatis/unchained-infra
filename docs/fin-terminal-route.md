@@ -4,6 +4,11 @@ The authenticated browser-owned terminal is served at:
 
 - `https://unbrowser.unchainedsky.com/fin-terminal-browser/`
 
+The route opens with a public discovery page so visitors can understand the
+workflow before signing in. The authenticated workspace is linked from that
+page at `/fin-terminal-browser/terminal/`; its APIs and runtime remain behind
+the approved-account auth gate.
+
 The service is built from `Dockerfile.browser-terminal`, runs with
 `TERMINAL_RUNTIME_MODE=browser`, and uses the profiled
 `docker-compose.browser-terminal.yml` overlay. Its image must be an immutable
@@ -11,6 +16,7 @@ digest reference:
 
 ```dotenv
 FIN_TERMINAL_BROWSER_IMAGE=ghcr.io/protostatis/unbrowser-fin-terminal-browser@sha256:<64 hex chars>
+FIN_TERMINAL_BROWSER_SOURCE_REVISION=<40-character app Git SHA used to build the image>
 FIN_TERMINAL_BROWSER_PROXY_TOKEN=<independent 256-bit token>
 FIN_TERMINAL_BROWSER_ENABLED=false
 ```
@@ -49,7 +55,10 @@ docker compose --profile fin-terminal-browser-canary \
   -f docker-compose.yml -f docker-compose.browser-terminal.yml ps
 ```
 
-After both services are healthy, set
+The protected activation workflow also verifies that the image's
+`org.opencontainers.image.revision` label matches
+`FIN_TERMINAL_BROWSER_SOURCE_REVISION` before starting the canary. After both
+services are healthy, set
 `FIN_TERMINAL_BROWSER_ENABLED=true` and recreate Caddy with the same Compose
 files. The protected GitHub workflow performs the commissioning and cookie
 smoke test. Roll back by setting the flag to `false` and recreating Caddy.
@@ -66,10 +75,12 @@ After deployment:
 - `https://unbrowser.unchainedsky.com/` returns `200`.
 - `/fin-terminal/` and `/fin-terminal` return direct `404` when the private
   workspace route is disabled.
-- `/fin-terminal-browser/` returns `404` while
-  `FIN_TERMINAL_BROWSER_ENABLED=false`.
-- A logged-out browser-terminal request reaches the auth gate and returns `401`
-  after the route is enabled.
+- `/fin-terminal-browser/` returns the public discovery page when the route is
+  enabled and `404` while `FIN_TERMINAL_BROWSER_ENABLED=false`.
+- `/fin-terminal-browser/terminal/` remains auth-gated and returns `401` for a
+  logged-out request.
+- The authenticated browser-terminal API under `/fin-terminal-browser/api/`
+  remains behind the same auth gate and returns `401` for a logged-out request.
 - An approved signed-in account receives `200` through Caddy.
 - Former `/unbrowser/fin-terminal/*` URLs return direct `404` with no-store
   caching and no redirect.

@@ -218,6 +218,47 @@ unbrowser.unchainedsky.com {
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
 	redir @fin_terminal_browser_base https://unbrowser.unchainedsky.com/fin-terminal-browser/{?query} 308
+	# The landing shell and immutable Vite assets are public so a new visitor
+	# can understand the product before signing in. The terminal entrypoint and
+	# every API remain behind the browser-auth gate below.
+	@fin_terminal_browser_discovery {
+		method GET HEAD
+		path /fin-terminal-browser/
+		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
+	}
+	handle @fin_terminal_browser_discovery {
+		uri strip_prefix /fin-terminal-browser
+		route {
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Control-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			request_header -Cookie
+			reverse_proxy fin-terminal-browser:8787 {
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}
+			}
+		}
+	}
+	@fin_terminal_browser_assets {
+		method GET HEAD
+		path_regexp fin_terminal_browser_asset ^/fin-terminal-browser/(assets/[A-Za-z0-9._-]+|favicon\.svg)$
+		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
+	}
+	handle @fin_terminal_browser_assets {
+		uri strip_prefix /fin-terminal-browser
+		route {
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Control-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			request_header -Cookie
+			reverse_proxy fin-terminal-browser:8787 {
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_BROWSER_PROXY_TOKEN}
+			}
+		}
+	}
 	@fin_terminal_browser {
 		path /fin-terminal-browser/*
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
