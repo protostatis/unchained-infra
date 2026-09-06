@@ -242,7 +242,7 @@ unbrowser.unchainedsky.com {
 	}
 	@fin_terminal_browser_assets {
 		method GET HEAD
-		path /fin-terminal-browser/assets/* /fin-terminal-browser/favicon.svg
+		path_regexp fin_terminal_browser_asset ^/fin-terminal-browser/(assets/[A-Za-z0-9._-]+|favicon\.svg)$
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
 	handle @fin_terminal_browser_assets {

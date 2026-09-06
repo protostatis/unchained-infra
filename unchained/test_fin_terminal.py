@@ -480,7 +480,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("uri strip_prefix /fin-terminal-browser", route)
         self.assertIn("method GET HEAD", route)
         self.assertIn("path /fin-terminal-browser/", route)
-        self.assertIn("path /fin-terminal-browser/assets/* /fin-terminal-browser/favicon.svg", route)
+        self.assertIn(
+            "path_regexp fin_terminal_browser_asset ^/fin-terminal-browser/(assets/[A-Za-z0-9._-]+|favicon\\.svg)$",
+            route,
+        )
         self.assertIn("forward_auth web:8080", route)
         self.assertIn("path /fin-terminal-browser/*", route)
         self.assertIn("uri /internal/fin-terminal/browser-auth", route)
