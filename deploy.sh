@@ -361,6 +361,7 @@ test -s "$backup_dir/docker-compose.yml"
         docker-compose.public-terminal.yml
         docker-compose.browser-terminal.yml
         Caddyfile
+        deploy/browser_terminal_canary_preflight.sh
         deploy/terminal_runtime_reconciler.py
         deploy/terminal-runtime-reconciler.service
         unchained
@@ -823,9 +824,10 @@ done < "$backup_dir/runtime-images.tsv"
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
       "$remote_dir/docker-compose.yml" "$remote_dir/docker-compose.public-terminal.yml" \
-      "$remote_dir/docker-compose.browser-terminal.yml" \
-      "$remote_dir/Caddyfile" "$remote_dir/.env" \
-      "$remote_dir/deploy/terminal_runtime_reconciler.py" \
+       "$remote_dir/docker-compose.browser-terminal.yml" \
+       "$remote_dir/Caddyfile" "$remote_dir/.env" \
+       "$remote_dir/deploy/browser_terminal_canary_preflight.sh" \
+       "$remote_dir/deploy/terminal_runtime_reconciler.py" \
       "$remote_dir/deploy/terminal-runtime-reconciler.service"
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cp -p -- "$backup_dir/.env" "$remote_dir/.env"

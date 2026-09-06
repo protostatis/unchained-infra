@@ -13,6 +13,7 @@ TOP_LEVEL_CONTEXT_FILES=(
 # container build context, but the protected activation workflow installs the
 # exact deployed copies into systemd and verifies their hashes against main.
 HOST_RUNTIME_FILES=(
+    "browser_terminal_canary_preflight.sh"
     "terminal_runtime_reconciler.py"
     "terminal-runtime-reconciler.service"
 )

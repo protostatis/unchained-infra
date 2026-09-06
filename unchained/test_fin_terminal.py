@@ -783,6 +783,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "docker-compose.public-terminal.yml",
             "docker-compose.browser-terminal.yml",
             "Caddyfile",
+            "deploy/browser_terminal_canary_preflight.sh",
             "deploy/terminal_runtime_reconciler.py",
             "deploy/terminal-runtime-reconciler.service",
             "unchained",
@@ -793,6 +794,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn(
             '"$remote_dir/docker-compose.browser-terminal.yml"', self.deploy
+        )
+        self.assertIn(
+            '"$remote_dir/deploy/browser_terminal_canary_preflight.sh"', self.deploy
         )
         self.assertNotIn("--profile fin-terminal-public-pilot", self.deploy)
         self.assertIn("profiles: [\"fin-terminal-public-pilot\"]", self.public_compose)
