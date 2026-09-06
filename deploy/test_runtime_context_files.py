@@ -77,6 +77,7 @@ class RuntimeContextFilesTests(unittest.TestCase):
         self.assertEqual(
             host_files,
             {
+                "browser_terminal_canary_preflight.sh",
                 "terminal_runtime_reconciler.py",
                 "terminal-runtime-reconciler.service",
             },
