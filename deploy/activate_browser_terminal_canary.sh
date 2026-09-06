@@ -235,8 +235,10 @@ wait_for_public_status() {
     for _ in $(seq 1 30); do
         status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 "$public_url" || true)"
+        status="${status:-ERR}"
         discovery_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 "$discovery_url" || true)"
+        discovery_status="${discovery_status:-ERR}"
         case "$status" in
         200)
             if [[ "$discovery_status" != "200" ]]; then
