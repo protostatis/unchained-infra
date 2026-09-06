@@ -230,19 +230,28 @@ wait_for_health() {
 }
 
 wait_for_public_status() {
-    local status
+    local status discovery_status
+    local discovery_url="${public_url%/}/discover/"
     for _ in $(seq 1 30); do
         status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 5 --max-time 10 "$public_url" || true)"
+        status="${status:-ERR}"
+        discovery_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 10 "$discovery_url" || true)"
+        discovery_status="${discovery_status:-ERR}"
         case "$status" in
         200)
-                printf '%s\n' "$status"
-                return 0
-                ;;
+            if [[ "$discovery_status" != "200" ]]; then
+                sleep 2
+                continue
+            fi
+            printf '%s/%s\n' "$status" "$discovery_status"
+            return 0
+            ;;
         esac
         sleep 2
     done
-    echo "timed out waiting for enabled browser discovery page (last HTTP status: $status)" >&2
+    echo "timed out waiting for enabled browser entrypoint/discovery page (last HTTP status: $status/$discovery_status)" >&2
     return 1
 }
 

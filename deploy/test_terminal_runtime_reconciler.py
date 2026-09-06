@@ -888,6 +888,15 @@ class CaddyHeaderContractTests(unittest.TestCase):
         self.assertIn('handle /internal/*', caddyfile)
         self.assertIn('respond "Not found" 404', caddyfile)
 
+    def test_browser_discovery_shell_includes_explicit_discover_route(self) -> None:
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        self.assertIn(
+            "path /fin-terminal-browser/ /fin-terminal-browser/discover /fin-terminal-browser/discover/",
+            caddyfile,
+        )
+        self.assertIn('local discovery_url="${public_url%/}/discover/"',
+                      (PROJECT_DIR / "deploy/activate_browser_terminal_canary.sh").read_text())
+
 
 # ---------------------------------------------------------------------------
 # I) Compose render, shell syntax, deployment tests

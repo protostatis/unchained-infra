@@ -218,12 +218,12 @@ unbrowser.unchainedsky.com {
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
 	redir @fin_terminal_browser_base https://unbrowser.unchainedsky.com/fin-terminal-browser/{?query} 308
-	# The landing shell and immutable Vite assets are public so a new visitor
-	# can understand the product before signing in. The terminal entrypoint and
-	# every API remain behind the browser-auth gate below.
+	# The browser entrypoint, explicit discovery shell, and immutable Vite assets
+	# are public. The browser entrypoint opens the terminal client-side; the
+	# terminal entrypoint and every API remain behind the browser-auth gate below.
 	@fin_terminal_browser_discovery {
 		method GET HEAD
-		path /fin-terminal-browser/
+		path /fin-terminal-browser/ /fin-terminal-browser/discover /fin-terminal-browser/discover/
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
 	handle @fin_terminal_browser_discovery {
