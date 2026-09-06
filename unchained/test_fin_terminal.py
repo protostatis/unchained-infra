@@ -508,8 +508,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("old_mcp_image_id", self.browser_activation)
         self.assertIn("--force-recreate fin-terminal-browser-mcp", self.browser_activation)
         self.assertIn("EXPECTED_INFRA_SHA", self.browser_activation)
+        self.assertIn("EXPECTED_BROWSER_SHA", self.browser_activation)
+        self.assertIn("validate_browser_image_identity", self.browser_activation)
+        self.assertIn("org.opencontainers.image.revision", self.browser_activation)
         self.assertIn("FIN_TERMINAL_BROWSER_SMOKE_COOKIE", self.browser_activation_workflow)
         self.assertIn("'$GITHUB_SHA'", self.browser_activation_workflow)
+        self.assertIn("FIN_TERMINAL_BROWSER_SOURCE_REVISION", self.browser_activation_workflow)
+        self.assertIn("'$SOURCE_REVISION'", self.browser_activation_workflow)
         self.assertIn("remote_cookie_path=\"/tmp/unchained-browser-canary-smoke-cookie\"", self.browser_activation_workflow)
 
     def test_caddy_runtime_is_pinned_and_force_recreated(self):
@@ -1087,6 +1092,7 @@ class BrowserActivationReleaseIdentityTests(unittest.TestCase):
                     "https://example.test/fin-terminal-browser/",
                     str(cookie),
                     self.expected_sha,
+                    "b" * 40,
                 ],
                 capture_output=True,
                 text=True,

@@ -8,8 +8,8 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 5 ]]; then
-    echo "usage: $0 REMOTE_DIR IMAGE PUBLIC_URL SMOKE_COOKIE_FILE EXPECTED_INFRA_SHA" >&2
+if [[ "$#" -ne 6 ]]; then
+    echo "usage: $0 REMOTE_DIR IMAGE PUBLIC_URL SMOKE_COOKIE_FILE EXPECTED_INFRA_SHA EXPECTED_BROWSER_SHA" >&2
     exit 2
 fi
 
@@ -18,6 +18,7 @@ image="$2"
 public_url="$3"
 smoke_cookie_file="$4"
 expected_infra_sha="$5"
+expected_browser_sha="$6"
 env_file="$remote_dir/.env"
 compose_args=(
     --profile fin-terminal-browser-canary
@@ -29,6 +30,10 @@ compose_args=(
 [[ "$smoke_cookie_file" = /* ]] || { echo "SMOKE_COOKIE_FILE must be absolute" >&2; exit 2; }
 [[ "$expected_infra_sha" =~ ^[0-9a-f]{40}$ ]] || {
     echo "EXPECTED_INFRA_SHA must be a 40-character lowercase Git SHA" >&2
+    exit 2
+}
+[[ "$expected_browser_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "EXPECTED_BROWSER_SHA must be a 40-character lowercase Git SHA" >&2
     exit 2
 }
 [[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]] || {
@@ -130,6 +135,15 @@ if fields["revision"] != expected:
         f"(expected {expected}, actual {fields['revision']})"
     )
 PY
+}
+
+validate_browser_image_identity() {
+    local actual_browser_sha
+    actual_browser_sha="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null || true)"
+    if [[ "$actual_browser_sha" != "$expected_browser_sha" ]]; then
+        echo "browser image revision does not match the reviewed app revision (expected $expected_browser_sha, actual ${actual_browser_sha:-missing})" >&2
+        return 1
+    fi
 }
 
 validate_deployed_release_identity
@@ -367,6 +381,13 @@ fi
 # replaced; the preflight receives a process-scoped false override.
 if [[ "$old_enabled" == "true" ]]; then
     FIN_TERMINAL_BROWSER_ENABLED=false "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
+else
+    set_env_value FIN_TERMINAL_BROWSER_ENABLED false
+    "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
+fi
+validate_browser_image_identity
+
+if [[ "$old_enabled" == "true" ]]; then
     # Recreate and functionally health-check the MCP sidecar on upgrades too.
     # The browser backend can remain on the old image while this dependency is
     # replaced, but a stale sidecar must not survive an application upgrade.
@@ -375,8 +396,6 @@ if [[ "$old_enabled" == "true" ]]; then
     docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never \
         --force-recreate fin-terminal-browser
 else
-    set_env_value FIN_TERMINAL_BROWSER_ENABLED false
-    "$remote_dir/deploy/browser_terminal_canary_preflight.sh"
     docker compose "${compose_args[@]}" up -d --build fin-terminal-browser-mcp fin-terminal-browser
     wait_for_health fin-terminal-browser-mcp
 fi

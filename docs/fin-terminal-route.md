@@ -16,6 +16,7 @@ digest reference:
 
 ```dotenv
 FIN_TERMINAL_BROWSER_IMAGE=ghcr.io/protostatis/unbrowser-fin-terminal-browser@sha256:<64 hex chars>
+FIN_TERMINAL_BROWSER_SOURCE_REVISION=<40-character app Git SHA used to build the image>
 FIN_TERMINAL_BROWSER_PROXY_TOKEN=<independent 256-bit token>
 FIN_TERMINAL_BROWSER_ENABLED=false
 ```
@@ -54,7 +55,10 @@ docker compose --profile fin-terminal-browser-canary \
   -f docker-compose.yml -f docker-compose.browser-terminal.yml ps
 ```
 
-After both services are healthy, set
+The protected activation workflow also verifies that the image's
+`org.opencontainers.image.revision` label matches
+`FIN_TERMINAL_BROWSER_SOURCE_REVISION` before starting the canary. After both
+services are healthy, set
 `FIN_TERMINAL_BROWSER_ENABLED=true` and recreate Caddy with the same Compose
 files. The protected GitHub workflow performs the commissioning and cookie
 smoke test. Roll back by setting the flag to `false` and recreating Caddy.
