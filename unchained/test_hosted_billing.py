@@ -3757,6 +3757,64 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(contains_tool_call_wrapper(variant))
         self.assertEqual(strip_tool_call_wrappers("done " + variant).strip(), "done")
 
+    def test_dsml_recovery_rejects_mismatched_outer_tags(self):
+        """The V4 form (tool_calls) and the V4.1 form (calls) must not be mixed
+        across a block's opening and closing outer tags."""
+        for opening, closing in ((" calls", " tool_calls"), ("tool_calls", " calls")):
+            with self.subTest(opening=opening, closing=closing):
+                message = {
+                    "role": "assistant",
+                    "content": (
+                        f"<\uFF5C\uFF5CDSML\uFF5C\uFF5C{opening}>"
+                        "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                        "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                        f"</\uFF5C\uFF5CDSML\uFF5C\uFF5C{closing}>"
+                    ),
+                }
+                self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
+    def test_dsml_recovery_accepts_v41_variant_with_newline_gap(self):
+        raw = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C\ncalls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C\ninvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C\nparameter name=\"expression\" string=\"true\">"
+            "document.title"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C\nparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C\ninvoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C\ncalls>"
+        )
+        recovered = _recover_deepseek_dsml_tool_calls(
+            {"role": "assistant", "content": raw}
+        )
+
+        self.assertEqual(recovered["tool_calls"][0]["function"]["name"], "js_eval")
+
+    def test_dsml_recovery_accepts_entity_escaped_v41_variant(self):
+        raw = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter name=\"expression\" string=\"true\">"
+            "document.title"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+        ).replace("<", "&lt;").replace(">", "&gt;")
+        recovered = _recover_deepseek_dsml_tool_calls(
+            {"role": "assistant", "content": raw}
+        )
+
+        self.assertEqual(recovered["tool_calls"][0]["function"]["name"], "js_eval")
+
+    def test_dsml_recovery_rejects_empty_v41_block(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+            ),
+        }
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
     def test_dsml_recovery_keeps_a_valid_large_batch(self):
         invokes = "".join(
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"

@@ -71,6 +71,7 @@ from context_compact import (
 from tool_payloads import (
     _DSML_GAP,
     _DSML_TOOL_CALLS_NAME,
+    _DSML_TOOL_CALLS_NAME_BACKREF,
     _XML_GT as _DSML_XML_GT,
     _XML_LT as _DSML_XML_LT,
 )
@@ -693,7 +694,7 @@ def _decode_tool_arguments(raw_args) -> dict:
 
 _DSML_TOOL_CALLS_RE = re.compile(
     rf"{_DSML_XML_LT}\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b(?P<attrs>.*?){_DSML_XML_GT}(?P<body>.*?)"
-    rf"{_DSML_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\s*{_DSML_XML_GT}",
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME_BACKREF}\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_INVOKE_RE = re.compile(

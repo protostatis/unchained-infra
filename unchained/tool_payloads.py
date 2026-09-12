@@ -37,7 +37,11 @@ _TOOL_CALL_DANGLING_RE = re.compile(
 # source so this matcher remains readable in every editor.
 _DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
 _DSML_GAP = rf"{_DSML_PREFIX}\s*"
-_DSML_TOOL_CALLS_NAME = r"(?:tool_)?calls"
+# The outer tag is ``tool_calls`` in the V4 form and ``calls`` in the V4.1 form.
+# The opening tag captures which one, and the close requires the same via a
+# backreference, so a block with mismatched open/close tags never matches.
+_DSML_TOOL_CALLS_NAME = r"(?P<dsml_calls_tag>(?:tool_)?calls)"
+_DSML_TOOL_CALLS_NAME_BACKREF = r"(?P=dsml_calls_tag)"
 _DSML_TOOL_CALLS_MARKER_RE = re.compile(
     rf"{_XML_LT}\s*/?\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b", re.IGNORECASE
 )
@@ -45,7 +49,7 @@ _DSML_TOOL_CALLS_OPEN = (
     rf"{_XML_LT}\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b.*?{_XML_GT}"
 )
 _DSML_TOOL_CALLS_CLOSE = (
-    rf"{_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\s*{_XML_GT}"
+    rf"{_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME_BACKREF}\s*{_XML_GT}"
 )
 _DSML_TOOL_CALLS_BLOCK_RE = re.compile(
     rf"{_DSML_TOOL_CALLS_OPEN}.*?{_DSML_TOOL_CALLS_CLOSE}",
