@@ -101,33 +101,111 @@ def credit_service_token() -> str:
 # worker immediately after the submitted callback), never by a response field
 # or a manual env flip. Unknown models keep their conservative fallback.
 #
-# Legacy schedule — in effect until the time-of-use change below:
+# Legacy schedule — in effect until the first time-of-use change below:
 #   Flash: hit $0.0028, miss $0.14, output $0.28
 #   Pro:   hit $0.003625, miss $0.435, output $0.87
 #
-# New schedule — effective exactly 2026-08-16T16:00:00Z (unix 1786896000):
+# Time-of-use schedule — effective 2026-08-16T16:00:00Z (unix 1786896000):
 #   Peak windows recur daily in UTC: [01:00, 04:00) and [06:00, 10:00).
 #   All other hours are off-peak.
 #   Flash off $0.007 / $0.22 / $0.66,  peak $0.014 / $0.44 / $1.32
 #   Pro   off $0.022 / $0.66 / $1.98, peak $0.044 / $1.32 / $3.96
+#
+# V4.1-Flash schedule — effective 2026-09-10T04:00:00Z (unix 1789012800):
+#   Peak windows are weekdays only (Mon-Fri, UTC); weekends are off-peak.
+#   Flash off $0.003 / $0.15 / $0.60,  peak $0.006 / $0.30 / $1.20
+#   Pro unchanged (continues the 2026-08-16 rates, all-days peak).
+# See DEEPSEEK_PRICING_TIMELINES for the authoritative per-product eras.
 
 DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP = 1_786_896_000  # 2026-08-16T16:00:00Z
-DEEPSEEK_PRICING_SCHEDULE_VERSION = "2026-08-16T16:00:00Z"
+# DeepSeek-V4.1-Flash API pricing took effect 2026-09-10T04:00:00Z. It lowered
+# Flash prices and made peak windows weekday-only. V4-Pro pricing was unchanged.
+DEEPSEEK_V41_FLASH_PRICING_EFFECTIVE_TIMESTAMP = 1_789_012_800  # 2026-09-10T04:00:00Z
+# Latest schedule version (informational / external references). Validation is
+# per-era: use DEEPSEEK_PRICING_SCHEDULE_VERSIONS or the era returned by
+# deepseek_pricing_for_timestamp rather than assuming this is the only version.
+DEEPSEEK_PRICING_SCHEDULE_VERSION = "2026-09-10T04:00:00Z"
+DEEPSEEK_PRICING_SCHEDULE_VERSIONS: frozenset[str] = frozenset(
+    {"2026-08-16T16:00:00Z", "2026-09-10T04:00:00Z"}
+)
 DEEPSEEK_PEAK_WINDOWS_UTC: tuple[tuple[int, int], ...] = ((1, 4), (6, 10))
 
-# (input_cache_hit, input_cache_miss, output) integer micro-USD per million
-# tokens.
-DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
-    "deepseek-v4-flash": (2_800, 140_000, 280_000),
-    "deepseek-v4-pro": (3_625, 435_000, 870_000),
+# Model ID -> pricing product. ``deepseek-flash`` is the provider's canonical
+# V4.1-Flash ID; ``deepseek-v4-flash`` is a temporary legacy alias that the
+# provider still routes to V4.1-Flash and bills at Flash prices, so both share
+# the Flash timeline. The raw requested ID is always preserved for audit.
+DEEPSEEK_PRICING_PRODUCTS: dict[str, str] = {
+    "deepseek-flash": "flash",
+    "deepseek-v4-flash": "flash",
+    "deepseek-v4-pro": "pro",
 }
-DEEPSEEK_OFFPEAK_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
-    "deepseek-v4-flash": (7_000, 220_000, 660_000),
-    "deepseek-v4-pro": (22_000, 660_000, 1_980_000),
+# Canonical model IDs for policy/default surfaces and alias authorization.
+# Legacy IDs remain accepted for billing and API calls.
+DEEPSEEK_MODEL_ALIASES: dict[str, str] = {
+    "deepseek-v4-flash": "deepseek-flash",
 }
-DEEPSEEK_PEAK_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
-    "deepseek-v4-flash": (14_000, 440_000, 1_320_000),
-    "deepseek-v4-pro": (44_000, 1_320_000, 3_960_000),
+
+
+def _deepseek_pricing_product(model: str) -> str | None:
+    """Return the pricing product for *model*, or None when not scheduled."""
+    return DEEPSEEK_PRICING_PRODUCTS.get(str(model or "").strip())
+
+
+# Each product has an independent, ordered timeline of price eras. A request is
+# priced by the era whose ``effective_ts`` is the latest one <= the submission
+# timestamp, until the next era begins. This preserves history: the 2026-08-16
+# rates stay authoritative for the Aug 16 - Sep 10 window even after the Sep 10
+# V4.1-Flash refresh lands.
+#
+# Rates are ``(input_cache_hit, input_cache_miss, output)`` integer micro-USD
+# per million tokens.
+DEEPSEEK_PRICING_TIMELINES: dict[str, tuple[dict, ...]] = {
+    "flash": (
+        {
+            "effective_ts": 0.0,
+            "schedule_version": "2026-08-16T16:00:00Z",
+            "legacy_rates": (2_800, 140_000, 280_000),
+            "offpeak_rates": (2_800, 140_000, 280_000),
+            "peak_rates": (2_800, 140_000, 280_000),
+            "weekday_only_peak": False,
+        },
+        {
+            "effective_ts": DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP,
+            "schedule_version": "2026-08-16T16:00:00Z",
+            "legacy_rates": None,
+            "offpeak_rates": (7_000, 220_000, 660_000),
+            "peak_rates": (14_000, 440_000, 1_320_000),
+            "weekday_only_peak": False,
+        },
+        {
+            "effective_ts": DEEPSEEK_V41_FLASH_PRICING_EFFECTIVE_TIMESTAMP,
+            "schedule_version": "2026-09-10T04:00:00Z",
+            "legacy_rates": None,
+            "offpeak_rates": (3_000, 150_000, 600_000),
+            "peak_rates": (6_000, 300_000, 1_200_000),
+            "weekday_only_peak": True,
+        },
+    ),
+    # V4-Pro keeps its 2026-08-16 all-days peak schedule; the provider states
+    # V4-Pro billing is unchanged after 2026-09-10.
+    "pro": (
+        {
+            "effective_ts": 0.0,
+            "schedule_version": "2026-08-16T16:00:00Z",
+            "legacy_rates": (3_625, 435_000, 870_000),
+            "offpeak_rates": (3_625, 435_000, 870_000),
+            "peak_rates": (3_625, 435_000, 870_000),
+            "weekday_only_peak": False,
+        },
+        {
+            "effective_ts": DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP,
+            "schedule_version": "2026-08-16T16:00:00Z",
+            "legacy_rates": None,
+            "offpeak_rates": (22_000, 660_000, 1_980_000),
+            "peak_rates": (44_000, 1_320_000, 3_960_000),
+            "weekday_only_peak": False,
+        },
+    ),
 }
 
 # Defensive ceiling for provider-reported per-call token fields. This is far
@@ -159,25 +237,43 @@ def deepseek_pricing_for_timestamp(model: str, ts: float) -> dict | None:
     the pricing basis timestamp, and the applied hit/miss/output rates as
     integer micro-USD per million tokens. Unknown models return ``None`` so
     callers keep their conservative fallback behavior.
+
+    Legacy aliases resolve to their pricing product (see
+    ``DEEPSEEK_MODEL_ALIASES``); the returned ``model`` field is the raw
+    requested ID so audit rows never lose what the caller asked for.
     """
-    m = str(model or "").strip()
-    if m not in DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION:
+    requested = str(model or "").strip()
+    product = _deepseek_pricing_product(requested)
+    if product is None:
         return None
     basis = float(ts)
-    if basis < DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP:
+    timeline = DEEPSEEK_PRICING_TIMELINES[product]
+    era = timeline[0]
+    for candidate in timeline:
+        if basis >= candidate["effective_ts"]:
+            era = candidate
+        else:
+            break
+    if era["legacy_rates"] is not None:
         tier = "legacy"
-        hit, miss, output = DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION[m]
+        hit, miss, output = era["legacy_rates"]
     else:
-        hour = time.gmtime(basis).tm_hour
-        if any(lo <= hour < hi for lo, hi in DEEPSEEK_PEAK_WINDOWS_UTC):
+        gm = time.gmtime(basis)
+        in_window = any(lo <= gm.tm_hour < hi for lo, hi in DEEPSEEK_PEAK_WINDOWS_UTC)
+        # V4.1-Flash peak windows are weekdays only (Mon-Fri, UTC); weekends
+        # are off-peak. Earlier eras applied peak hours every day.
+        is_peak = bool(in_window) and (
+            not era["weekday_only_peak"] or gm.tm_wday < 5
+        )
+        if is_peak:
             tier = "peak"
-            hit, miss, output = DEEPSEEK_PEAK_RATES_MICRO_USD_PER_MILLION[m]
+            hit, miss, output = era["peak_rates"]
         else:
             tier = "offpeak"
-            hit, miss, output = DEEPSEEK_OFFPEAK_RATES_MICRO_USD_PER_MILLION[m]
+            hit, miss, output = era["offpeak_rates"]
     return {
-        "model": m,
-        "schedule_version": DEEPSEEK_PRICING_SCHEDULE_VERSION,
+        "model": requested,
+        "schedule_version": era["schedule_version"],
         "tier": tier,
         "pricing_basis_ts": basis,
         "input_cache_hit_micro_usd_per_million": hit,
@@ -351,7 +447,7 @@ def _validate_pricing_audit_metadata(
     if not has_any:
         return None, None, None, None, None, None
 
-    if sv != DEEPSEEK_PRICING_SCHEDULE_VERSION:
+    if sv not in DEEPSEEK_PRICING_SCHEDULE_VERSIONS:
         raise ValueError("pricing schedule version is not recognized")
     if t not in ("legacy", "peak", "offpeak"):
         raise ValueError("pricing tier must be one of legacy/peak/offpeak")
@@ -365,6 +461,10 @@ def _validate_pricing_audit_metadata(
     expected = deepseek_pricing_for_timestamp(model, basis)
     if expected is None:
         raise ValueError("pricing metadata supplied for an unpriced model")
+    if sv != expected["schedule_version"]:
+        raise ValueError(
+            "pricing schedule version does not match the schedule for this timestamp"
+        )
     if expected["tier"] != t:
         raise ValueError("pricing tier does not match the schedule for this timestamp")
     try:
@@ -417,11 +517,13 @@ HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS: dict[str, tuple[int, i
     # >=256k input-token tier
     "qwen/qwen3.6-plus": (1_300_000, 3_900_000),
     "qwen/qwen3.5-flash-02-23": (65_000, 260_000),
-    # DeepSeek direct — cache-miss input tier and output rate use the NEW
-    # time-of-use PEAK worst-case schedule so the fixed hold covers the most
-    # expensive hour of the day. Flash hold $0.25 and Pro hold $1.00 remain
-    # certified sufficient against these peak rates.
-    "deepseek-v4-flash": (440_000, 1_320_000),   # peak miss $0.44 / output $1.32
+    # DeepSeek direct — cache-miss input tier and output rate use the most
+    # expensive PEAK hour reachable by each product's timeline. All flash IDs
+    # share the Flash timeline, whose Aug-16 peak ($0.44 miss / $1.32 output) is
+    # higher than the Sep-10 V4.1-Flash peak ($0.30 / $1.20), so certify against
+    # the Aug-16 worst case. Flash hold $0.25 and Pro hold $1.00 stay certified.
+    "deepseek-flash": (440_000, 1_320_000),      # peak miss $0.44 / output $1.32
+    "deepseek-v4-flash": (440_000, 1_320_000),   # legacy alias → same timeline
     "deepseek-v4-pro": (1_320_000, 3_960_000),   # peak miss $1.32 / output $3.96
 }
 
@@ -461,7 +563,8 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "qwen/qwen3.5-flash-02-23": 250_000,
     # DeepSeek direct API — paid hosted models. Conservative per-attempt holds
     # (the worker settles actual cost estimated from cache-aware token usage).
-    "deepseek-v4-flash": 250_000,   # $0.25 hold
+    "deepseek-flash": 250_000,      # $0.25 hold (V4.1-Flash, canonical)
+    "deepseek-v4-flash": 250_000,   # $0.25 hold (legacy alias, same product)
     "deepseek-v4-pro": 1_000_000,   # $1.00 hold (reasoning model, 3x output price)
     # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,
@@ -521,7 +624,7 @@ HOSTED_FREE_MODEL_DEFAULTS: tuple[str, ...] = (
     "poolside/laguna-xs-2.1:free",
 )
 HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
-    "deepseek-v4-flash",
+    "deepseek-flash",
     "google/gemini-3.1-flash-lite",
     "qwen/qwen3.6-plus",
     "qwen/qwen3.5-flash-02-23",
@@ -599,6 +702,26 @@ def is_deepseek_model_id(model: str) -> bool:
 def is_hosted_model_id(model: str) -> bool:
     """Return whether *model* is a valid hosted (OpenRouter or DeepSeek) ID."""
     return is_openrouter_model_id(model) or is_deepseek_model_id(model)
+
+
+def canonical_hosted_model_id(model: str) -> str:
+    """Map a legacy provider alias to its canonical hosted model ID.
+
+    Non-aliased IDs are returned unchanged so this is safe to apply to any
+    hosted model ID (including OpenRouter IDs).
+    """
+    value = str(model or "").strip()
+    return DEEPSEEK_MODEL_ALIASES.get(value, value)
+
+
+def _canonical_hosted_model_ids(models) -> list[str]:
+    """Canonicalize an ordered model list, dropping empty/duplicate entries."""
+    out: list[str] = []
+    for raw in models or ():
+        model = canonical_hosted_model_id(raw)
+        if model and model not in out:
+            out.append(model)
+    return out
 
 
 # Provider → model-ID prefix used to scope metering/reconciliation rows.
@@ -681,7 +804,7 @@ def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]
     # lane: `_OPENROUTER_TRIAL_DEFAULT_MODEL` (a free OpenRouter model) remains
     # the no-model fallback for guest/pending traffic in chat_stream/chat_flow,
     # while HOSTED_DEFAULT_MODEL is the canonical paid-lane default. When unset
-    # it falls back to HOSTED_USER_MODEL_DEFAULTS[0] (deepseek-v4-flash) so
+    # it falls back to HOSTED_USER_MODEL_DEFAULTS[0] (deepseek-flash) so
     # local runs match production.
     default_model = str(
         os.environ.get("HOSTED_DEFAULT_MODEL", "")
@@ -696,8 +819,15 @@ def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]
 def effective_hosted_model_policy(core) -> dict:
     """Load the ordered non-admin model policy, falling back safely on errors."""
     default_model, post_cap, fallback_model = _runtime_hosted_model_requirements(core)
-    required = tuple(dict.fromkeys((default_model, fallback_model, *post_cap)))
-    built_in = tuple(dict.fromkeys((*HOSTED_USER_MODEL_DEFAULTS, *required)))
+    # Migrate legacy provider aliases (e.g. a persisted policy or a stale
+    # HOSTED_DEFAULT_MODEL still naming ``deepseek-v4-flash``) to the canonical
+    # ID so the dropdown exposes one entry per model. Every policy surface the
+    # frontend consumes is canonicalized, not just ``models``.
+    default_model = canonical_hosted_model_id(default_model)
+    fallback_model = canonical_hosted_model_id(fallback_model)
+    post_cap = tuple(_canonical_hosted_model_ids(post_cap))
+    required = tuple(_canonical_hosted_model_ids((default_model, fallback_model, *post_cap)))
+    built_in = _canonical_hosted_model_ids((*HOSTED_USER_MODEL_DEFAULTS, *required))
     built_in = normalize_hosted_model_ids(
         built_in,
         required_models=required,
@@ -722,7 +852,7 @@ def effective_hosted_model_policy(core) -> dict:
             if not isinstance(value, dict) or value.get("version") != HOSTED_MODEL_POLICY_VERSION:
                 raise ValueError("unsupported hosted model policy format")
             models = normalize_hosted_model_ids(
-                value.get("models"),
+                _canonical_hosted_model_ids(value.get("models")),
                 required_models=required,
             )
             configured = True
@@ -819,7 +949,12 @@ def is_hosted_model_allowed_for_identity(
     if is_hosted_admin_identity(core, user_id=user_id, email=email):
         return True
     policy = effective_hosted_model_policy(core)
-    return value in set(policy["models"])
+    models = set(policy["models"])
+    if value in models:
+        return True
+    # A legacy alias is allowed when its canonical model is allowed.
+    canonical = canonical_hosted_model_id(value)
+    return bool(canonical and canonical in models)
 
 
 def is_hosted_model_allowed(
@@ -1847,7 +1982,7 @@ class CreditLedger:
             # normalized token breakdown. A buggy worker that sends correct
             # tier/rates but a wrong cost is overridden, not trusted.
             # ------------------------------------------------------------------
-            scheduled_deepseek = model_name in DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION
+            scheduled_deepseek = _deepseek_pricing_product(model_name) is not None
             authoritative_cost_micro: int | None = None
             schedule_version: str | None
             tier: str | None

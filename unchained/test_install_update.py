@@ -1684,9 +1684,11 @@ def test_trial_chat_has_admin_custom_openrouter_model():
 def test_trial_chat_has_deepseek_direct_models():
     """Verify the hosted /workspace dropdown exposes DeepSeek direct models."""
     from web import TRIAL_CHAT_HTML
-    assert 'value="deepseek-v4-flash"' in TRIAL_CHAT_HTML, "DeepSeek V4 Flash option missing"
+    assert 'value="deepseek-flash"' in TRIAL_CHAT_HTML, "DeepSeek V4.1 Flash option missing"
     assert 'value="deepseek-v4-pro"' in TRIAL_CHAT_HTML, "DeepSeek V4 Pro option missing"
-    assert "'deepseek-v4-flash': 'DeepSeek V4 Flash (Direct)'" in TRIAL_CHAT_HTML, "DeepSeek label map missing"
+    assert "'deepseek-flash': 'DeepSeek V4.1 Flash (Direct)'" in TRIAL_CHAT_HTML, "DeepSeek label map missing"
+    assert "'deepseek-v4-flash': 'DeepSeek V4.1 Flash (Direct, legacy ID)'" in TRIAL_CHAT_HTML, \
+        "Legacy DeepSeek label map missing"
     assert "'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash (OpenRouter)'" in TRIAL_CHAT_HTML, \
         "OpenRouter DeepSeek label map missing"
     # Hosted model ID check must accept slash-free DeepSeek IDs.
