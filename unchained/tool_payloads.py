@@ -30,20 +30,33 @@ _TOOL_CALL_DANGLING_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 # DeepSeek can fall back to DSML tool-call markup rather than returning the
-# OpenAI-compatible ``tool_calls`` field. Keep the literal delimiter escaped in
+# OpenAI-compatible ``tool_calls`` field. V4.1-Flash emits a variant with a space
+# between the delimiter and the tag name and shortens the outer tag to
+# ``calls``, so the delimiter is followed by optional whitespace and the outer
+# name is matched as ``(?:tool_)?calls``. Keep the literal delimiter escaped in
 # source so this matcher remains readable in every editor.
 _DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
+_DSML_GAP = rf"{_DSML_PREFIX}\s*"
+# The outer tag is ``tool_calls`` in the V4 form and ``calls`` in the V4.1 form.
+# The opening tag captures which one, and the close requires the same via a
+# backreference, so a block with mismatched open/close tags never matches.
+_DSML_TOOL_CALLS_NAME = r"(?P<dsml_calls_tag>(?:tool_)?calls)"
+_DSML_TOOL_CALLS_NAME_BACKREF = r"(?P=dsml_calls_tag)"
 _DSML_TOOL_CALLS_MARKER_RE = re.compile(
-    rf"{_XML_LT}\s*/?\s*{_DSML_PREFIX}tool_calls\b", re.IGNORECASE
+    rf"{_XML_LT}\s*/?\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b", re.IGNORECASE
 )
-_DSML_TOOL_CALLS_OPEN = rf"{_XML_LT}\s*{_DSML_PREFIX}tool_calls\b.*?{_XML_GT}"
-_DSML_TOOL_CALLS_CLOSE = rf"{_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_XML_GT}"
+_DSML_TOOL_CALLS_OPEN = (
+    rf"{_XML_LT}\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b.*?{_XML_GT}"
+)
+_DSML_TOOL_CALLS_CLOSE = (
+    rf"{_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME_BACKREF}\s*{_XML_GT}"
+)
 _DSML_TOOL_CALLS_BLOCK_RE = re.compile(
     rf"{_DSML_TOOL_CALLS_OPEN}.*?{_DSML_TOOL_CALLS_CLOSE}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_TOOL_CALLS_DANGLING_RE = re.compile(
-    rf"{_XML_LT}\s*/?\s*{_DSML_PREFIX}tool_calls\b.*$",
+    rf"{_XML_LT}\s*/?\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b.*$",
     re.IGNORECASE | re.DOTALL,
 )
 
