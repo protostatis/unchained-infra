@@ -69,7 +69,8 @@ from context_compact import (
     is_browser_dom_checkpoint,
 )
 from tool_payloads import (
-    _DSML_PREFIX,
+    _DSML_GAP,
+    _DSML_TOOL_CALLS_NAME,
     _XML_GT as _DSML_XML_GT,
     _XML_LT as _DSML_XML_LT,
 )
@@ -691,24 +692,24 @@ def _decode_tool_arguments(raw_args) -> dict:
 
 
 _DSML_TOOL_CALLS_RE = re.compile(
-    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}tool_calls\b(?P<attrs>.*?){_DSML_XML_GT}(?P<body>.*?)"
-    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_DSML_XML_GT}",
+    rf"{_DSML_XML_LT}\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\b(?P<attrs>.*?){_DSML_XML_GT}(?P<body>.*?)"
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_GAP}{_DSML_TOOL_CALLS_NAME}\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_INVOKE_RE = re.compile(
-    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}invoke\b(?P<attrs>.*?)"
+    rf"{_DSML_XML_LT}\s*{_DSML_GAP}invoke\b(?P<attrs>.*?)"
     rf"{_DSML_XML_GT}(?P<body>.*?)"
-    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}invoke\s*{_DSML_XML_GT}",
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_GAP}invoke\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_PARAMETER_RE = re.compile(
-    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}parameter\b(?P<attrs>.*?)"
+    rf"{_DSML_XML_LT}\s*{_DSML_GAP}parameter\b(?P<attrs>.*?)"
     rf"{_DSML_XML_GT}(?P<value>.*?)"
-    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}parameter\s*{_DSML_XML_GT}",
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_GAP}parameter\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_TAG_MARKER_RE = re.compile(
-    rf"{_DSML_XML_LT}\s*/?\s*{_DSML_PREFIX}[A-Za-z_][A-Za-z0-9_.:-]*\b",
+    rf"{_DSML_XML_LT}\s*/?\s*{_DSML_GAP}[A-Za-z_][A-Za-z0-9_.:-]*\b",
     re.IGNORECASE,
 )
 _DSML_ATTRIBUTE_RE = re.compile(

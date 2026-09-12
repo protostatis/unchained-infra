@@ -3517,6 +3517,24 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("dsml", cleaned.lower())
         self.assertNotIn("tool_call", cleaned.lower())
 
+    async def test_direct_deepseek_strips_v41_dsml_variant(self):
+        dsml = (
+            "Still at step 11. "
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"type_text\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter name=\"text\" string=\"true\">"
+            "Christina Yang"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+        )
+        cleaned = await self.agent._sanitize_user_output(
+            SimpleNamespace(), "deepseek-flash", dsml
+        )
+
+        self.assertEqual(cleaned, "Still at step 11.")
+        self.assertNotIn("dsml", cleaned.lower())
+
     async def test_direct_deepseek_recovers_dsml_tool_call_and_drops_pre_tool_prose(self):
         session_id = "s-deepseek-dsml"
         self.agent.sessions[session_id] = []
@@ -3700,6 +3718,44 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
                     json.loads(recovered["tool_calls"][0]["function"]["arguments"]),
                     {"expression": "document.title"},
                 )
+
+    def test_dsml_recovery_accepts_v41_space_and_short_calls_tag(self):
+        """V4.1-Flash emits a space after the delimiter and shortens the outer
+        tag to ``calls``; this variant must recover like the V4 form."""
+        content = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"type_text\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter name=\"text\" string=\"true\">"
+            "Christina Yang"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+        )
+        recovered = _recover_deepseek_dsml_tool_calls(
+            {"role": "assistant", "content": content}
+        )
+
+        self.assertIsNone(recovered["content"])
+        self.assertEqual(recovered["tool_calls"][0]["function"]["name"], "type_text")
+        self.assertEqual(
+            json.loads(recovered["tool_calls"][0]["function"]["arguments"]),
+            {"text": "Christina Yang"},
+        )
+
+    def test_dsml_wrapper_helpers_cover_v41_variant(self):
+        from tool_payloads import (
+            contains_tool_call_wrapper,
+            strip_tool_call_wrappers,
+        )
+        variant = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"type_text\">"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+        )
+
+        self.assertTrue(contains_tool_call_wrapper(variant))
+        self.assertEqual(strip_tool_call_wrappers("done " + variant).strip(), "done")
 
     def test_dsml_recovery_keeps_a_valid_large_batch(self):
         invokes = "".join(
