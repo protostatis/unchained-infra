@@ -1896,6 +1896,23 @@ class TestDeepSeekProvider(unittest.TestCase):
         self.assertNotIn("deepseek-v4-flash", policy["models"])
         self.assertEqual(policy["default_model"], "deepseek-flash")
 
+    def test_hosted_policy_canonicalizes_all_surfaces(self):
+        """Every policy surface the frontend reads is canonicalized, not just
+        the model list."""
+        auth = Auth(self._db_path)
+        core = SimpleNamespace(
+            _auth=auth,
+            ADMIN_EMAILS=[],
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="deepseek-v4-flash",
+            _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=("deepseek-v4-flash",),
+        )
+        with patch.dict(os.environ, {"HOSTED_DEFAULT_MODEL": "deepseek-flash"}):
+            policy = effective_hosted_model_policy(core)
+        self.assertEqual(policy["default_model"], "deepseek-flash")
+        self.assertEqual(policy["fallback_model"], "deepseek-flash")
+        self.assertEqual(policy["post_cap_models"], ["deepseek-flash"])
+        self.assertNotIn("deepseek-v4-flash", policy["models"])
+
     def test_settle_stores_cache_tokens_and_metering(self):
         self.ledger.grant("u-ds-1", _usd_to_micro(2.0), idempotency_key="g-ds-1")
         run = self.ledger.create_run("u-ds-1", idempotency_key="r-ds-1")

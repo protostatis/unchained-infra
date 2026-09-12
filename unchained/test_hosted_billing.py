@@ -2602,6 +2602,7 @@ class DeepSeekCostTests(unittest.TestCase):
 
     def test_deepseek_model_detection(self):
         from chat_agent_openrouter import _is_deepseek_model
+        self.assertTrue(_is_deepseek_model("deepseek-flash"))
         self.assertTrue(_is_deepseek_model("deepseek-v4-flash"))
         self.assertTrue(_is_deepseek_model("deepseek-v4-pro"))
         self.assertFalse(_is_deepseek_model("google/gemini-3.1-flash-lite"))
@@ -2781,6 +2782,109 @@ class DeepSeekCostTests(unittest.TestCase):
         )
         # 1M hit × $0.006 + 1M out × $1.20 = $1.206 → 1_206_000 micro
         self.assertEqual(settled["provider_cost_micro_usd"], 1_206_000)
+
+    def test_settle_deepseek_flash_accepts_valid_v41_metadata(self):
+        """A worker sending the correct Sep-10 schedule metadata settles."""
+        from credit import CreditLedger
+        ts = self._utc_ts(2026, 9, 10, 8)  # Thursday peak
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "credit.db")
+            ledger = CreditLedger(db_path)
+            ledger.grant("u-v41m", 10_000_000, idempotency_key="grant-v41m")
+            run = ledger.create_run("u-v41m", idempotency_key="run-v41m")
+            call = ledger.reserve_call(
+                run["run_id"], model="deepseek-flash", idempotency_key="call-v41m",
+            )
+            with patch("credit._now_ts", return_value=ts):
+                ledger.mark_call_submitted(call["call_id"])
+            settled = ledger.settle_call(
+                call["call_id"],
+                actual_cost_micro_usd=0,
+                provider_cost_micro_usd=0,
+                prompt_tokens=1_000_000,
+                prompt_cache_hit_tokens=1_000_000,
+                prompt_cache_miss_tokens=0,
+                completion_tokens=1_000_000,
+                total_tokens=2_000_000,
+                pricing_schedule_version="2026-09-10T04:00:00Z",
+                pricing_tier="peak",
+                pricing_basis_ts=ts,
+                input_cache_hit_rate_micro_usd_per_million=6_000,
+                input_cache_miss_rate_micro_usd_per_million=300_000,
+                output_rate_micro_usd_per_million=1_200_000,
+            )
+            CreditLedger._instances.pop(db_path, None)
+        self.assertEqual(settled["pricing_schedule_version"], "2026-09-10T04:00:00Z")
+        self.assertEqual(settled["provider_cost_micro_usd"], 1_206_000)
+
+    def test_settle_deepseek_flash_rejects_stale_metadata_and_keeps_hold(self):
+        """A worker still on the Aug-16 schedule for a post-Sep-10 call is
+        rejected before any mutation, so the hold is retained (not captured at
+        the full reservation)."""
+        from credit import CreditLedger
+        ts = self._utc_ts(2026, 9, 10, 8)  # Thursday peak, V4.1 era
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "credit.db")
+            ledger = CreditLedger(db_path)
+            ledger.grant("u-stale", 10_000_000, idempotency_key="grant-stale")
+            run = ledger.create_run("u-stale", idempotency_key="run-stale")
+            call = ledger.reserve_call(
+                run["run_id"], model="deepseek-flash", idempotency_key="call-stale",
+            )
+            with patch("credit._now_ts", return_value=ts):
+                ledger.mark_call_submitted(call["call_id"])
+            with self.assertRaises(ValueError):
+                ledger.settle_call(
+                    call["call_id"],
+                    actual_cost_micro_usd=0,
+                    provider_cost_micro_usd=0,
+                    prompt_tokens=1_000_000,
+                    prompt_cache_hit_tokens=1_000_000,
+                    prompt_cache_miss_tokens=0,
+                    completion_tokens=1_000_000,
+                    total_tokens=2_000_000,
+                    # Aug-16 metadata against a Sep-10 submitted_at.
+                    pricing_schedule_version="2026-08-16T16:00:00Z",
+                    pricing_tier="peak",
+                    pricing_basis_ts=ts,
+                    input_cache_hit_rate_micro_usd_per_million=14_000,
+                    input_cache_miss_rate_micro_usd_per_million=440_000,
+                    output_rate_micro_usd_per_million=1_320_000,
+                )
+            with ledger._conn() as conn:
+                row = conn.execute(
+                    "SELECT status, settled_micro_usd "
+                    "FROM credit_call_reservations WHERE call_id = ?",
+                    (call["call_id"],),
+                ).fetchone()
+            CreditLedger._instances.pop(db_path, None)
+        self.assertEqual(row[0], "held")
+        self.assertEqual(int(row[1]), 0)
+
+    def test_extract_deepseek_usage_v41_flash_peak(self):
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 1_000_000,
+                "prompt_cache_miss_tokens": 0,
+                "completion_tokens": 1_000_000,
+                "total_tokens": 2_000_000,
+            }
+        }
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-flash",
+            submitted_at_ts=self._utc_ts(2026, 9, 10, 8),
+        )
+        # 1M hit × $0.006 + 1M out × $1.20 = $1.206
+        expected = 1.0 * 0.006 + 1.0 * 1.20
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["cost_micro_usd"], 1_206_000)
+        self.assertTrue(usage["cost_present"])
+        self.assertEqual(usage["pricing"]["tier"], "peak")
+        self.assertEqual(
+            usage["pricing"]["schedule_version"], "2026-09-10T04:00:00Z"
+        )
 
     def test_extract_deepseek_usage_legacy_flash_cache_aware(self):
         from chat_agent_openrouter import _extract_deepseek_usage

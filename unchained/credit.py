@@ -821,8 +821,11 @@ def effective_hosted_model_policy(core) -> dict:
     default_model, post_cap, fallback_model = _runtime_hosted_model_requirements(core)
     # Migrate legacy provider aliases (e.g. a persisted policy or a stale
     # HOSTED_DEFAULT_MODEL still naming ``deepseek-v4-flash``) to the canonical
-    # ID so the dropdown exposes one entry per model.
+    # ID so the dropdown exposes one entry per model. Every policy surface the
+    # frontend consumes is canonicalized, not just ``models``.
     default_model = canonical_hosted_model_id(default_model)
+    fallback_model = canonical_hosted_model_id(fallback_model)
+    post_cap = tuple(_canonical_hosted_model_ids(post_cap))
     required = tuple(_canonical_hosted_model_ids((default_model, fallback_model, *post_cap)))
     built_in = _canonical_hosted_model_ids((*HOSTED_USER_MODEL_DEFAULTS, *required))
     built_in = normalize_hosted_model_ids(
