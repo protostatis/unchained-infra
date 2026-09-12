@@ -236,7 +236,7 @@ services:
       - HOSTED_MAX_USER_PROMPT_CHARS=${HOSTED_MAX_USER_PROMPT_CHARS:-20000}
       # Authenticated /workspace default model (decoupled from the guest/trial
       # fallback, which stays a free OpenRouter model).
-      - HOSTED_DEFAULT_MODEL=${HOSTED_DEFAULT_MODEL:-deepseek-v4-flash}
+      - HOSTED_DEFAULT_MODEL=${HOSTED_DEFAULT_MODEL:-deepseek-flash}
       # Anonymous /first-look runs are forced onto this zero-hold model.
       - OPENROUTER_TRIAL_FALLBACK_MODEL=${OPENROUTER_TRIAL_FALLBACK_MODEL:-nvidia/nemotron-3.5-lightning:free}
       - CREDIT_STALE_RUN_TTL_SECONDS=${CREDIT_STALE_RUN_TTL_SECONDS:-7200}

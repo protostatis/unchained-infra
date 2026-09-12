@@ -9304,7 +9304,7 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="deepseek-v4-flash">DeepSeek V4 Flash (Direct) &mdash; Default</option>
+      <option value="deepseek-flash">DeepSeek V4.1 Flash (Direct) &mdash; Default</option>
       <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
       <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash (OpenRouter)</option>
       <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
@@ -9381,7 +9381,8 @@ const _HOSTED_MODEL_LABELS = Object.freeze({
   'thinkingmachines/inkling-small': 'Thinking Machines Inkling Small',
   'cohere/north-mini-code:free': 'Cohere North Mini Code — Free',
   'inclusionai/ling-3.0-flash:free': 'InclusionAI Ling 3.0 Flash — Free',
-  'deepseek-v4-flash': 'DeepSeek V4 Flash (Direct)',
+  'deepseek-flash': 'DeepSeek V4.1 Flash (Direct)',
+  'deepseek-v4-flash': 'DeepSeek V4.1 Flash (Direct, legacy ID)',
   'deepseek-v4-pro': 'DeepSeek V4 Pro (Direct)',
   'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash (OpenRouter)',
   'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro (OpenRouter)',

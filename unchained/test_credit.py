@@ -484,7 +484,7 @@ class TestCreditLedger(unittest.TestCase):
             "arcee-ai/trinity-large-preview:free",
             "stepfun/step-3.5-flash:free",
             "openai/gpt-5.2",
-            "deepseek-v4-flash",  # required as the authenticated default
+            "deepseek-flash",  # required as the authenticated default
         ]
         auth.set_app_setting(
             HOSTED_MODEL_POLICY_SETTING_KEY,
@@ -651,7 +651,9 @@ class TestCreditLedger(unittest.TestCase):
                 # DeepSeek now certified against the time-of-use PEAK
                 # worst-case rates (Flash $0.44 miss / $1.32 output; Pro
                 # $1.32 miss / $3.96 output) while the fixed holds stay
-                # $0.25 (Flash) and $1.00 (Pro).
+                # $0.25 (Flash) and $1.00 (Pro). The legacy alias shares the
+                # Flash product, so it carries the same certification.
+                "deepseek-flash": 240_509,
                 "deepseek-v4-flash": 240_509,
                 "deepseek-v4-pro": 721_526,
             },
@@ -1822,12 +1824,16 @@ class TestDeepSeekProvider(unittest.TestCase):
 
     def test_deepseek_catalog_and_defaults(self):
         from credit import HOSTED_USER_MODEL_DEFAULTS
+        self.assertIn("deepseek-flash", HOSTED_MODEL_CATALOG)
         self.assertIn("deepseek-v4-flash", HOSTED_MODEL_CATALOG)
         self.assertIn("deepseek-v4-pro", HOSTED_MODEL_CATALOG)
         self.assertGreater(HOSTED_MODEL_CATALOG["deepseek-v4-pro"],
-                           HOSTED_MODEL_CATALOG["deepseek-v4-flash"])
-        self.assertIn("deepseek-v4-flash", HOSTED_USER_MODEL_DEFAULTS)
+                           HOSTED_MODEL_CATALOG["deepseek-flash"])
+        self.assertIn("deepseek-flash", HOSTED_USER_MODEL_DEFAULTS)
+        self.assertNotIn("deepseek-v4-flash", HOSTED_USER_MODEL_DEFAULTS)
         self.assertIn("deepseek-v4-pro", HOSTED_USER_MODEL_DEFAULTS)
+        self.assertNotEqual(_default_reservation("deepseek-flash"), 0)
+        # The legacy alias resolves to the canonical product for billing.
         self.assertNotEqual(_default_reservation("deepseek-v4-flash"), 0)
 
     def test_hosted_policy_accepts_deepseek_defaults(self):
@@ -1842,8 +1848,14 @@ class TestDeepSeekProvider(unittest.TestCase):
             ),
         )
         policy = effective_hosted_model_policy(core)
-        self.assertIn("deepseek-v4-flash", policy["models"])
+        self.assertIn("deepseek-flash", policy["models"])
         self.assertIn("deepseek-v4-pro", policy["models"])
+        self.assertTrue(
+            is_hosted_model_allowed_for_identity(
+                core, "deepseek-flash", email="person@example.com"
+            )
+        )
+        # The legacy alias is authorized through its canonical model.
         self.assertTrue(
             is_hosted_model_allowed_for_identity(
                 core, "deepseek-v4-flash", email="person@example.com"
@@ -1851,8 +1863,38 @@ class TestDeepSeekProvider(unittest.TestCase):
         )
         # Slash-free deepseek IDs must pass the policy validator.
         normalize_hosted_model_ids(
-            ["google/gemini-3.1-flash-lite", "deepseek-v4-flash"]
+            ["google/gemini-3.1-flash-lite", "deepseek-flash"]
         )
+
+    def test_hosted_policy_migrates_legacy_alias(self):
+        """A persisted policy or env default naming the legacy alias is
+        canonicalized so the dropdown exposes one entry per model."""
+        auth = Auth(self._db_path)
+        core = SimpleNamespace(
+            _auth=auth,
+            ADMIN_EMAILS=[],
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3.5-lightning:free",
+            _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
+                "nvidia/nemotron-3.5-lightning:free",
+            ),
+        )
+        auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {
+                "version": HOSTED_MODEL_POLICY_VERSION,
+                "models": [
+                    "deepseek-v4-flash",
+                    "google/gemini-3.1-flash-lite",
+                    "nvidia/nemotron-3.5-lightning:free",
+                ],
+            },
+            updated_by="admin@example.com",
+        )
+        with patch.dict(os.environ, {"HOSTED_DEFAULT_MODEL": "deepseek-v4-flash"}):
+            policy = effective_hosted_model_policy(core)
+        self.assertIn("deepseek-flash", policy["models"])
+        self.assertNotIn("deepseek-v4-flash", policy["models"])
+        self.assertEqual(policy["default_model"], "deepseek-flash")
 
     def test_settle_stores_cache_tokens_and_metering(self):
         self.ledger.grant("u-ds-1", _usd_to_micro(2.0), idempotency_key="g-ds-1")
@@ -2393,11 +2435,17 @@ class TestDeepSeekProvider(unittest.TestCase):
             validate_hosted_context_budget,
         )
         rates = HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS
+        self.assertEqual(rates["deepseek-flash"], (440_000, 1_320_000))
         self.assertEqual(rates["deepseek-v4-flash"], (440_000, 1_320_000))
         self.assertEqual(rates["deepseek-v4-pro"], (1_320_000, 3_960_000))
         # Fixed holds remain $0.25 / $1.00 and stay above certified minimums.
+        self.assertEqual(HOSTED_MODEL_CATALOG["deepseek-flash"], 250_000)
         self.assertEqual(HOSTED_MODEL_CATALOG["deepseek-v4-flash"], 250_000)
         self.assertEqual(HOSTED_MODEL_CATALOG["deepseek-v4-pro"], 1_000_000)
+        self.assertLess(
+            HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD["deepseek-flash"],
+            250_000,
+        )
         self.assertLess(
             HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD["deepseek-v4-flash"],
             250_000,
