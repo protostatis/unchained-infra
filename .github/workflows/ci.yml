@@ -40,6 +40,7 @@ jobs:
           bash -n deploy/activate_browser_terminal_canary.sh
           bash -n deploy/deploy_source_guard.sh
           bash -n deploy/public_terminal_pilot_remote.sh
+          bash -n deploy/commission_global_cache_runner.sh
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.public-terminal.yml \
@@ -51,6 +52,7 @@ jobs:
           python deploy/test_fin_terminal_secrets.py
           python deploy/test_hosted_context_rollout.py
           python deploy/test_public_terminal_pilot.py
+          python deploy/test_global_cache_commission.py
           python deploy/test_terminal_runtime_reconciler.py
           python deploy/test_workspace_runtime_provider.py
 
