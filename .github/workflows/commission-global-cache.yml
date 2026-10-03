@@ -194,4 +194,4 @@ jobs:
 
       - name: Remove deployment SSH files
         if: always()
-        run: rm -rf "$RUNNER_TEMP/unchained-cache-commission-ssh"
+        run: rm -rf -- "$RUNNER_TEMP/unchained-cache-commission-ssh"

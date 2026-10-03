@@ -58,6 +58,30 @@ class CommissionScriptStructure(unittest.TestCase):
         self.assertIn("runner image revision does not match the reviewed app revision", text)
         self.assertIn("set_env_value FIN_TERMINAL_GLOBAL_CACHE_ENABLED true", text)
 
+    def test_enable_verifies_pulled_digest_not_just_label(self) -> None:
+        text = _script_text()
+        self.assertIn("pulled runner image digest does not match the pinned reference", text)
+        self.assertIn("RepoDigests", text)
+
+    def test_pull_retries_before_failing_closed(self) -> None:
+        text = _script_text()
+        self.assertIn("could not pull the pinned runner image after 3 attempts", text)
+
+    def test_env_reader_is_scoped_to_non_secrets(self) -> None:
+        text = _script_text()
+        self.assertIn("get_nonsensitive_env_value", text)
+        self.assertIn("never be used for tokens, keys, or other credentials", text)
+        self.assertNotRegex(text, r"(?<!nonsensitive_)get_env_value")
+
+    def test_probe_cleanup_precedes_install(self) -> None:
+        text = _script_text()
+        probe_block = text.split("commission_probe() {")[1].split("\n}\n")[0]
+        pre_clean = probe_block.find("rm -f /tmp/gc-health-probe.mjs")
+        install = probe_block.find("docker cp")
+        self.assertNotEqual(pre_clean, -1)
+        self.assertNotEqual(install, -1)
+        self.assertLess(pre_clean, install)
+
     def test_health_wait_before_commissioning(self) -> None:
         text = _script_text()
         self.assertIn("timed out waiting for global-cache runner health", text)
@@ -113,6 +137,7 @@ class CommissionWorkflowStructure(unittest.TestCase):
         self.assertIn("DISABLE GLOBAL CACHE", text)
         self.assertIn("Main advanced before the commission action started", text)
         self.assertIn("Fail-closed disable also failed", text)
+        self.assertIn('rm -rf -- "$RUNNER_TEMP/unchained-cache-commission-ssh"', text)
 
     def test_pins_come_from_repo_not_inputs(self) -> None:
         text = _workflow_text()

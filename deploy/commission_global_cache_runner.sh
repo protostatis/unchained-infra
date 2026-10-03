@@ -57,7 +57,9 @@ if ! flock -n 9; then
     exit 75
 fi
 
-get_env_value() {
+# Non-secret values only: prints the raw value to stdout for logs, so this
+# helper must never be used for tokens, keys, or other credentials.
+get_nonsensitive_env_value() {
     local name="$1"
     ENV_FILE="$env_file" ENV_NAME="$name" python3 - <<'PY'
 import os
@@ -291,6 +293,9 @@ commission_probe() {
     probe_file="$(mktemp /tmp/global-cache-probe.XXXXXX.mjs)"
     chmod 600 "$probe_file"
     write_health_probe "$probe_file"
+    # Remove any stale probe from a previous commission before installing
+    # the current one, so a reused container cannot run outdated checks.
+    docker exec "$container" rm -f /tmp/gc-health-probe.mjs >/dev/null 2>&1 || true
     docker cp "$probe_file" "$container:/tmp/gc-health-probe.mjs" >/dev/null
     rm -f "$probe_file"
     docker exec "$container" node /tmp/gc-health-probe.mjs "$since" 2>/dev/null || echo '{"probeFailed":true}'
@@ -324,12 +329,32 @@ disable)
     disable_runner
     ;;
 enable)
-    runner_image="$(get_env_value FIN_TERMINAL_GLOBAL_CACHE_IMAGE || true)"
+    runner_image="$(get_nonsensitive_env_value FIN_TERMINAL_GLOBAL_CACHE_IMAGE || true)"
     [[ "$runner_image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]] || {
         echo "FIN_TERMINAL_GLOBAL_CACHE_IMAGE is not a digest-pinned reference" >&2
         exit 1
     }
-    docker pull "$runner_image" >/dev/null
+    expected_digest="${runner_image##*@}"
+    pull_attempt=0
+    while [[ "$pull_attempt" -lt 3 ]]; do
+        pull_attempt=$((pull_attempt + 1))
+        if docker pull "$runner_image" >/dev/null 2>&1; then
+            break
+        fi
+        if [[ "$pull_attempt" -ge 3 ]]; then
+            echo "could not pull the pinned runner image after 3 attempts" >&2
+            exit 1
+        fi
+        sleep 10
+    done
+    # Verify the immutable digest itself, not just the mutable OCI revision
+    # label: a registry mishap must not substitute a different image that
+    # happens to carry the expected label.
+    actual_refs="$(docker image inspect --format '{{json .RepoDigests}}' "$runner_image" 2>/dev/null || true)"
+    if [[ "$actual_refs" != *"@${expected_digest}"* ]]; then
+        echo "pulled runner image digest does not match the pinned reference" >&2
+        exit 1
+    fi
     actual_runner_sha="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$runner_image" 2>/dev/null || true)"
     if [[ "$actual_runner_sha" != "$expected_runner_sha" ]]; then
         echo "runner image revision does not match the reviewed app revision (expected $expected_runner_sha, actual ${actual_runner_sha:-missing})" >&2
