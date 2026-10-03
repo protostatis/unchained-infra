@@ -214,11 +214,15 @@ wait_for_health() {
     return 1
 }
 
-# Aggregate-only journal/SQLite inspection. Runs inside the runner container
-# (node:22 provides node:sqlite) and prints counts, never contents.
-write_health_probe() {
-    local probe_path="$1"
-    cat >"$probe_path" <<'JS'
+commission_probe() {
+    local container="$1"
+    local since="$2"
+    local probe_stderr_file probe detail
+    # On probe failure, preserve a bounded slice of stderr in the failure
+    # flag so operators see the crash reason instead of a bare boolean.
+    probe_stderr_file="$(mktemp /tmp/global-cache-probe-err.XXXXXX)"
+    chmod 600 "$probe_stderr_file"
+    if probe="$(docker exec -i "$container" node --input-type=module - "$since" 2>"$probe_stderr_file" <<'JS'
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 const JOURNAL = "/data/global-cache/market-event-scout.json";
@@ -294,25 +298,7 @@ if (!fs.existsSync(STORE)) {
 }
 console.log(JSON.stringify(out));
 JS
-}
-
-commission_probe() {
-    local container="$1"
-    local since="$2"
-    local probe_file probe_stderr_file probe detail
-    probe_file="$(mktemp /tmp/global-cache-probe.XXXXXX.mjs)"
-    chmod 600 "$probe_file"
-    write_health_probe "$probe_file"
-    # Remove any stale probe from a previous commission before installing
-    # the current one, so a reused container cannot run outdated checks.
-    docker exec "$container" rm -f /tmp/gc-health-probe.mjs >/dev/null 2>&1 || true
-    docker cp "$probe_file" "$container:/tmp/gc-health-probe.mjs" >/dev/null
-    rm -f "$probe_file"
-    # On probe failure, preserve a bounded slice of stderr in the failure
-    # flag so operators see the crash reason instead of a bare boolean.
-    probe_stderr_file="$(mktemp /tmp/global-cache-probe-err.XXXXXX)"
-    chmod 600 "$probe_stderr_file"
-    if probe="$(docker exec "$container" node /tmp/gc-health-probe.mjs "$since" 2>"$probe_stderr_file")"; then
+)"; then
         :
     else
         detail="$(head -c 500 "$probe_stderr_file" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
@@ -320,7 +306,6 @@ commission_probe() {
     fi
     rm -f "$probe_stderr_file"
     echo "$probe"
-    docker exec "$container" rm -f /tmp/gc-health-probe.mjs >/dev/null 2>&1 || true
 }
 
 disable_runner() {

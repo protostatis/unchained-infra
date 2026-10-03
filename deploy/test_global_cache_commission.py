@@ -75,14 +75,12 @@ class CommissionScriptStructure(unittest.TestCase):
         self.assertIn("never be used for tokens, keys, or other credentials", text)
         self.assertNotRegex(text, r"(?<!nonsensitive_)get_env_value")
 
-    def test_probe_cleanup_precedes_install(self) -> None:
+    def test_probe_streams_to_read_only_container_without_copying_files(self) -> None:
         text = _script_text()
         probe_block = text.split("commission_probe() {")[1].split("\n}\n")[0]
-        pre_clean = probe_block.find("rm -f /tmp/gc-health-probe.mjs")
-        install = probe_block.find("docker cp")
-        self.assertNotEqual(pre_clean, -1)
-        self.assertNotEqual(install, -1)
-        self.assertLess(pre_clean, install)
+        self.assertIn('docker exec -i "$container" node --input-type=module -', probe_block)
+        self.assertNotIn("docker cp", probe_block)
+        self.assertNotIn("/tmp/gc-health-probe.mjs", probe_block)
 
     def test_health_wait_before_commissioning(self) -> None:
         text = _script_text()
@@ -109,7 +107,8 @@ class CommissionScriptStructure(unittest.TestCase):
 
     def test_probe_prints_aggregates_only(self) -> None:
         text = _script_text()
-        probe = text.split("cat >\"$probe_path\" <<'JS'")[1].split("\nJS")[0]
+        marker = 'node --input-type=module - "$since" 2>"$probe_stderr_file" <<\'JS\''
+        probe = text.split(marker)[1].split("\nJS")[0]
         self.assertNotIn("console.log(state", probe)
         self.assertNotIn("decisions", probe)
         self.assertNotIn("candidates", probe)
