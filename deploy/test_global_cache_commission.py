@@ -98,6 +98,13 @@ class CommissionScriptStructure(unittest.TestCase):
         self.assertIn("unexpected cache entries (no publication in shadow mode)", text)
         self.assertIn("COMMISSION OK", text)
 
+    def test_probe_failure_carries_bounded_detail(self) -> None:
+        text = _script_text()
+        self.assertIn("detail", text)
+        self.assertIn("head -c 500", text)
+        self.assertIn("probe execution failed: {probe.get('detail', '')}", text)
+        self.assertNotIn('|| echo \'{"probeFailed":true}\'', text)
+
     def test_probe_prints_aggregates_only(self) -> None:
         text = _script_text()
         probe = text.split("cat >\"$probe_path\" <<'JS'")[1].split("\nJS")[0]

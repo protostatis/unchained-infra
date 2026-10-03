@@ -58,7 +58,9 @@ if ! flock -n 9; then
 fi
 
 # Non-secret values only: prints the raw value to stdout for logs, so this
-# helper must never be used for tokens, keys, or other credentials.
+# helper must never be used for tokens, keys, or other credentials. It
+# streams the file and stops at the first match so secret material is never
+# accumulated in memory.
 get_nonsensitive_env_value() {
     local name="$1"
     ENV_FILE="$env_file" ENV_NAME="$name" python3 - <<'PY'
@@ -289,7 +291,7 @@ JS
 commission_probe() {
     local container="$1"
     local since="$2"
-    local probe_file
+    local probe_file probe_stderr_file probe detail
     probe_file="$(mktemp /tmp/global-cache-probe.XXXXXX.mjs)"
     chmod 600 "$probe_file"
     write_health_probe "$probe_file"
@@ -298,7 +300,18 @@ commission_probe() {
     docker exec "$container" rm -f /tmp/gc-health-probe.mjs >/dev/null 2>&1 || true
     docker cp "$probe_file" "$container:/tmp/gc-health-probe.mjs" >/dev/null
     rm -f "$probe_file"
-    docker exec "$container" node /tmp/gc-health-probe.mjs "$since" 2>/dev/null || echo '{"probeFailed":true}'
+    # On probe failure, preserve a bounded slice of stderr in the failure
+    # flag so operators see the crash reason instead of a bare boolean.
+    probe_stderr_file="$(mktemp /tmp/global-cache-probe-err.XXXXXX)"
+    chmod 600 "$probe_stderr_file"
+    if probe="$(docker exec "$container" node /tmp/gc-health-probe.mjs "$since" 2>"$probe_stderr_file")"; then
+        :
+    else
+        detail="$(head -c 500 "$probe_stderr_file" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+        probe="{\"probeFailed\":true,\"detail\":$detail}"
+    fi
+    rm -f "$probe_stderr_file"
+    echo "$probe"
     docker exec "$container" rm -f /tmp/gc-health-probe.mjs >/dev/null 2>&1 || true
 }
 
@@ -384,7 +397,7 @@ def fail(message):
 
 
 if probe.get("probeFailed"):
-    fail("probe execution failed")
+    fail(f"probe execution failed: {probe.get('detail', '')}")
 if not probe.get("journalExists"):
     fail("journal not present yet")
 if probe.get("sourceCount") != 7 or not probe.get("expectedSources"):

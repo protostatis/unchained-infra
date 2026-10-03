@@ -138,6 +138,9 @@ jobs:
             echo "::error::EC2_HOST has an invalid format."
             exit 1
           fi
+          # Re-fetch immediately before SSH: this duplicates the earlier
+          # stale-main guard on purpose, closing the TOCTOU window between
+          # the guard and the remote action. Do not deduplicate.
           git fetch --no-tags origin main --depth=1
           if [[ "$(git rev-parse origin/main)" != "$MAIN_SHA" ]]; then
             echo "::error::Main advanced before the commission action started."
