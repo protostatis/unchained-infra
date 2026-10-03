@@ -159,12 +159,13 @@ jobs:
           printf -v q_remote_dir '%q' "/home/${EC2_USER}/unchained"
           printf -v q_sha '%q' "$MAIN_SHA"
           printf -v q_runner_sha '%q' "$RUNNER_SHA"
+          printf -v q_image '%q' "${{ steps.release.outputs.image }}"
 
           run_remote_action() {
             local remote_action="$1" q_remote_action
             printf -v q_remote_action '%q' "$remote_action"
             ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" \
-              "bash -s -- $q_remote_action $q_remote_dir $q_sha $q_runner_sha" \
+              "bash -s -- $q_remote_action $q_remote_dir $q_sha $q_runner_sha $q_image" \
               < "$GITHUB_WORKSPACE/deploy/commission_global_cache_runner.sh"
           }
 
