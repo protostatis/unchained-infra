@@ -53,9 +53,11 @@ class CommissionScriptStructure(unittest.TestCase):
 
     def test_enable_pins_digest_image_and_verifies_revision(self) -> None:
         text = _script_text()
-        self.assertIn("FIN_TERMINAL_GLOBAL_CACHE_IMAGE is not a digest-pinned reference", text)
+        self.assertIn("EXPECTED_IMAGE must be a digest-pinned reference", text)
+        self.assertIn("never from the host .env", text)
         self.assertIn('org.opencontainers.image.revision', text)
         self.assertIn("runner image revision does not match the reviewed app revision", text)
+        self.assertIn("pinned runner image did not persist to production .env", text)
         self.assertIn("set_env_value FIN_TERMINAL_GLOBAL_CACHE_ENABLED true", text)
 
     def test_enable_verifies_pulled_digest_not_just_label(self) -> None:

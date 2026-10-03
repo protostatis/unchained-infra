@@ -17,8 +17,8 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 4 ]]; then
-    echo "usage: $0 ACTION REMOTE_DIR EXPECTED_INFRA_SHA EXPECTED_RUNNER_SHA" >&2
+if [[ "$#" -ne 5 ]]; then
+    echo "usage: $0 ACTION REMOTE_DIR EXPECTED_INFRA_SHA EXPECTED_RUNNER_SHA EXPECTED_IMAGE" >&2
     exit 2
 fi
 
@@ -26,6 +26,7 @@ action="$1"
 remote_dir="$2"
 expected_infra_sha="$3"
 expected_runner_sha="$4"
+expected_image="$5"
 env_file="$remote_dir/.env"
 compose_args=(
     --profile fin-terminal-browser-canary
@@ -47,6 +48,13 @@ esac
 }
 [[ "$expected_runner_sha" =~ ^[0-9a-f]{40}$ ]] || {
     echo "EXPECTED_RUNNER_SHA must be a 40-character lowercase Git SHA" >&2
+    exit 2
+}
+# The image pin travels as an explicit argument from the reviewed repo
+# state, never from the host .env: a fresh host may not have the variable
+# yet, and the host value must never override the reviewed pin.
+[[ "$expected_image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]] || {
+    echo "EXPECTED_IMAGE must be a digest-pinned reference" >&2
     exit 2
 }
 cd "$remote_dir"
@@ -342,11 +350,7 @@ disable)
     disable_runner
     ;;
 enable)
-    runner_image="$(get_nonsensitive_env_value FIN_TERMINAL_GLOBAL_CACHE_IMAGE || true)"
-    [[ "$runner_image" =~ ^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]] || {
-        echo "FIN_TERMINAL_GLOBAL_CACHE_IMAGE is not a digest-pinned reference" >&2
-        exit 1
-    }
+    runner_image="$expected_image"
     expected_digest="${runner_image##*@}"
     pull_attempt=0
     while [[ "$pull_attempt" -lt 3 ]]; do
@@ -374,6 +378,10 @@ enable)
         exit 1
     fi
     set_env_value FIN_TERMINAL_GLOBAL_CACHE_IMAGE "$runner_image"
+    if [[ "$(get_nonsensitive_env_value FIN_TERMINAL_GLOBAL_CACHE_IMAGE || true)" != "$runner_image" ]]; then
+        echo "pinned runner image did not persist to production .env" >&2
+        exit 1
+    fi
     set_env_value FIN_TERMINAL_GLOBAL_CACHE_ENABLED true
     docker compose "${compose_args[@]}" up -d --no-deps --no-build --pull never fin-terminal-global-cache
     wait_for_health
