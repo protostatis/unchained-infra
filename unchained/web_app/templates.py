@@ -9950,21 +9950,34 @@ async function loadHostedProfiles() {
     opt.textContent = email ? (label + ' (' + email + ')') : label;
     sel.appendChild(opt);
   }
-  if (remembered && availablePaths.has(remembered)) {
-    sel.value = remembered;
+  if (remembered) {
     selectedProfilePath = remembered;
+    sel.value = remembered;
+    if (!availablePaths.has(remembered)) {
+      // A missing path can mean the local bridge is temporarily offline.
+      // Keep the last explicit choice so the next send cannot silently switch
+      // this session to the dedicated/default workspace.
+      const saved = document.createElement('option');
+      saved.value = remembered;
+      saved.textContent = loadFailed
+        ? 'Saved Chrome profile (temporarily unavailable)'
+        : 'Saved Chrome profile (not currently listed)';
+      sel.appendChild(saved);
+      sel.value = remembered;
+    }
   } else {
     sel.value = '';
     selectedProfilePath = '';
-    if (remembered && key) {
-      try { localStorage.removeItem(key); } catch(e) {}
-    }
   }
   sel.disabled = false;
   profileSelectionReady = true;
   if (note) {
     if (loadFailed) {
-      note.textContent = 'Chrome profiles could not be loaded. Using the dedicated workspace.';
+      note.textContent = remembered
+        ? 'Chrome profiles could not be loaded. Keeping your saved profile; it will be checked when the bridge reconnects.'
+        : 'Chrome profiles could not be loaded. The dedicated workspace remains selected.';
+    } else if (remembered && !availablePaths.has(remembered)) {
+      note.textContent = 'Your saved Chrome profile is not currently listed. Keeping it selected; choose another profile or the dedicated workspace to change.';
     } else if (!availablePaths.size) {
       note.textContent = 'No additional Chrome profiles were found. Using the dedicated workspace.';
     } else if (selectedProfilePath) {
@@ -11555,6 +11568,11 @@ async function doCancel() {
 
 async function doSend() {
   if (sending || newChatPending) return;
+  if (hostedWorkspaceMode && !profileSelectionReady) {
+    const note = document.getElementById('profile-note');
+    if (note) note.textContent = 'Chrome profile selection is still loading. Please wait before sending.';
+    return;
+  }
   if (!(await syncTrialSessionFromStorage(true))) return;
   if (_newChatRecoveryBlocked()) return;
   const input = document.getElementById('msginput');

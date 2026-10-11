@@ -22,20 +22,24 @@ async def fetch_relay_profiles(
     headers: dict[str, str] | None = None,
     timeout: float = 5.0,
 ) -> list[dict]:
-    """Fetch profile list from the user's bridge via relay API."""
+    """Fetch profile list from the user's bridge via relay API.
+
+    A failed relay request is not an empty profile inventory. Callers need to
+    distinguish a temporary bridge outage from a user who has no profiles.
+    """
     scheme = "https" if relay_port == 443 else "http"
     if relay_port in (443, 80):
         url = f"{scheme}://{relay_host}/api/agents/{agent_id}/profiles"
     else:
         url = f"{scheme}://{relay_host}:{relay_port}/api/agents/{agent_id}/profiles"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=timeout, headers=headers)
-            if resp.is_success:
-                return resp.json().get("profiles", [])
-    except Exception:
-        pass
-    return []
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+    profiles = payload.get("profiles") if isinstance(payload, dict) else None
+    if not isinstance(profiles, list):
+        raise ValueError("Relay returned an invalid Chrome profile inventory")
+    return profiles
 
 
 def validate_manual_api_key(api_key: str) -> str | None:

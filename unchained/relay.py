@@ -60,6 +60,7 @@ class Relay:
         # reconnects. Channel numbers reset to 1 per generation; old-generation
         # clients are closed so they cannot route messages to the wrong agent.
         self._agent_generation: dict[str, int] = {}  # agent_id → gen
+        self._agent_close_tasks: set[asyncio.Task] = set()
         # client_ws → (agent_id, generation, channel_id) for routing replies
         self.clients: dict[ServerConnection, tuple[str, int, int]] = {}
         # Pending HTTP proxy requests: req_id → asyncio.Future
@@ -374,39 +375,50 @@ class Relay:
                 agent_id = f"claude-{key_hash}-{profile}"
             else:
                 agent_id = f"claude-{key_hash}"
+            # Do not replace an existing healthy route until this socket has
+            # successfully received its auth acknowledgement.
+            await ws.send(json.dumps({
+                "type": "auth_ok",
+                "agent_id": agent_id,
+            }))
+
+            # Replace any prior connection atomically before awaiting cleanup.
+            # A stale handler's finally block is identity-guarded below and
+            # therefore cannot remove this replacement.
+            previous_ws = self.agents.get(agent_id)
             self.agents[agent_id] = ws
             self.agent_users[agent_id] = key_info["user_id"]
             self.agent_profiles[agent_id] = profile
             gen = self._agent_generation.get(agent_id, 0) + 1
             self._agent_generation[agent_id] = gen
             self._next_channel[agent_id] = 1
-            # Close any stale clients from a previous agent generation so
-            # channel numbers cannot cross-wire across reconnect boundaries.
+
+            # Close old client sockets so channels cannot cross generations.
             stale_clients = [
                 c for c, (aid, g, _) in list(self.clients.items())
                 if aid == agent_id and g != gen
             ]
             for client_ws in stale_clients:
                 self.clients.pop(client_ws, None)
+
+            if previous_ws is not None and previous_ws is not ws:
+                self._schedule_agent_close(previous_ws, agent_id)
+            for client_ws in stale_clients:
                 try:
                     await client_ws.close(4001, "Agent reconnected")
                 except Exception:
                     pass
-            if stale_clients:
+
+            if previous_ws is not None or stale_clients:
                 print(f"[relay] agent {agent_id} reconnected gen={gen} — "
                       f"closed {len(stale_clients)} stale clients")
             print(f"[relay] agent {agent_id} connected (user={key_info['user_id']}, profile={profile}, key={api_key[:12]}...)")
-
-            await ws.send(json.dumps({
-                "type": "auth_ok",
-                "agent_id": agent_id,
-            }))
 
             # Message loop: forward agent responses to the right client
             agent_gen = gen
             async for raw in ws:
                 msg = json.loads(raw)
-                await self._handle_agent_message(agent_id, msg, agent_gen)
+                await self._handle_agent_message(agent_id, msg, agent_gen, ws)
 
         except asyncio.TimeoutError:
             print(f"[relay] agent {agent_id} timed out")
@@ -433,26 +445,48 @@ class Relay:
                             pass
                     print(f"[relay] agent {agent_id} disconnected")
 
-    async def _handle_agent_message(self, agent_id: str, msg: dict,
-                                     agent_gen: int = 0):
+    def _schedule_agent_close(self, ws: ServerConnection, agent_id: str) -> None:
+        """Close a superseded tunnel without delaying its replacement."""
+        async def close_superseded():
+            try:
+                await ws.close(4001, "Agent reconnected")
+            except Exception as exc:
+                print(f"[relay] failed to close superseded agent {agent_id}: {exc}")
+
+        task = asyncio.create_task(close_superseded())
+        self._agent_close_tasks.add(task)
+        task.add_done_callback(self._agent_close_tasks.discard)
+
+    async def _handle_agent_message(
+        self,
+        agent_id: str,
+        msg: dict,
+        agent_gen: int = 0,
+        source_ws: ServerConnection | None = None,
+    ):
         """Process a message from an agent.
 
         ``agent_gen`` is the connection generation that received this message.
         Only clients from the same generation can receive the reply, preventing
         old-generation messages from cross-wiring into new-generation channels.
         """
+        # Messages from an old handler can arrive after a same-ID reconnect.
+        # Never let them answer pings or resolve work on the replacement socket.
+        if agent_gen != self._agent_generation.get(agent_id, 0):
+            return
+        agent_ws = self.agents.get(agent_id)
+        if agent_ws is None or (source_ws is not None and agent_ws is not source_ws):
+            return
+
         t = msg.get("type", "")
         if t == "ping":
-            # Respond to heartbeat
-            agent_ws = self.agents.get(agent_id)
-            if agent_ws:
-                try:
-                    await agent_ws.send(json.dumps({
-                        "type": "pong",
-                        "ts": msg.get("ts", time.time()),
-                    }))
-                except Exception:
-                    pass  # Connection closing — don't kill the message loop
+            try:
+                await agent_ws.send(json.dumps({
+                    "type": "pong",
+                    "ts": msg.get("ts", time.time()),
+                }))
+            except Exception:
+                pass  # Connection closing — don't kill the message loop
         elif t == "http_response":
             # Resolve pending HTTP proxy future
             req_id = msg.get("req_id")

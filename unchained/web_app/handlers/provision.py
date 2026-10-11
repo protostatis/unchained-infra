@@ -31,12 +31,19 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
             agent_id = auth_info.get("agent_id", "")
         if agent_id:
             relay_host, relay_port = core._parse_relay()
-            profiles = await core.provision_helpers.fetch_relay_profiles(
-                agent_id=agent_id,
-                relay_host=relay_host,
-                relay_port=relay_port,
-                headers=core._relay_auth_headers(),
-            )
+            try:
+                profiles = await core.provision_helpers.fetch_relay_profiles(
+                    agent_id=agent_id,
+                    relay_host=relay_host,
+                    relay_port=relay_port,
+                    headers=core._relay_auth_headers(),
+                )
+            except Exception as exc:
+                print(f"[provision] Chrome profile lookup unavailable: {exc}")
+                return web.json_response(
+                    {"error": "Chrome profiles are temporarily unavailable"},
+                    status=503,
+                )
 
     return web.json_response({"profiles": profiles})
 

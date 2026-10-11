@@ -1088,6 +1088,8 @@ class Agent:
         self._cdp_liveness_restart_requested = False
         # Provision Chrome: temporary Chromes keyed by slot (4-char hex)
         self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, pid, temp_dir, profile_dir_name}
+        self._provision_launch_lock = asyncio.Lock()
+        self._provision_tasks: set[asyncio.Task] = set()
         # Tab leasing: prevent multiple channels from auto-resolving to the same tab.
         # All mutations happen on the asyncio event loop (single-threaded), so no
         # lock is needed.  Tab IDs are Chrome UUIDs — main and provisioned Chrome
@@ -1336,7 +1338,11 @@ class Agent:
         if t == "pong":
             self._last_pong = msg.get("ts", time.time())
         elif t == "http":
-            await self._handle_http(msg)
+            path = str(msg.get("path", "") or "")
+            if path.startswith("/provision-launch"):
+                self._spawn_provision_request(msg)
+            else:
+                await self._handle_http(msg)
         elif t == "ws_open":
             # Fire-and-forget: stealth inject can block for seconds on pages
             # that flood CDP events (e.g. CAPTCHAs), starving the tunnel
@@ -1347,6 +1353,28 @@ class Agent:
         elif t == "ws_close":
             await self._handle_ws_close(msg)
         # Ignore unknown message types silently
+
+    def _spawn_provision_request(self, msg: dict) -> None:
+        """Handle slow profile provisioning without pausing tunnel dispatch."""
+        async def run_provision_request():
+            async with self._provision_launch_lock:
+                await self._handle_http(msg)
+
+        task = asyncio.create_task(run_provision_request())
+        self._provision_tasks.add(task)
+
+        def on_done(done_task: asyncio.Task) -> None:
+            self._provision_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            try:
+                error = done_task.exception()
+            except asyncio.CancelledError:
+                return
+            if error:
+                print(f"[agent:prov] Provision request failed: {error}")
+
+        task.add_done_callback(on_done)
 
     # --- CDP HTTP proxy ---
 
@@ -1967,8 +1995,165 @@ class Agent:
 
     # --- Provision Chrome lifecycle ---
 
+    def _prepare_provision_chrome(
+        self,
+        slot: str,
+        profile_path: str,
+        copy_mode: str,
+        caller_tag: str,
+    ) -> dict:
+        """Perform blocking profile copy/Chrome startup outside the event loop."""
+        temp_dir = os.path.join(
+            DATA_DIR, f"prov_tmp_{slot}_{os.getpid()}_{int(time.time())}"
+        )
+        profile_dir_name = os.path.basename(profile_path)
+        chrome_parent = os.path.dirname(profile_path)
+        proc = None
+
+        def fail(status: int, message: str) -> dict:
+            self._cleanup_single_prov(
+                {
+                    "process": proc,
+                    "pid": int(getattr(proc, "pid", 0) or 0),
+                    "temp_dir": temp_dir,
+                },
+                slot=slot,
+            )
+            return {"status": status, "body": {"error": message}}
+
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+
+            # Copy Local State (cookie encryption keys) and selected profile.
+            local_state = os.path.join(chrome_parent, "Local State")
+            if os.path.isfile(local_state):
+                shutil.copy2(local_state, os.path.join(temp_dir, "Local State"))
+
+            try:
+                if copy_mode == "full":
+                    _copy_profile_full(profile_path, temp_dir, profile_dir_name)
+                else:
+                    _copy_profile_light(profile_path, temp_dir, profile_dir_name)
+            except Exception as e:
+                return fail(500, f"Failed to copy profile: {e}")
+            print(
+                f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir} "
+                f"(mode={copy_mode})"
+            )
+
+            # Find a free port.
+            import socket as _socket
+
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
+                sock.bind(("", 0))
+                prov_port = sock.getsockname()[1]
+
+            chrome_bin = _find_chrome_binary()
+            if not chrome_bin:
+                return fail(500, "Chrome/Chromium binary not found")
+
+            # Launch Chrome with the copied profile (visible window for
+            # sign-in/ToS). The caller waits for readiness below.
+            startup_url = _default_new_tab_url(self.relay_url)
+            cmd = [
+                chrome_bin,
+                f"--user-data-dir={temp_dir}",
+                f"--profile-directory={profile_dir_name}",
+                f"--remote-debugging-port={prov_port}",
+                "--disable-sync",
+                "--disable-background-networking",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-extensions",
+                "--window-size=1920,1080",
+                startup_url,
+            ]
+            print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            prov_state = {
+                "port": prov_port,
+                "process": proc,
+                "pid": proc.pid,
+                "temp_dir": temp_dir,
+                "profile_dir_name": profile_dir_name,
+                "copy_mode": copy_mode,
+                "launched_at": time.time(),
+                "ready": False,
+                "agent_id": self.agent_id or "",
+                "caller_tag": caller_tag,
+            }
+            try:
+                _write_prov_state(slot, prov_state)
+            except Exception as e:
+                return fail(500, f"Failed to persist provision state: {e}")
+
+            version_url = f"http://127.0.0.1:{prov_port}/json/version"
+            ready = False
+            for _ in range(PROVISION_LAUNCH_READY_TIMEOUT):
+                # This helper runs in a worker thread, so the wait cannot
+                # starve the relay WebSocket's heartbeat/event loop.
+                time.sleep(1)
+                try:
+                    with urllib.request.urlopen(version_url, timeout=2) as resp:
+                        if resp.status == 200:
+                            ready = True
+                            break
+                except Exception:
+                    pass
+
+            if not ready:
+                return fail(500, "Provision Chrome did not start in time")
+
+            try:
+                first_tab = _first_page_tab("127.0.0.1", prov_port, startup_url)
+                first_tab_id = str(first_tab.get("id", "")).strip()
+                if not first_tab_id:
+                    raise RuntimeError("Provision Chrome returned no page tab id")
+            except Exception as e:
+                return fail(500, f"Provision Chrome could not open a startup tab: {e}")
+
+            prov = {
+                "port": prov_port,
+                "process": proc,
+                "pid": proc.pid,
+                "temp_dir": temp_dir,
+                "profile_dir_name": profile_dir_name,
+                "ready": True,
+                "caller_tag": caller_tag,
+            }
+            try:
+                _write_prov_state(slot, {**prov_state, "ready": True})
+            except Exception as e:
+                print(
+                    f"[agent:prov] Warning: failed to update ready state "
+                    f"for slot {slot}: {e}"
+                )
+
+            tab_id = f"prov-{slot}-{first_tab_id}"
+            print(
+                f"[agent:prov] Provision Chrome ready: slot={slot}, "
+                f"port={prov_port}, tab={tab_id}"
+            )
+            return {
+                "status": 200,
+                "body": {
+                    "tab_id": tab_id,
+                    "slot": slot,
+                    "port": prov_port,
+                    "copy_mode": copy_mode,
+                },
+                "prov": prov,
+                "first_tab": first_tab,
+            }
+        except Exception as e:
+            return fail(500, f"Failed to launch provision Chrome: {e}")
+
     async def _handle_provision_launch(self, req_id, path):
-        """Launch a temporary Chrome with the user's selected profile for provisioning."""
+        """Launch a temporary Chrome without blocking the relay heartbeat loop."""
         # Parse profile_path from query string: /provision-launch?profile_path=<encoded>
         profile_path = ""
         copy_mode = "light"
@@ -2008,172 +2193,41 @@ class Agent:
             }))
             return
 
-        # Copy profile to temp dir (same logic as signup_agent._copy_chrome_profile)
-        temp_dir = os.path.join(DATA_DIR, f"prov_tmp_{slot}_{os.getpid()}_{int(time.time())}")
-        profile_dir_name = os.path.basename(profile_path)
-        chrome_parent = os.path.dirname(profile_path)
-
-        try:
-            os.makedirs(temp_dir, exist_ok=True)
-
-            # Copy Local State (cookie encryption keys)
-            local_state = os.path.join(chrome_parent, "Local State")
-            if os.path.isfile(local_state):
-                shutil.copy2(local_state, os.path.join(temp_dir, "Local State"))
-
-            if copy_mode == "full":
-                _copy_profile_full(profile_path, temp_dir, profile_dir_name)
-            else:
-                _copy_profile_light(profile_path, temp_dir, profile_dir_name)
-            print(f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir} (mode={copy_mode})")
-        except Exception as e:
+        # Profile copy, Chrome startup, CDP polling, and state persistence all
+        # use blocking filesystem/process/urllib APIs. Keep them off the tunnel
+        # event loop so application and WebSocket heartbeat handling continue.
+        result = await asyncio.to_thread(
+            self._prepare_provision_chrome,
+            slot,
+            profile_path,
+            copy_mode,
+            caller_tag,
+        )
+        if result["status"] != 200:
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
-                "status": 500,
-                "body": {"error": f"Failed to copy profile: {e}"},
-            }))
-            # Clean up partial temp dir
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
-            return
-
-        # Find a free port
-        import socket as _socket
-        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            prov_port = s.getsockname()[1]
-
-        # Find Chrome binary
-        chrome_bin = _find_chrome_binary()
-        if not chrome_bin:
-            await self.ws.send(json.dumps({
-                "type": "http_response",
-                "req_id": req_id,
-                "status": 500,
-                "body": {"error": "Chrome/Chromium binary not found"},
-            }))
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return
-
-        # Launch Chrome with the copied profile (visible window for sign-in/ToS)
-        startup_url = _default_new_tab_url(self.relay_url)
-        cmd = [
-            chrome_bin,
-            f"--user-data-dir={temp_dir}",
-            f"--profile-directory={profile_dir_name}",
-            f"--remote-debugging-port={prov_port}",
-            "--disable-sync",
-            "--disable-background-networking",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-extensions",
-            "--window-size=1920,1080",
-        ]
-        # Note: --disable-blink-features=AutomationControlled was removed
-        # because Chrome shows an "unsupported command-line flag" banner
-        # that itself becomes a bot detection signal. The stealth JS
-        # injected via Page.addScriptToEvaluateOnNewDocument already
-        # overrides navigator.webdriver, making the flag redundant.
-        cmd.append(startup_url)
-        print(f"[agent:prov] Launching provision Chrome on port {prov_port}"
-              f"{' (stealth)' if stealth else ''}...")
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        prov_state = {
-            "port": prov_port,
-            "process": proc,
-            "pid": proc.pid,
-            "temp_dir": temp_dir,
-            "profile_dir_name": profile_dir_name,
-            "copy_mode": copy_mode,
-            "launched_at": time.time(),
-            "ready": False,
-            "agent_id": self.agent_id or "",
-            "caller_tag": caller_tag,
-        }
-        try:
-            _write_prov_state(slot, prov_state)
-        except Exception as e:
-            self._cleanup_single_prov(prov_state, slot=slot)
-            await self.ws.send(json.dumps({
-                "type": "http_response",
-                "req_id": req_id,
-                "status": 500,
-                "body": {"error": f"Failed to persist provision state: {e}"},
+                "status": result["status"],
+                "body": result["body"],
             }))
             return
 
-        # Wait for Chrome CDP to be ready
-        version_url = f"http://127.0.0.1:{prov_port}/json/version"
-        ready = False
-        for _ in range(PROVISION_LAUNCH_READY_TIMEOUT):
-            time.sleep(1)
-            try:
-                with urllib.request.urlopen(version_url, timeout=2) as resp:
-                    if resp.status == 200:
-                        ready = True
-                        break
-            except Exception:
-                pass
-
-        if not ready:
-            self._cleanup_single_prov(prov_state, slot=slot)
-            await self.ws.send(json.dumps({
-                "type": "http_response",
-                "req_id": req_id,
-                "status": 500,
-                "body": {"error": "Provision Chrome did not start in time"},
-            }))
-            return
-
-        try:
-            first_tab = _first_page_tab("127.0.0.1", prov_port, startup_url)
-            first_tab_id = str(first_tab.get("id", "")).strip()
-            if not first_tab_id:
-                raise RuntimeError("Provision Chrome returned no page tab id")
-        except Exception as e:
-            self._cleanup_single_prov(prov_state, slot=slot)
-            await self.ws.send(json.dumps({
-                "type": "http_response",
-                "req_id": req_id,
-                "status": 500,
-                "body": {"error": f"Provision Chrome could not open a startup tab: {e}"},
-            }))
-            return
-
-        # Store state keyed by slot
-        self._prov_chromes[slot] = {
-            "port": prov_port,
-            "process": proc,
-            "pid": proc.pid,
-            "temp_dir": temp_dir,
-            "profile_dir_name": profile_dir_name,
-            "ready": True,
-            "caller_tag": caller_tag,
-        }
-        try:
-            _write_prov_state(slot, {**prov_state, "ready": True})
-        except Exception as e:
-            print(f"[agent:prov] Warning: failed to update ready state for slot {slot}: {e}")
-
-        # Inject stealth fingerprint overrides before any user navigation
+        prov_port = result["body"]["port"]
+        self._prov_chromes[slot] = result["prov"]
         if stealth:
             try:
-                await self._inject_stealth_provision(prov_port, first_tab, self._stealth_evasions)
+                await self._inject_stealth_provision(
+                    prov_port, result["first_tab"], self._stealth_evasions
+                )
                 print(f"[agent:prov] Stealth JS injected into provision slot {slot}")
             except Exception as e:
                 print(f"[agent:prov] Stealth inject failed (non-fatal): {e}")
-
-        prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
-        print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
 
         await self.ws.send(json.dumps({
             "type": "http_response",
             "req_id": req_id,
             "status": 200,
-            "body": {"tab_id": prov_tab_id, "slot": slot, "port": prov_port, "copy_mode": copy_mode},
+            "body": result["body"],
         }))
 
     async def _handle_provision_cleanup(self, req_id, path=""):

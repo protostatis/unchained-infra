@@ -1784,6 +1784,115 @@ if (elements['hosted-admin-link'].style.display !== 'none') throw new Error('non
         self.assertNotIn("email", storage_runtime.lower())
 
 
+class TestHostedProfileSelectionRestore(unittest.TestCase):
+    """A transient profile-list outage must not switch a saved profile to default."""
+
+    _REMEMBERED_PROFILE = "/chrome/Profile 5"
+
+    def _run_profile_load(self, fetch_stub: str) -> None:
+        html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "true")
+        start = html.index("async function loadHostedProfiles()")
+        end = html.index("\nfunction _hostedModelLabel", start)
+        loader = html[start:end]
+        payload_match = re.search(
+            r"const profilePath = currentProfilePath\(\);\s*"
+            r"if \(hostedWorkspaceMode\) payload\.profile_path = "
+            r"profileSelectionReady \? profilePath : '';",
+            html,
+        )
+        self.assertIsNotNone(payload_match, "hosted chat send payload code was not found")
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for hosted profile runtime tests")
+
+        runtime = r"""
+const vm = require('vm');
+const remembered = __REMEMBERED__;
+const values = new Map([['hosted-profile-key', remembered]]);
+const removed = [];
+const select = {innerHTML: '', disabled: false, value: '', appendChild() {}};
+const note = {textContent: ''};
+const context = {
+  hostedWorkspaceMode: true,
+  profileSelectionReady: false,
+  selectedProfilePath: '',
+  _hostedProfileStoreKey: () => 'hosted-profile-key',
+  document: {
+    getElementById(id) {
+      if (id === 'profilesel') return select;
+      if (id === 'profile-note') return note;
+      return null;
+    },
+    createElement: () => ({value: '', textContent: ''}),
+  },
+  localStorage: {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { removed.push(key); values.delete(key); },
+  },
+  fetch: __FETCH_STUB__,
+  payload: {},
+};
+vm.createContext(context);
+vm.runInContext(__LOADER__, context);
+(async () => {
+  await context.loadHostedProfiles();
+  context.currentProfilePath = () => context.selectedProfilePath;
+  vm.runInContext(__PAYLOAD__, context);
+  if (context.selectedProfilePath !== remembered) {
+    throw new Error('profile discovery silently cleared the selected Chrome profile');
+  }
+  if (values.get('hosted-profile-key') !== remembered || removed.includes('hosted-profile-key')) {
+    throw new Error('profile discovery deleted the remembered Chrome profile');
+  }
+  if (context.payload.profile_path !== remembered) {
+    throw new Error('chat request silently opted into the default/guest workspace');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        runtime = (
+            runtime.replace("__REMEMBERED__", json.dumps(self._REMEMBERED_PROFILE))
+            .replace("__FETCH_STUB__", fetch_stub)
+            .replace("__LOADER__", json.dumps(loader))
+            .replace("__PAYLOAD__", json.dumps(payload_match.group(0)))
+        )
+        result = subprocess.run(
+            [node, "-e", runtime],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_transport_error_preserves_the_remembered_profile_intent(self):
+        self._run_profile_load("async () => { throw new Error('bridge unavailable'); }")
+
+    def test_empty_inventory_does_not_erase_a_profile_during_a_bridge_outage(self):
+        # The relay profile helper currently collapses transport errors to [];
+        # the UI must not interpret that ambiguous result as user intent to use
+        # the dedicated/guest workspace.
+        self._run_profile_load(
+            "async () => ({ok: true, json: async () => ({profiles: []})})"
+        )
+
+    def test_available_remembered_profile_is_restored(self):
+        self._run_profile_load(
+            "async () => ({ok: true, json: async () => ({profiles: ["
+            "{path: '/chrome/Profile 5', name: 'Profile 5'}]})})"
+        )
+
+    def test_hosted_chat_waits_for_profile_selection_before_sending(self):
+        trial = web.TRIAL_CHAT_HTML
+        do_send = trial.index("async function doSend()")
+        guard = trial.find(
+            "if (hostedWorkspaceMode && !profileSelectionReady)",
+            do_send,
+        )
+        payload = trial.find("payload.profile_path", do_send)
+        self.assertGreaterEqual(guard, 0, "hosted send must wait for profile selection")
+        self.assertLess(guard, payload, "profile readiness must be checked before payload creation")
+        self.assertIn("return;", trial[guard:guard + 300])
+
+
 class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
     async def test_auth_me_returns_stable_opaque_user_id(self):
         from web_app.handlers import auth_admin
