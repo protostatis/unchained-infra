@@ -38,6 +38,12 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
                     relay_port=relay_port,
                     headers=core._relay_auth_headers(),
                 )
+            except ValueError as exc:
+                print(f"[provision] Invalid Chrome profile inventory: {exc}")
+                return web.json_response(
+                    {"error": "The relay returned an invalid Chrome profile inventory"},
+                    status=502,
+                )
             except Exception as exc:
                 print(f"[provision] Chrome profile lookup unavailable: {exc}")
                 return web.json_response(

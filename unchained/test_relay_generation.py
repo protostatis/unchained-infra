@@ -114,6 +114,35 @@ class TestRelayGenerationIsolation(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(replacement_socket.sent, [{"type": "pong", "ts": 67890}])
 
+    async def test_http_proxy_releases_pending_future_when_caller_cancels(self):
+        relay = Relay.__new__(Relay)
+        relay.agents = {"claude-test-agent": _FakeWebSocket()}
+        relay._pending_http = {}
+
+        request = asyncio.create_task(
+            relay.http_proxy("claude-test-agent", "GET", "/profiles", timeout=10)
+        )
+        await asyncio.sleep(0)
+        self.assertEqual(len(relay._pending_http), 1)
+
+        request.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await request
+
+        self.assertEqual(relay._pending_http, {})
+
+    async def test_http_proxy_releases_pending_future_on_timeout(self):
+        relay = Relay.__new__(Relay)
+        relay.agents = {"claude-test-agent": _FakeWebSocket()}
+        relay._pending_http = {}
+
+        result = await relay.http_proxy(
+            "claude-test-agent", "GET", "/profiles", timeout=0.001
+        )
+
+        self.assertEqual(result["status"], 504)
+        self.assertEqual(relay._pending_http, {})
+
 
 if __name__ == "__main__":
     unittest.main()

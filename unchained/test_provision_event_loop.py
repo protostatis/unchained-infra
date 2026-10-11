@@ -78,6 +78,58 @@ class TestProvisionLaunchEventLoop(unittest.IsolatedAsyncioTestCase):
         if tasks:
             await asyncio.gather(*tasks)
 
+    async def test_concurrent_provision_request_gets_prompt_busy_response(self):
+        agent = cb.Agent("ws://relay.invalid/tunnel")
+        agent.ws = _RecordingWebSocket()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_provision(_msg):
+            started.set()
+            await release.wait()
+
+        agent._handle_http = slow_provision
+        await agent._handle_message(
+            {"type": "http", "req_id": "first", "path": "/provision-launch"}
+        )
+        await asyncio.wait_for(started.wait(), timeout=0.05)
+        await agent._handle_message(
+            {"type": "http", "req_id": "second", "path": "/provision-launch"}
+        )
+
+        self.assertEqual(agent.ws.messages, [{
+            "type": "http_response",
+            "req_id": "second",
+            "status": 409,
+            "body": {"error": "A profile launch is already in progress; retry after it completes."},
+        }])
+        tasks = list(agent._provision_tasks)
+        release.set()
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def test_unexpected_provision_error_returns_correlated_response(self):
+        agent = cb.Agent("ws://relay.invalid/tunnel")
+        agent.ws = _RecordingWebSocket()
+
+        async def fail_provision(_msg):
+            raise RuntimeError("unexpected launch failure")
+
+        agent._handle_http = fail_provision
+        await agent._handle_message(
+            {"type": "http", "req_id": "req-failed", "path": "/provision-launch"}
+        )
+        tasks = list(agent._provision_tasks)
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        self.assertEqual(agent.ws.messages, [{
+            "type": "http_response",
+            "req_id": "req-failed",
+            "status": 500,
+            "body": {"error": "Provision launch failed"},
+        }])
+
     async def _launch(
         self,
         *,
@@ -179,7 +231,7 @@ class TestProvisionLaunchEventLoop(unittest.IsolatedAsyncioTestCase):
             probe=probe,
         )
 
-    async def test_readiness_poll_yields_instead_of_blocking_with_time_sleep(self):
+    async def test_readiness_poll_sleep_runs_off_event_loop(self):
         loop = asyncio.get_running_loop()
         handler_finished = threading.Event()
         probe: list[bool] = []
@@ -188,9 +240,9 @@ class TestProvisionLaunchEventLoop(unittest.IsolatedAsyncioTestCase):
         await self._launch(
             copy_profile=lambda *_args: None,
             urlopen=lambda *_args, **_kwargs: _ReadyResponse(),
-            # The production readiness loop asks for one second. Keep the
-            # timing probe isolated to that wait; the current synchronous
-            # sleep blocks the loop until the handler is complete.
+            # The production poll uses a one-second synchronous sleep inside
+            # its worker. The event-loop timer should still run before the
+            # provision handler completes.
             sleep=_REAL_TIME_SLEEP,
             finished_event=handler_finished,
         )

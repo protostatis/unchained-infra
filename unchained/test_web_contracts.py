@@ -1791,70 +1791,108 @@ class TestHostedProfileSelectionRestore(unittest.TestCase):
 
     def _run_profile_load(self, fetch_stub: str) -> None:
         html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "true")
-        start = html.index("async function loadHostedProfiles()")
-        end = html.index("\nfunction _hostedModelLabel", start)
-        loader = html[start:end]
-        payload_match = re.search(
-            r"const profilePath = currentProfilePath\(\);\s*"
-            r"if \(hostedWorkspaceMode\) payload\.profile_path = "
-            r"profileSelectionReady \? profilePath : '';",
-            html,
-        )
-        self.assertIsNotNone(payload_match, "hosted chat send payload code was not found")
+        loader_start = html.index("async function loadHostedProfiles()")
+        loader_end = html.index("\nfunction _hostedModelLabel", loader_start)
+        loader = html[loader_start:loader_end]
+        send_start = html.index("async function doSend()")
+        send_end = html.index("\nlet _upgradeDismissed", send_start)
+        sender = html[send_start:send_end]
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node.js is required for hosted profile runtime tests")
 
-        runtime = r"""
-const vm = require('vm');
+        scenario = r"""
 const remembered = __REMEMBERED__;
+const profileFetch = __FETCH_STUB__;
 const values = new Map([['hosted-profile-key', remembered]]);
 const removed = [];
 const select = {innerHTML: '', disabled: false, value: '', appendChild() {}};
 const note = {textContent: ''};
-const context = {
-  hostedWorkspaceMode: true,
-  profileSelectionReady: false,
-  selectedProfilePath: '',
-  _hostedProfileStoreKey: () => 'hosted-profile-key',
-  document: {
-    getElementById(id) {
-      if (id === 'profilesel') return select;
-      if (id === 'profile-note') return note;
-      return null;
-    },
-    createElement: () => ({value: '', textContent: ''}),
-  },
-  localStorage: {
-    getItem(key) { return values.has(key) ? values.get(key) : null; },
-    setItem(key, value) { values.set(key, String(value)); },
-    removeItem(key) { removed.push(key); values.delete(key); },
-  },
-  fetch: __FETCH_STUB__,
-  payload: {},
+const posts = [];
+const classList = {add() {}, remove() {}};
+const elements = {
+  profilesel: select,
+  'profile-note': note,
+  msginput: {value: 'test request', style: {}},
+  sendbtn: {style: {}},
+  cancelbtn: {style: {}},
+  slotbar: {classList},
+  'agent-bar': {classList},
 };
-vm.createContext(context);
-vm.runInContext(__LOADER__, context);
+const localStorage = {
+  getItem(key) { return values.has(key) ? values.get(key) : null; },
+  setItem(key, value) { values.set(key, String(value)); },
+  removeItem(key) { removed.push(key); values.delete(key); },
+};
+const document = {
+  getElementById: id => elements[id] || null,
+  createElement: () => ({value: '', textContent: ''}),
+};
+const fetch = async (url, options) => {
+  if (url === '/web/provision/profiles') return profileFetch();
+  throw new Error('unexpected fetch ' + url);
+};
+async function chatReconnectFetch(url, options) {
+  if (url !== '/web/chat') throw new Error('unexpected chat URL ' + url);
+  posts.push(JSON.parse(options.body));
+  return {ok: false, status: 500, json: async () => ({error: 'stop after payload'})};
+}
+const hostedWorkspaceMode = true;
+let profileSelectionReady = false;
+let selectedProfilePath = '';
+let sending = false;
+let newChatPending = false;
+let lastLocalSetupReady = true;
+let agentId = 'test-agent';
+let sessionId = 'test-session';
+let activeSlot = 1;
+let _isAdmin = false;
+let _cancelCtrl = null;
+let _turnCount = 0;
+let _navTrail = [];
+const AbortController = globalThis.AbortController;
+function _hostedProfileStoreKey() { return 'hosted-profile-key'; }
+function currentProfilePath() { return selectedProfilePath; }
+async function syncTrialSessionFromStorage() { return true; }
+function _newChatRecoveryBlocked() { return false; }
+function currentModel() { return 'test-model'; }
+function _incTrialMsgCount() {}
+function addUserBubble() {}
+function addAsstBubble() { return {querySelector: () => null}; }
+function appendText() {}
+function _finalizeGroup() {}
+function renderNavTrail() {}
+function maybeShowUpgrade() {}
+function refreshCreditState() {}
+function beginAgentViewResponseTurn() {}
+function completeAgentShellTurn() {}
+__LOADER__
+__SENDER__
 (async () => {
-  await context.loadHostedProfiles();
-  context.currentProfilePath = () => context.selectedProfilePath;
-  vm.runInContext(__PAYLOAD__, context);
-  if (context.selectedProfilePath !== remembered) {
+  await loadHostedProfiles();
+  await doSend();
+  if (selectedProfilePath !== remembered) {
     throw new Error('profile discovery silently cleared the selected Chrome profile');
   }
   if (values.get('hosted-profile-key') !== remembered || removed.includes('hosted-profile-key')) {
     throw new Error('profile discovery deleted the remembered Chrome profile');
   }
-  if (context.payload.profile_path !== remembered) {
+  if (posts.length !== 1 || posts[0].profile_path !== remembered) {
     throw new Error('chat request silently opted into the default/guest workspace');
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
-        runtime = (
-            runtime.replace("__REMEMBERED__", json.dumps(self._REMEMBERED_PROFILE))
+        scenario = (
+            scenario.replace("__REMEMBERED__", json.dumps(self._REMEMBERED_PROFILE))
             .replace("__FETCH_STUB__", fetch_stub)
-            .replace("__LOADER__", json.dumps(loader))
-            .replace("__PAYLOAD__", json.dumps(payload_match.group(0)))
+            .replace("__LOADER__", loader)
+            .replace("__SENDER__", sender)
         )
+        runtime = r"""
+const vm = require('vm');
+const context = {AbortController: globalThis.AbortController, process, console};
+vm.createContext(context);
+vm.runInContext(__SCENARIO__, context);
+""".replace("__SCENARIO__", json.dumps(scenario))
         result = subprocess.run(
             [node, "-e", runtime],
             capture_output=True,
@@ -1882,15 +1920,39 @@ vm.runInContext(__LOADER__, context);
 
     def test_hosted_chat_waits_for_profile_selection_before_sending(self):
         trial = web.TRIAL_CHAT_HTML
-        do_send = trial.index("async function doSend()")
-        guard = trial.find(
-            "if (hostedWorkspaceMode && !profileSelectionReady)",
-            do_send,
-        )
-        payload = trial.find("payload.profile_path", do_send)
-        self.assertGreaterEqual(guard, 0, "hosted send must wait for profile selection")
-        self.assertLess(guard, payload, "profile readiness must be checked before payload creation")
-        self.assertIn("return;", trial[guard:guard + 300])
+        start = trial.index("async function doSend()")
+        end = trial.index("\nlet _upgradeDismissed", start)
+        sender = trial[start:end]
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for hosted profile runtime tests")
+        scenario = r"""
+const note = {textContent: ''};
+const hostedWorkspaceMode = true;
+let profileSelectionReady = false;
+let sending = false;
+let newChatPending = false;
+let syncCalled = false;
+const document = {getElementById: id => id === 'profile-note' ? note : null};
+async function syncTrialSessionFromStorage() { syncCalled = true; return true; }
+function _newChatRecoveryBlocked() { return false; }
+__SENDER__
+(async () => {
+  await doSend();
+  if (syncCalled) throw new Error('send continued while profile selection was unresolved');
+  if (!note.textContent.includes('profile selection is still loading')) {
+    throw new Error('profile-loading state was not surfaced');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        scenario = scenario.replace("__SENDER__", sender)
+        runtime = r"""
+const vm = require('vm');
+const context = {process, console};
+vm.createContext(context);
+vm.runInContext(__SCENARIO__, context);
+""".replace("__SCENARIO__", json.dumps(scenario))
+        result = subprocess.run([node, "-e", runtime], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):

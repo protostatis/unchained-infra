@@ -91,6 +91,36 @@ class TestProvisionProfilesHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 503)
         self.assertIn("temporarily unavailable", json.loads(response.body)["error"])
 
+    async def test_malformed_inventory_is_reported_as_bad_gateway(self):
+        auth_info = {"user_id": "user-1", "agent_id": "claude-abc12345"}
+        profile_helpers = SimpleNamespace(
+            fetch_relay_profiles=AsyncMock(
+                side_effect=ValueError("invalid Chrome profile inventory")
+            )
+        )
+        core = SimpleNamespace(
+            _authenticate=lambda _request: auth_info,
+            _is_pending_user=lambda _auth: False,
+            _resolve_bridge_agent=AsyncMock(
+                return_value={"bridge_agent_id": "claude-abc12345"}
+            ),
+            _parse_relay=lambda: ("relay.example.com", 8765),
+            _relay_auth_headers=lambda: {"Authorization": "Bearer test"},
+            provision_helpers=profile_helpers,
+        )
+
+        with (
+            patch.dict(os.environ, {"JWT_SECRET": "test-jwt-secret"}),
+            patch.object(provision_handler, "_core", return_value=core),
+            patch("signup_agent.list_chrome_profiles", return_value=[]),
+        ):
+            response = await provision_handler.handle_provision_profiles(
+                SimpleNamespace()
+            )
+
+        self.assertEqual(response.status, 502)
+        self.assertIn("invalid Chrome profile inventory", json.loads(response.body)["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

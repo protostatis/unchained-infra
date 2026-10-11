@@ -1340,7 +1340,7 @@ class Agent:
         elif t == "http":
             path = str(msg.get("path", "") or "")
             if path.startswith("/provision-launch"):
-                self._spawn_provision_request(msg)
+                await self._spawn_provision_request(msg)
             else:
                 await self._handle_http(msg)
         elif t == "ws_open":
@@ -1354,11 +1354,38 @@ class Agent:
             await self._handle_ws_close(msg)
         # Ignore unknown message types silently
 
-    def _spawn_provision_request(self, msg: dict) -> None:
+    async def _spawn_provision_request(self, msg: dict) -> None:
         """Handle slow profile provisioning without pausing tunnel dispatch."""
+        req_id = str(msg.get("req_id", "") or "")
+        if self._provision_tasks:
+            try:
+                await self.ws.send(json.dumps({
+                    "type": "http_response",
+                    "req_id": req_id,
+                    "status": 409,
+                    "body": {"error": "A profile launch is already in progress; retry after it completes."},
+                }))
+            except Exception as exc:
+                print(f"[agent:prov] Could not report busy launch state: {exc}")
+            return
+
         async def run_provision_request():
-            async with self._provision_launch_lock:
-                await self._handle_http(msg)
+            try:
+                async with self._provision_launch_lock:
+                    await self._handle_http(msg)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[agent:prov] Provision request failed: {exc}")
+                try:
+                    await self.ws.send(json.dumps({
+                        "type": "http_response",
+                        "req_id": req_id,
+                        "status": 500,
+                        "body": {"error": "Provision launch failed"},
+                    }))
+                except Exception:
+                    pass
 
         task = asyncio.create_task(run_provision_request())
         self._provision_tasks.add(task)

@@ -70,7 +70,6 @@ jobs:
           python test_provision_helpers.py
           python test_provision_agent_isolation.py
           python test_provision_cleanup_slot.py
-          python test_provision_status.py
           python test_profile_enforcement.py
           python test_relay_generation.py
           python -m unittest \

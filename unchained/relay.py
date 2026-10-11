@@ -630,22 +630,24 @@ class Relay:
         fut: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending_http[req_id] = fut
 
-        await agent_ws.send(json.dumps({
-            "type": "http",
-            "req_id": req_id,
-            "method": method,
-            "path": path,
-        }))
-
         try:
+            await agent_ws.send(json.dumps({
+                "type": "http",
+                "req_id": req_id,
+                "method": method,
+                "path": path,
+            }))
             result = await asyncio.wait_for(fut, timeout=timeout)
             return {
                 "status": result.get("status", 200),
                 "body": result.get("body", {}),
             }
         except asyncio.TimeoutError:
-            self._pending_http.pop(req_id, None)
             return {"status": 504, "body": {"error": "Agent did not respond in time"}}
+        except websockets.exceptions.ConnectionClosed:
+            return {"status": 502, "body": {"error": "Agent connection was lost"}}
+        finally:
+            self._pending_http.pop(req_id, None)
 
     # --- Public accessors for API layer ---
 
