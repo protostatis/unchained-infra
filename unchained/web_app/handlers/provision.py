@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from aiohttp import web
+import httpx
 
 
 from web_app.core import get_core as _core
@@ -31,12 +32,37 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
             agent_id = auth_info.get("agent_id", "")
         if agent_id:
             relay_host, relay_port = core._parse_relay()
-            profiles = await core.provision_helpers.fetch_relay_profiles(
-                agent_id=agent_id,
-                relay_host=relay_host,
-                relay_port=relay_port,
-                headers=core._relay_auth_headers(),
-            )
+            try:
+                profiles = await core.provision_helpers.fetch_relay_profiles(
+                    agent_id=agent_id,
+                    relay_host=relay_host,
+                    relay_port=relay_port,
+                    headers=core._relay_auth_headers(),
+                )
+            except ValueError as exc:
+                print(f"[provision] Invalid Chrome profile inventory: {exc}")
+                return web.json_response(
+                    {"error": "The relay returned an invalid Chrome profile inventory"},
+                    status=502,
+                )
+            except httpx.HTTPStatusError as exc:
+                print(
+                    "[provision] Relay rejected Chrome profile inventory "
+                    f"(HTTP {exc.response.status_code})"
+                )
+                return web.json_response(
+                    {"error": "The relay failed while listing Chrome profiles"},
+                    status=502,
+                )
+            except Exception as exc:
+                print(
+                    "[provision] Chrome profile lookup unavailable "
+                    f"({type(exc).__name__}): {exc}"
+                )
+                return web.json_response(
+                    {"error": "Chrome profiles are temporarily unavailable"},
+                    status=503,
+                )
 
     return web.json_response({"profiles": profiles})
 

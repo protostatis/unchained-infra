@@ -11,9 +11,9 @@ Validates that:
 Run:
     python3 test_provision_agent_isolation.py
 
-Note: tests write to the real PROVISION_STATE_DIR (~/.unchained/provision_slots/).
-Slot names are random (os.urandom) so collisions are extremely unlikely, but
-these tests must run serially — not under pytest-xdist or similar parallel runners.
+All persisted provision state is redirected to a temporary directory before
+``chrome_bridge`` is imported, so the tests cannot adopt or prune a user's live
+provisioned Chrome slots.
 """
 from __future__ import annotations
 
@@ -24,13 +24,15 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from chrome_bridge import (
-    Agent,
-    _write_prov_state,
-    _read_prov_state,
-    _remove_prov_state,
-    PROVISION_STATE_DIR,
-)
+_test_data_dir = tempfile.TemporaryDirectory(prefix="provision_agent_isolation_test_")
+with patch.dict(os.environ, {"UNCHAINED_DATA_DIR": _test_data_dir.name}):
+    from chrome_bridge import (
+        Agent,
+        _write_prov_state,
+        _read_prov_state,
+        _remove_prov_state,
+        PROVISION_STATE_DIR,
+    )
 
 
 def _unique_slot() -> str:

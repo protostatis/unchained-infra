@@ -1784,6 +1784,208 @@ if (elements['hosted-admin-link'].style.display !== 'none') throw new Error('non
         self.assertNotIn("email", storage_runtime.lower())
 
 
+class TestHostedProfileSelectionRestore(unittest.TestCase):
+    """A transient profile-list outage must not switch a saved profile to default."""
+
+    _REMEMBERED_PROFILE = "/chrome/Profile 5"
+
+    def _run_profile_load(
+        self,
+        fetch_stub: str,
+        *,
+        timer_stub: str = "globalThis.setTimeout",
+    ) -> None:
+        html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "true")
+        loader_start = html.index("async function loadHostedProfiles()")
+        loader_end = html.index("\nfunction _hostedModelLabel", loader_start)
+        loader = html[loader_start:loader_end]
+        send_start = html.index("async function doSend()")
+        send_end = html.index("\nlet _upgradeDismissed", send_start)
+        sender = html[send_start:send_end]
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for hosted profile runtime tests")
+
+        scenario = r"""
+const remembered = __REMEMBERED__;
+const profileFetch = __FETCH_STUB__;
+const values = new Map([['hosted-profile-key', remembered]]);
+const removed = [];
+const select = {innerHTML: '', disabled: false, value: '', appendChild() {}};
+const note = {textContent: ''};
+const posts = [];
+const classList = {add() {}, remove() {}};
+const elements = {
+  profilesel: select,
+  'profile-note': note,
+  msginput: {value: 'test request', style: {}},
+  sendbtn: {style: {}, disabled: false, setAttribute() {}},
+  cancelbtn: {style: {}},
+  slotbar: {classList},
+  'agent-bar': {classList},
+};
+const localStorage = {
+  getItem(key) { return values.has(key) ? values.get(key) : null; },
+  setItem(key, value) { values.set(key, String(value)); },
+  removeItem(key) { removed.push(key); values.delete(key); },
+};
+const document = {
+  getElementById: id => elements[id] || null,
+  createElement: () => ({value: '', textContent: ''}),
+};
+const setTimeout = __TIMER_STUB__;
+const clearTimeout = () => {};
+const fetch = async (url, options) => {
+  if (url === '/web/provision/profiles') return profileFetch(options);
+  throw new Error('unexpected fetch ' + url);
+};
+async function chatReconnectFetch(url, options) {
+  if (url !== '/web/chat') throw new Error('unexpected chat URL ' + url);
+  posts.push(JSON.parse(options.body));
+  return {ok: false, status: 500, json: async () => ({error: 'stop after payload'})};
+}
+const hostedWorkspaceMode = true;
+let profileSelectionReady = false;
+let selectedProfilePath = '';
+let sending = false;
+let newChatPending = false;
+let lastLocalSetupReady = true;
+let agentId = 'test-agent';
+let sessionId = 'test-session';
+let activeSlot = 1;
+let _isAdmin = false;
+let _cancelCtrl = null;
+let _turnCount = 0;
+let _navTrail = [];
+const AbortController = globalThis.AbortController;
+function _hostedProfileStoreKey() { return 'hosted-profile-key'; }
+function currentProfilePath() { return selectedProfilePath; }
+async function syncTrialSessionFromStorage() { return true; }
+function updateSendAvailability(ready) {
+  elements.sendbtn.disabled = !ready || !profileSelectionReady;
+}
+function _newChatRecoveryBlocked() { return false; }
+function currentModel() { return 'test-model'; }
+function _incTrialMsgCount() {}
+function addUserBubble() {}
+function addAsstBubble() { return {querySelector: () => null}; }
+function appendText() {}
+function _finalizeGroup() {}
+function renderNavTrail() {}
+function maybeShowUpgrade() {}
+function refreshCreditState() {}
+function beginAgentViewResponseTurn() {}
+function completeAgentShellTurn() {}
+__LOADER__
+__SENDER__
+(async () => {
+  await loadHostedProfiles();
+  if (elements.sendbtn.disabled) throw new Error('send button stayed disabled after profile loading finished');
+  await doSend();
+  if (selectedProfilePath !== remembered) {
+    throw new Error('profile discovery silently cleared the selected Chrome profile');
+  }
+  if (values.get('hosted-profile-key') !== remembered || removed.includes('hosted-profile-key')) {
+    throw new Error('profile discovery deleted the remembered Chrome profile');
+  }
+  if (posts.length !== 1 || posts[0].profile_path !== remembered) {
+    throw new Error('chat request silently opted into the default/guest workspace');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        scenario = (
+            scenario.replace("__REMEMBERED__", json.dumps(self._REMEMBERED_PROFILE))
+            .replace("__FETCH_STUB__", fetch_stub)
+            .replace("__TIMER_STUB__", timer_stub)
+            .replace("__LOADER__", loader)
+            .replace("__SENDER__", sender)
+        )
+        runtime = r"""
+const vm = require('vm');
+const context = {
+  AbortController: globalThis.AbortController,
+  setTimeout: globalThis.setTimeout,
+  process,
+  console,
+};
+vm.createContext(context);
+vm.runInContext(__SCENARIO__, context);
+""".replace("__SCENARIO__", json.dumps(scenario))
+        result = subprocess.run(
+            [node, "-e", runtime],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_transport_error_preserves_the_remembered_profile_intent(self):
+        self._run_profile_load("async () => { throw new Error('bridge unavailable'); }")
+
+    def test_hung_profile_load_times_out_and_unblocks_send(self):
+        self._run_profile_load(
+            "async options => {"
+            "if (!elements.sendbtn.disabled) throw new Error('send remained enabled during profile loading');"
+            "if (!note.textContent.includes('Loading Chrome profile selection')) "
+            "throw new Error('profile loading state was not surfaced');"
+            "return new Promise((resolve, reject) => {"
+            "if (options.signal.aborted) reject(new Error('aborted'));"
+            "else options.signal.addEventListener('abort', () => reject(new Error('aborted')));"
+            "});"
+            "}",
+            timer_stub="callback => { callback(); return 1; }",
+        )
+
+    def test_empty_inventory_does_not_erase_a_profile_during_a_bridge_outage(self):
+        # The relay profile helper raises on transport errors; the UI must not
+        # interpret an unavailable inventory as user intent to use the
+        # dedicated/guest workspace.
+        self._run_profile_load(
+            "async () => ({ok: true, json: async () => ({profiles: []})})"
+        )
+
+    def test_available_remembered_profile_is_restored(self):
+        self._run_profile_load(
+            "async () => ({ok: true, json: async () => ({profiles: ["
+            "{path: '/chrome/Profile 5', name: 'Profile 5'}]})})"
+        )
+
+    def test_hosted_chat_waits_for_profile_selection_before_sending(self):
+        trial = web.TRIAL_CHAT_HTML
+        start = trial.index("async function doSend()")
+        end = trial.index("\nlet _upgradeDismissed", start)
+        sender = trial[start:end]
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for hosted profile runtime tests")
+        scenario = r"""
+const note = {textContent: ''};
+const hostedWorkspaceMode = true;
+let profileSelectionReady = false;
+let sending = false;
+let newChatPending = false;
+let syncCalled = false;
+const document = {getElementById: id => id === 'profile-note' ? note : null};
+async function syncTrialSessionFromStorage() { syncCalled = true; return true; }
+function _newChatRecoveryBlocked() { return false; }
+__SENDER__
+(async () => {
+  await doSend();
+  if (syncCalled) throw new Error('send continued while profile selection was unresolved');
+  if (!note.textContent.includes('profile selection is still loading')) {
+    throw new Error('profile-loading state was not surfaced');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        scenario = scenario.replace("__SENDER__", sender)
+        runtime = r"""
+const vm = require('vm');
+const context = {process, console};
+vm.createContext(context);
+vm.runInContext(__SCENARIO__, context);
+""".replace("__SCENARIO__", json.dumps(scenario))
+        result = subprocess.run([node, "-e", runtime], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
     async def test_auth_me_returns_stable_opaque_user_id(self):
         from web_app.handlers import auth_admin

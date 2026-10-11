@@ -388,6 +388,66 @@ class TestEnsureProfileTabPendingClose(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core.close_calls, 0)
         mock_launch.assert_not_awaited()
 
+    async def test_empty_session_tab_recovers_owned_slot_after_lost_launch_response(self):
+        """A completed launch with a lost HTTP response is reused on retry."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+
+        core = _FakeCore()
+        sid = "s-test-lost-provision-response"
+        profile = "/chrome/Profile 5"
+        recovered_tab = "prov-ab12-RECOVERED"
+        core._session_profile_paths[sid] = profile
+        core._session_agent_map[sid] = "claude-test"
+
+        mock_status = AsyncMock(return_value={
+            "slots": {"ab12": {
+                "profile": "Profile 5",
+                "caller_tag": profile_session_caller_tag(sid),
+                "tabs": [{"tab_id": recovered_tab}],
+            }}
+        })
+        mock_launch = AsyncMock()
+        with (
+            patch("cloud_tools.provision_status", mock_status),
+            patch("cloud_tools.provision_launch", mock_launch),
+        ):
+            tab_id = await _ensure_profile_tab(core, sid, "claude-test", profile)
+
+        self.assertEqual(tab_id, recovered_tab)
+        self.assertEqual(core._session_tabs[sid], recovered_tab)
+        self.assertEqual(core._session_profile_paths[sid], profile)
+        self.assertEqual(core._session_allowed_tabs[sid], {recovered_tab})
+        mock_launch.assert_not_awaited()
+
+    async def test_empty_session_tab_does_not_reuse_another_sessions_slot(self):
+        """Recovery requires both the selected profile and this session's caller tag."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+
+        core = _FakeCore()
+        sid = "s-test-lost-provision-foreign"
+        profile = "/chrome/Profile 5"
+        core._session_profile_paths[sid] = profile
+        foreign_tab = "prov-ab12-FOREIGN"
+        fresh_tab = "prov-cafe-FRESH"
+
+        mock_status = AsyncMock(return_value={
+            "slots": {"ab12": {
+                "profile": "Profile 5",
+                "caller_tag": profile_session_caller_tag("another-session"),
+                "tabs": [{"tab_id": foreign_tab}],
+            }}
+        })
+        mock_launch = AsyncMock(return_value={"tab_id": fresh_tab})
+        with (
+            patch("cloud_tools.provision_status", mock_status),
+            patch("cloud_tools.provision_launch", mock_launch),
+        ):
+            tab_id = await _ensure_profile_tab(core, sid, "claude-test", profile)
+
+        self.assertEqual(tab_id, fresh_tab)
+        self.assertEqual(core._session_tabs[sid], fresh_tab)
+        mock_launch.assert_awaited_once()
+
     async def test_status_failure_fails_closed(self):
         """A bridge/status outage preserves the profile pin and never launches default."""
         from web_app.handlers.chat_stream import _ensure_profile_tab
@@ -481,9 +541,12 @@ class TestEnsureProfileTabPendingClose(unittest.IsolatedAsyncioTestCase):
         )
 
         fresh_tab = "prov-a1b2-FRESH"
-        with patch(
-            "cloud_tools.provision_launch",
-            AsyncMock(return_value={"tab_id": fresh_tab}),
+        with (
+            patch("cloud_tools.provision_status", AsyncMock(return_value={"slots": {}})),
+            patch(
+                "cloud_tools.provision_launch",
+                AsyncMock(return_value={"tab_id": fresh_tab}),
+            ),
         ):
             result = await _ensure_profile_tab(core, sid, "claude-test", profile)
         self.assertEqual(result, fresh_tab)

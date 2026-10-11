@@ -919,6 +919,41 @@ async def _live_profile_tab(
     )
 
 
+async def _recover_owned_profile_tab(
+    core,
+    session_id: str,
+    cdp_agent_id: str,
+    profile_path: str,
+) -> str:
+    """Recover a completed provision whose launch response was lost."""
+    import cloud_tools
+
+    relay_host, relay_port = core._parse_relay()
+    status = await cloud_tools.provision_status(cdp_agent_id, relay_host, relay_port)
+    slots = status.get("slots") if isinstance(status, dict) else None
+    if not isinstance(slots, dict):
+        raise RuntimeError("Profile browser returned invalid status")
+
+    expected_profile = os.path.basename(profile_path)
+    expected_caller_tag = profile_session_caller_tag(session_id)
+    for slot, slot_state in sorted(slots.items()):
+        if not isinstance(slot_state, dict):
+            continue
+        if str(slot_state.get("profile") or "") != expected_profile:
+            continue
+        if str(slot_state.get("caller_tag") or "") != expected_caller_tag:
+            continue
+        live_tab, _may_cleanup = select_profile_slot_active_tab(
+            status,
+            session_id=session_id,
+            profile_path=profile_path,
+            current_tab=f"prov-{slot}-launch-response-lost",
+        )
+        if live_tab:
+            return live_tab
+    return ""
+
+
 def _detach_profile_target(
     core,
     session_id: str,
@@ -945,8 +980,24 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
         current_profile = core._session_profile_paths.get(session_id, "")
         pending_close = current_tab and current_tab in getattr(core, "_tabs_pending_close", {})
         may_cleanup_slot = True
-        if current_tab and current_profile == profile_path and not pending_close:
-            if not str(current_tab).startswith("prov-"):
+        if current_profile == profile_path and not pending_close:
+            if not current_tab:
+                recovered_tab = await _recover_owned_profile_tab(
+                    core,
+                    session_id,
+                    cdp_agent_id,
+                    profile_path,
+                )
+                if recovered_tab:
+                    _bind_profile_tab(
+                        core,
+                        session_id,
+                        cdp_agent_id,
+                        profile_path,
+                        recovered_tab,
+                    )
+                    return recovered_tab
+            elif not str(current_tab).startswith("prov-"):
                 may_cleanup_slot = False
             else:
                 live_tab, may_cleanup_slot = await _live_profile_tab(

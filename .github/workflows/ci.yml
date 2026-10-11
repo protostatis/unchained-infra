@@ -66,6 +66,12 @@ jobs:
           python test_sse_write_guard.py
           python test_search_console_verification.py
           python test_bridge_helpers.py
+          python test_provision_event_loop.py
+          python test_provision_helpers.py
+          python test_provision_agent_isolation.py
+          python test_provision_cleanup_slot.py
+          python test_profile_enforcement.py
+          python test_relay_generation.py
           python -m unittest \
             test_credit \
             test_credit_handlers \
