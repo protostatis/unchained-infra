@@ -60,7 +60,7 @@ class Relay:
         # reconnects. Channel numbers reset to 1 per generation; old-generation
         # clients are closed so they cannot route messages to the wrong agent.
         self._agent_generation: dict[str, int] = {}  # agent_id → gen
-        self._agent_close_tasks: set[asyncio.Task] = set()
+        self._socket_close_tasks: set[asyncio.Task] = set()
         # client_ws → (agent_id, generation, channel_id) for routing replies
         self.clients: dict[ServerConnection, tuple[str, int, int]] = {}
         # Pending HTTP proxy requests: req_id → asyncio.Future
@@ -404,10 +404,7 @@ class Relay:
             if previous_ws is not None and previous_ws is not ws:
                 self._schedule_agent_close(previous_ws, agent_id)
             for client_ws in stale_clients:
-                try:
-                    await client_ws.close(4001, "Agent reconnected")
-                except Exception:
-                    pass
+                self._schedule_client_close(client_ws, agent_id)
 
             if previous_ws is not None or stale_clients:
                 print(f"[relay] agent {agent_id} reconnected gen={gen} — "
@@ -447,15 +444,36 @@ class Relay:
 
     def _schedule_agent_close(self, ws: ServerConnection, agent_id: str) -> None:
         """Close a superseded tunnel without delaying its replacement."""
-        async def close_superseded():
-            try:
-                await ws.close(4001, "Agent reconnected")
-            except Exception as exc:
-                print(f"[relay] failed to close superseded agent {agent_id}: {exc}")
+        self._schedule_socket_close(
+            ws,
+            description=f"superseded agent {agent_id}",
+            reason="Agent reconnected",
+        )
 
-        task = asyncio.create_task(close_superseded())
-        self._agent_close_tasks.add(task)
-        task.add_done_callback(self._agent_close_tasks.discard)
+    def _schedule_client_close(self, ws: ServerConnection, agent_id: str) -> None:
+        """Close a stale CDP client without delaying a replacement tunnel."""
+        self._schedule_socket_close(
+            ws,
+            description=f"stale client for agent {agent_id}",
+            reason="Agent reconnected",
+        )
+
+    def _schedule_socket_close(
+        self,
+        ws: ServerConnection,
+        *,
+        description: str,
+        reason: str,
+    ) -> None:
+        async def close_socket():
+            try:
+                await ws.close(4001, reason)
+            except Exception as exc:
+                print(f"[relay] failed to close {description}: {exc}")
+
+        task = asyncio.create_task(close_socket())
+        self._socket_close_tasks.add(task)
+        task.add_done_callback(self._socket_close_tasks.discard)
 
     async def _handle_agent_message(
         self,

@@ -37,7 +37,7 @@ class TestRelayGenerationIsolation(unittest.IsolatedAsyncioTestCase):
         relay.agent_profiles = {}
         relay._next_channel = {}
         relay._agent_generation = {}
-        relay._agent_close_tasks = set()
+        relay._socket_close_tasks = set()
         relay.clients = {}
         relay._pending_http = {}
 
@@ -74,13 +74,23 @@ class TestRelayGenerationIsolation(unittest.IsolatedAsyncioTestCase):
 
     async def test_superseded_agent_socket_is_closed(self):
         relay = Relay.__new__(Relay)
-        relay._agent_close_tasks = set()
+        relay._socket_close_tasks = set()
         old_socket = _FakeWebSocket()
 
         relay._schedule_agent_close(old_socket, "claude-test-agent")
         await asyncio.sleep(0)
 
         self.assertEqual(old_socket.close_calls, [(4001, "Agent reconnected")])
+
+    async def test_stale_client_socket_close_is_scheduled(self):
+        relay = Relay.__new__(Relay)
+        relay._socket_close_tasks = set()
+        stale_client = _FakeWebSocket()
+
+        relay._schedule_client_close(stale_client, "claude-test-agent")
+        await asyncio.sleep(0)
+
+        self.assertEqual(stale_client.close_calls, [(4001, "Agent reconnected")])
 
     async def test_stale_generation_ping_does_not_pong_on_replacement_socket(self):
         agent_id = "claude-test-agent"
