@@ -85,6 +85,7 @@ class TestAuthRedirectUri(unittest.TestCase):
     def test_production_redirect_allowlist_includes_external_apps(self):
         for uri in [
             "https://analytics.unchainedsky.com/auth/callback",
+            "https://researchgpt.org/auth/callback",
             "https://searchagentsky.com/auth/callback",
             "https://search.unchainedsky.com/auth/callback",
             "https://searchagentsky.com/auth/callback?source=share",
@@ -99,6 +100,10 @@ class TestAuthRedirectUri(unittest.TestCase):
             "http://analytics.unchainedsky.com/auth/callback",
             "https://analytics.unchainedsky.com.evil.example/auth/callback",
             "https://searchagentsky.com/auth/callback#fragment",
+            "https://researchgpt.org/auth/other",
+            "http://researchgpt.org/auth/callback",
+            "https://researchgpt.org.evil.example/auth/callback",
+            "https://researchgpt.org/auth/callback#fragment",
         ]:
             with self.subTest(uri=uri):
                 self.assertFalse(_validate_redirect_uri(uri))

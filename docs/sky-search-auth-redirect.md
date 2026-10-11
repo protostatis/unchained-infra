@@ -2,9 +2,9 @@
 
 ## Context
 
-sky-search (searchagentsky.com / search.unchainedsky.com) has shareable result
-pages. Publishing requires authentication, but sky-search has no auth
-infrastructure. unchainedsky.com is the auth provider.
+sky-search (searchagentsky.com / search.unchainedsky.com / researchgpt.org)
+has shareable result pages. Publishing requires authentication, but sky-search
+has no auth infrastructure. unchainedsky.com is the auth provider.
 
 This document describes the provider-side contract. The matching client-side
 spec lives in the sky-search repo under `docs/AUTH_FLOW.md`.
@@ -94,6 +94,7 @@ Possible `error` values: `invalid_request`, `unsupported_grant_type`,
 
 Production:
 - `https://analytics.unchainedsky.com/auth/callback`
+- `https://researchgpt.org/auth/callback`
 - `https://searchagentsky.com/auth/callback`
 - `https://search.unchainedsky.com/auth/callback`
 
