@@ -1463,6 +1463,7 @@ async def handle_dev_auth(request: web.Request) -> web.Response:
 
 _AUTH_LOGIN_ALLOWED_ORIGINS = {
     "https://analytics.unchainedsky.com",
+    "https://researchgpt.org",
     "https://searchagentsky.com",
     "https://search.unchainedsky.com",
 }
