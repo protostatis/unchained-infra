@@ -1789,7 +1789,12 @@ class TestHostedProfileSelectionRestore(unittest.TestCase):
 
     _REMEMBERED_PROFILE = "/chrome/Profile 5"
 
-    def _run_profile_load(self, fetch_stub: str) -> None:
+    def _run_profile_load(
+        self,
+        fetch_stub: str,
+        *,
+        timer_stub: str = "globalThis.setTimeout",
+    ) -> None:
         html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "true")
         loader_start = html.index("async function loadHostedProfiles()")
         loader_end = html.index("\nfunction _hostedModelLabel", loader_start)
@@ -1813,7 +1818,7 @@ const elements = {
   profilesel: select,
   'profile-note': note,
   msginput: {value: 'test request', style: {}},
-  sendbtn: {style: {}},
+  sendbtn: {style: {}, disabled: false, setAttribute() {}},
   cancelbtn: {style: {}},
   slotbar: {classList},
   'agent-bar': {classList},
@@ -1827,8 +1832,10 @@ const document = {
   getElementById: id => elements[id] || null,
   createElement: () => ({value: '', textContent: ''}),
 };
+const setTimeout = __TIMER_STUB__;
+const clearTimeout = () => {};
 const fetch = async (url, options) => {
-  if (url === '/web/provision/profiles') return profileFetch();
+  if (url === '/web/provision/profiles') return profileFetch(options);
   throw new Error('unexpected fetch ' + url);
 };
 async function chatReconnectFetch(url, options) {
@@ -1853,6 +1860,9 @@ const AbortController = globalThis.AbortController;
 function _hostedProfileStoreKey() { return 'hosted-profile-key'; }
 function currentProfilePath() { return selectedProfilePath; }
 async function syncTrialSessionFromStorage() { return true; }
+function updateSendAvailability(ready) {
+  elements.sendbtn.disabled = !ready || !profileSelectionReady;
+}
 function _newChatRecoveryBlocked() { return false; }
 function currentModel() { return 'test-model'; }
 function _incTrialMsgCount() {}
@@ -1869,6 +1879,7 @@ __LOADER__
 __SENDER__
 (async () => {
   await loadHostedProfiles();
+  if (elements.sendbtn.disabled) throw new Error('send button stayed disabled after profile loading finished');
   await doSend();
   if (selectedProfilePath !== remembered) {
     throw new Error('profile discovery silently cleared the selected Chrome profile');
@@ -1884,12 +1895,18 @@ __SENDER__
         scenario = (
             scenario.replace("__REMEMBERED__", json.dumps(self._REMEMBERED_PROFILE))
             .replace("__FETCH_STUB__", fetch_stub)
+            .replace("__TIMER_STUB__", timer_stub)
             .replace("__LOADER__", loader)
             .replace("__SENDER__", sender)
         )
         runtime = r"""
 const vm = require('vm');
-const context = {AbortController: globalThis.AbortController, process, console};
+const context = {
+  AbortController: globalThis.AbortController,
+  setTimeout: globalThis.setTimeout,
+  process,
+  console,
+};
 vm.createContext(context);
 vm.runInContext(__SCENARIO__, context);
 """.replace("__SCENARIO__", json.dumps(scenario))
@@ -1904,10 +1921,24 @@ vm.runInContext(__SCENARIO__, context);
     def test_transport_error_preserves_the_remembered_profile_intent(self):
         self._run_profile_load("async () => { throw new Error('bridge unavailable'); }")
 
+    def test_hung_profile_load_times_out_and_unblocks_send(self):
+        self._run_profile_load(
+            "async options => {"
+            "if (!elements.sendbtn.disabled) throw new Error('send remained enabled during profile loading');"
+            "if (!note.textContent.includes('Loading Chrome profile selection')) "
+            "throw new Error('profile loading state was not surfaced');"
+            "return new Promise((resolve, reject) => {"
+            "if (options.signal.aborted) reject(new Error('aborted'));"
+            "else options.signal.addEventListener('abort', () => reject(new Error('aborted')));"
+            "});"
+            "}",
+            timer_stub="callback => { callback(); return 1; }",
+        )
+
     def test_empty_inventory_does_not_erase_a_profile_during_a_bridge_outage(self):
-        # The relay profile helper currently collapses transport errors to [];
-        # the UI must not interpret that ambiguous result as user intent to use
-        # the dedicated/guest workspace.
+        # The relay profile helper raises on transport errors; the UI must not
+        # interpret an unavailable inventory as user intent to use the
+        # dedicated/guest workspace.
         self._run_profile_load(
             "async () => ({ok: true, json: async () => ({profiles: []})})"
         )

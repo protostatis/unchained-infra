@@ -9922,16 +9922,30 @@ async function loadHostedProfiles() {
   selectedProfilePath = '';
   profileSelectionReady = false;
   sel.disabled = true;
+  const sendBtn = document.getElementById('sendbtn');
+  if (sendBtn) {
+    sendBtn.disabled = true;
+    sendBtn.setAttribute('aria-disabled', 'true');
+    sendBtn.title = 'Loading Chrome profiles';
+  }
   sel.innerHTML = '<option value="">Loading Chrome profiles…</option>';
+  if (note) note.textContent = 'Loading Chrome profile selection…';
   let profiles = [];
   let loadFailed = false;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
-    const r = await fetch('/web/provision/profiles', {cache: 'no-store'});
+    const r = await fetch('/web/provision/profiles', {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     profiles = Array.isArray(data.profiles) ? data.profiles : [];
   } catch(e) {
     loadFailed = true;
+  } finally {
+    clearTimeout(timeoutId);
   }
   sel.innerHTML = '';
   const defaultOpt = document.createElement('option');
@@ -9971,6 +9985,9 @@ async function loadHostedProfiles() {
   }
   sel.disabled = false;
   profileSelectionReady = true;
+  if (typeof updateSendAvailability === 'function') {
+    updateSendAvailability(lastLocalSetupReady);
+  }
   if (note) {
     if (loadFailed) {
       note.textContent = remembered
@@ -10607,21 +10624,25 @@ function updateSendAvailability(ready) {
   const input = document.getElementById('msginput');
   const btn = document.getElementById('sendbtn');
   const recoveryBlocked = _newChatRecoveryBlocked();
+  const profilePending = hostedWorkspaceMode && !profileSelectionReady;
   if (input) {
     input.disabled = recoveryBlocked;
     input.placeholder = recoveryBlocked
       ? 'Finish recovering the new chat before sending...'
-      : (ready ? 'Ask anything...' : 'Connect agent to send...');
+      : (profilePending
+        ? 'Loading Chrome profile selection...'
+        : (ready ? 'Ask anything...' : 'Connect agent to send...'));
   }
   if (btn) {
-    btn.disabled = !ready;
-    if (recoveryBlocked) btn.disabled = true;
+    btn.disabled = !ready || recoveryBlocked || profilePending;
     const enabled = !btn.disabled;
     btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
     btn.classList.toggle('setup-blocked', !enabled);
     btn.title = recoveryBlocked
       ? 'Finish recovering the new chat first'
-      : (ready ? 'Send prompt' : 'Connect this computer first');
+      : (profilePending
+        ? 'Wait for Chrome profile selection to finish'
+        : (ready ? 'Send prompt' : 'Connect this computer first'));
   }
   _syncNewChatRecoveryLock();
 }

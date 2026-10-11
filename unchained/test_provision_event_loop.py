@@ -130,6 +130,29 @@ class TestProvisionLaunchEventLoop(unittest.IsolatedAsyncioTestCase):
             "body": {"error": "Provision launch failed"},
         }])
 
+    async def test_failed_launch_discards_state_adopted_while_worker_was_running(self):
+        agent = cb.Agent("ws://relay.invalid/tunnel")
+        agent.ws = _RecordingWebSocket()
+
+        def fail_after_reconcile(slot, *_args):
+            # A status request can reconcile the worker's persisted not-ready
+            # state before the worker reports its launch failure.
+            agent._prov_chromes[slot] = {"ready": False}
+            return {"status": 500, "body": {"error": "launch failed"}}
+
+        with (
+            patch.object(cb.os.path, "isdir", return_value=True),
+            patch.object(cb.os.path, "exists", return_value=False),
+            patch.object(cb.os, "urandom", return_value=b"\xab\xcd"),
+            patch.object(agent, "_prepare_provision_chrome", side_effect=fail_after_reconcile),
+        ):
+            await agent._handle_provision_launch(
+                "req-failed", "/provision-launch?profile_path=/chrome/Profile%205"
+            )
+
+        self.assertEqual(agent._prov_chromes, {})
+        self.assertEqual(agent.ws.messages[-1]["status"], 500)
+
     async def _launch(
         self,
         *,

@@ -2231,6 +2231,9 @@ class Agent:
             caller_tag,
         )
         if result["status"] != 200:
+            # A concurrent status/reconcile request may have adopted this
+            # in-progress state while the worker was starting Chrome.
+            self._prov_chromes.pop(slot, None)
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,

@@ -375,8 +375,8 @@ class Relay:
                 agent_id = f"claude-{key_hash}-{profile}"
             else:
                 agent_id = f"claude-{key_hash}"
-            # Do not replace an existing healthy route until this socket has
-            # successfully received its auth acknowledgement.
+            # Send the auth frame before replacing the existing route, so a
+            # failed send leaves the current healthy connection untouched.
             await ws.send(json.dumps({
                 "type": "auth_ok",
                 "agent_id": agent_id,
