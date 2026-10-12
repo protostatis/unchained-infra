@@ -515,6 +515,10 @@ def _valid_hosted_archive_payload(payload: object, archive_id: str) -> bool:
         and payload.get("archive_id") == archive_id
         and has_supported_session_schema(payload)
         and isinstance(payload.get("messages"), list)
+        and isinstance(payload.get("transcript"), list)
+        and isinstance(payload.get("message_count"), int)
+        and not isinstance(payload.get("message_count"), bool)
+        and payload.get("message_count") == len(payload["transcript"])
         and validate_visible_transcript(payload.get("transcript")) is not None
     )
 
@@ -541,7 +545,7 @@ def _hosted_snapshot_extends(existing: object, incoming: dict) -> bool:
 
 @contextlib.contextmanager
 def _hosted_archive_lock(archive_id: str):
-    """Serialize archive replacement across threads and agent processes."""
+    """Advisory lock for cooperating writers on the local archive filesystem."""
     path = _safe_archive_path(archive_id)
     if path is None:
         raise ValueError("invalid archive_id")
@@ -553,8 +557,9 @@ def _hosted_archive_lock(archive_id: str):
         pass
     lock_name = hashlib.sha256(archive_id.encode("utf-8")).hexdigest() + ".lock"
     lock_path = os.path.join(lock_dir, lock_name)
-    # Keep these small lock files permanently: unlinking while another process
-    # waits can let it acquire a different inode and bypass serialization.
+    # POSIX flock and Windows byte-range locking coordinate cooperating
+    # processes on local filesystems. Keep lock files: unlinking while another
+    # process waits can let it acquire a different inode and bypass the lock.
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     locked = False
     try:
@@ -599,6 +604,12 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
         or ".." in archive_id
     ):
         return {"ok": False, "error": "invalid_archive_id"}
+    if not isinstance(payload.get("transcript"), list):
+        return {"ok": False, "error": "invalid_archive_payload"}
+    # The transcript is the canonical display history and the source of the UI
+    # count; do not trust a mismatched count supplied with a retry payload.
+    payload = dict(payload)
+    payload["message_count"] = len(payload["transcript"])
     if not _valid_hosted_archive_payload(payload, archive_id):
         return {"ok": False, "error": "invalid_archive_payload"}
     try:
@@ -615,7 +626,7 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
     try:
         slot = int(payload.get("slot") or 1)
         archived_at = float(payload.get("archived_at") or time.time())
-        message_count = int(payload.get("message_count") or 0)
+        message_count = len(payload["transcript"])
     except (TypeError, ValueError, OverflowError):
         return {"ok": False, "error": "invalid_archive_metadata"}
     if (
@@ -743,38 +754,60 @@ def _list_archives_page(
     cursor: str = "",
     owner_key: str = "",
 ) -> dict:
-    """Return one bounded archive page with a stable file-ID cursor."""
+    """Return a bounded page; the sort-key cursor survives deletion of its file."""
     if not os.path.isdir(ARCHIVE_DIR):
         return {"archives": [], "next_cursor": None}
     limit = min(max(int(limit or _ARCHIVE_PAGE_SIZE), 1), 100)
-    cursor = str(cursor or "")[:160]
+    cursor = str(cursor or "")[:200]
     try:
         with os.scandir(ARCHIVE_DIR) as scan:
-            files = [
-                entry for entry in scan
-                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
-            ]
-        files.sort(
-            key=lambda entry: (entry.stat(follow_symlinks=False).st_mtime, entry.name),
-            reverse=True,
-        )
+            files = []
+            for entry in scan:
+                if not entry.name.endswith(".json") or not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    modified_ns = entry.stat(follow_symlinks=False).st_mtime_ns
+                except OSError:
+                    continue
+                files.append((modified_ns, entry.name, entry.path))
+        files.sort(key=lambda item: (item[0], item[1]), reverse=True)
     except OSError:
         return {"archives": [], "next_cursor": None}
     start = 0
     if cursor:
-        cursor_name = f"{cursor}.json"
-        cursor_index = next(
-            (index for index, entry in enumerate(files) if entry.name == cursor_name),
-            None,
-        )
-        if cursor_index is None:
-            return {"archives": [], "next_cursor": None}
-        start = cursor_index + 1
+        if cursor.startswith("v1:"):
+            version, separator, remainder = cursor.partition(":")
+            timestamp, separator, cursor_name = remainder.partition(":")
+            try:
+                if version != "v1" or not separator or not cursor_name.endswith(".json"):
+                    raise ValueError("invalid archive cursor")
+                cursor_mtime_ns = int(timestamp)
+            except (TypeError, ValueError):
+                return {"archives": [], "next_cursor": None}
+            cursor_key = (cursor_mtime_ns, cursor_name)
+            start = next(
+                (
+                    index for index, (mtime_ns, name, _path) in enumerate(files)
+                    if (mtime_ns, name) < cursor_key
+                ),
+                len(files),
+            )
+        else:
+            # Accept the older file-ID cursor while an already-open page is
+            # still using a pre-pagination-aware local-agent client.
+            cursor_name = f"{cursor}.json"
+            cursor_index = next(
+                (index for index, (_mtime_ns, name, _path) in enumerate(files) if name == cursor_name),
+                None,
+            )
+            if cursor_index is None:
+                return {"archives": [], "next_cursor": None}
+            start = cursor_index + 1
 
     entries = []
-    for file_entry in files[start:]:
+    for modified_ns, filename, file_path in files[start:]:
         try:
-            with open(file_entry.path, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 arc = json.load(f)
             if not isinstance(arc, dict):
                 continue
@@ -802,20 +835,23 @@ def _list_archives_page(
                 elif opencode_model:
                     model_id = opencode_model if opencode_model.startswith("opencode-cli:") else f"opencode-cli:{opencode_model}"
             entries.append({
-                "id": file_entry.name[:-5],  # strip .json
+                "id": filename[:-5],  # strip .json
                 "preview": arc.get("preview", ""),
                 "message_count": arc.get("message_count", 0),
                 "archived_at": arc.get("archived_at", 0),
                 "slot": arc.get("slot", 0),
                 "source": source,
                 "model_id": model_id,
+                "_cursor": f"v1:{modified_ns}:{filename}",
             })
             if len(entries) > limit:
                 break
         except (json.JSONDecodeError, OSError, UnicodeError):
             continue
     page = entries[:limit]
-    next_cursor = page[-1]["id"] if len(entries) > limit and page else None
+    next_cursor = page[-1]["_cursor"] if len(entries) > limit and page else None
+    for entry in page:
+        entry.pop("_cursor", None)
     return {"archives": page, "next_cursor": next_cursor}
 
 

@@ -149,6 +149,29 @@ class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
         thread.join(timeout=1)
         self.assertFalse(thread.is_alive())
 
+    def test_hosted_archive_message_count_comes_from_transcript(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-count-1234567890abcdef",
+            "session_id": "s-trial-agent-count",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "count me",
+            "message_count": 999,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "count me"}],
+            "transcript": [{"role": "user", "content": "count me"}],
+        }
+
+        saved = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertTrue(saved["ok"])
+        stored = mod._read_hosted_archive(payload["archive_id"], "a" * 64)
+        self.assertEqual(stored["message_count"], len(stored["transcript"]))
+        listed = mod._list_archives_page(owner_key="a" * 64)
+        self.assertEqual(listed["archives"][0]["message_count"], 1)
+
     def test_oversized_hosted_archive_is_rejected_without_a_partial_file(self):
         mod = self._load_module()
         mod._MAX_HOSTED_ARCHIVE_BYTES = 512
@@ -182,10 +205,14 @@ class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
                 "message_count": 1,
                 "slot_data": {"messages": []},
             }
-            with open(os.path.join(mod.ARCHIVE_DIR, archive_id + ".json"), "w") as f:
+            archive_path = os.path.join(mod.ARCHIVE_DIR, archive_id + ".json")
+            with open(archive_path, "w") as f:
                 json.dump(record, f)
+            os.utime(archive_path, (1_700_000_000 + index, 1_700_000_000 + index))
 
         first = mod._list_archives_page(limit=50)
+        cursor_archive_id = first["archives"][-1]["id"]
+        os.remove(os.path.join(mod.ARCHIVE_DIR, cursor_archive_id + ".json"))
         second = mod._list_archives_page(limit=50, cursor=first["next_cursor"])
 
         self.assertEqual(len(first["archives"]), 50)

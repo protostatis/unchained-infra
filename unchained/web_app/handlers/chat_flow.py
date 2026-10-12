@@ -2482,7 +2482,7 @@ def _hosted_local_archive_id(user_id: str, source_id: str) -> str:
 
 
 def _local_archive_owner_key(user_id: str) -> str:
-    """Derive an opaque account scope for hosted records in a shared device store."""
+    """Hash the authenticated account ID; never persist or send its raw token."""
     return hashlib.sha256(f"workspace-archive-owner\0{user_id}".encode()).hexdigest()
 
 

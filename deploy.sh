@@ -802,6 +802,15 @@ print(Path(source).absolute())
             echo "ERROR: legacy hosted-conversation source path is invalid" >&2
             exit 1
         fi
+        if [[ "$legacy_source" == *:* ]]; then
+            echo "ERROR: legacy hosted-conversation path must not contain ':'" >&2
+            exit 1
+        fi
+        web_user="$(docker exec "$web_container" python3 -c 'import os; print(f"{os.getuid()}:{os.getgid()}")')"
+        if [[ ! "$web_user" =~ ^[0-9]+:[0-9]+$ ]]; then
+            echo "ERROR: could not determine the web container runtime UID/GID" >&2
+            exit 1
+        fi
         legacy_source_present=false
         if docker exec "$web_container" test -d "$legacy_source"; then
             legacy_source_present=true
@@ -818,7 +827,7 @@ print(Path(source).absolute())
                 web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
                 if ! docker run --rm --network none --read-only \
                     --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-                    --user 10001:10001 \
+                    --user "$web_user" \
                     --volumes-from "$web_container" \
                     --mount "type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly" \
                     --mount "type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly" \
