@@ -4,8 +4,10 @@
 The web container historically wrote this repository below ``$HOME``. Before
 recreating that container, deployment stops it, snapshots the legacy directory,
 and runs this tool in a short-lived helper container sharing the persistent
-``/data`` volume. Existing destination files are never overwritten unless
-their bytes match exactly.
+``/data`` volume. Existing destination files are never overwritten. Copyable
+files are still copied, but any symlink, unreadable entry, or byte-mismatched
+destination file is collected as an error and the whole run fails closed so an
+operator can reconcile it.
 """
 
 from __future__ import annotations

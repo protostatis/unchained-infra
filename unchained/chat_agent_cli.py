@@ -503,6 +503,13 @@ def _hosted_archive_digest(payload: dict) -> tuple[str, bytes]:
     # A retry may rebuild the snapshot after its first write but before the
     # server receives the ACK. Archive time is assigned on the first successful
     # local write; it must not make the same session look like a conflict.
+    #
+    # Only ``archived_at`` is stripped. Other metadata that can drift on a
+    # retry (preview whitespace, model_id) intentionally stays in the digest,
+    # so a drifted retry misses the exact-match fast path and is instead
+    # validated by ``_hosted_snapshot_extends``. Do not widen this exclusion:
+    # that would let a stale retry satisfy the same-digest ACK without proving
+    # its transcript is an append-only extension.
     stable_payload.pop("archived_at", None)
     encoded = json.dumps(
         stable_payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False
@@ -652,6 +659,8 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
         return {"ok": False, "error": "invalid_archive_id"}
     try:
         with _hosted_archive_lock(archive_id):
+            if os.path.islink(path):
+                return {"ok": False, "error": "archive_id_conflict"}
             if os.path.exists(path):
                 try:
                     with open(path, "r", encoding="utf-8") as f:
@@ -728,7 +737,7 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
 
 def _read_hosted_archive(archive_id: str, owner_key: str) -> dict | None:
     path = _safe_archive_path(archive_id)
-    if path is None:
+    if path is None or os.path.islink(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -903,7 +912,7 @@ def _restore_archive(archive_id: str) -> dict | None:
 def _delete_archive(archive_id: str, owner_key: str = "") -> bool:
     """Delete an archive file. Returns True if deleted."""
     fpath = _safe_archive_path(archive_id)
-    if fpath is None:
+    if fpath is None or os.path.islink(fpath):
         return False
     try:
         with _hosted_archive_lock(archive_id):
@@ -3930,8 +3939,18 @@ async def main():
                             "error": "Archive not found or invalid",
                         })
                     else:
+                        # Measure the full wire payload, including archived_at,
+                        # so the restore guard matches the store-side limit.
                         _, payload_bytes = _hosted_archive_digest(payload)
-                        if len(payload_bytes) > _MAX_HOSTED_ARCHIVE_BYTES:
+                        wire_size = len(
+                            json.dumps(
+                                payload,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                ensure_ascii=False,
+                            ).encode("utf-8")
+                        )
+                        if wire_size > _MAX_HOSTED_ARCHIVE_BYTES:
                             await send_agent_event(ws, {
                                 "type": "hosted_archive_error",
                                 "req_id": req_id,

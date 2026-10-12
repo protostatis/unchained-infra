@@ -826,9 +826,9 @@ print(Path(source).absolute())
         docker compose stop --timeout 30 web
 
         if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
-            # Accept either a content-addressed id or a tag reference. Reject
-            # only empty or whitespace-containing values that Docker cannot
-            # resolve as a single image reference.
+            # `.Image` is the content-addressed image id, which `docker create`
+            # accepts directly. Reject only empty or whitespace-containing
+            # values that Docker cannot resolve as a single image reference.
             web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
             if [[ -z "$web_image" || "$web_image" =~ [[:space:]] ]]; then
                 docker compose start web >/dev/null || true
@@ -870,6 +870,9 @@ print(Path(source).absolute())
                 docker compose start web >/dev/null || true
                 echo "ERROR: could not stage legacy hosted-conversation data" >&2
                 exit 1
+            else
+                # No legacy directory existed, so there is nothing to stage.
+                echo "    No legacy hosted-conversation data to preserve."
             fi
             docker rm -f "$migration_name" >/dev/null 2>&1 || true
         fi
