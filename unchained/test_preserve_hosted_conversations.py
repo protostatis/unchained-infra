@@ -43,14 +43,20 @@ class TestPreserveHostedConversations(unittest.TestCase):
             destination = root / "destination"
             source_file = source / "user" / "slot-state.json"
             destination_file = destination / "user" / "slot-state.json"
+            safe_source_file = source / "user" / "safe.json"
+            safe_destination_file = destination / "user" / "safe.json"
             source_file.parent.mkdir(parents=True)
             destination_file.parent.mkdir(parents=True)
             source_file.write_text('{"active_slot":1}')
             destination_file.write_text('{"active_slot":2}')
+            safe_source_file.write_text('{"preserve":true}')
 
-            with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            with self.assertRaisesRegex(
+                RuntimeError, "conflicting destination file: user/slot-state.json"
+            ):
                 preserver.preserve_json_files(source, destination)
             self.assertEqual(destination_file.read_text(), '{"active_slot":2}')
+            self.assertEqual(json.loads(safe_destination_file.read_text()), {"preserve": True})
 
     def test_missing_source_is_a_safe_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,6 +79,23 @@ class TestPreserveHostedConversations(unittest.TestCase):
                 json.loads((destination / "slot-state.json").read_text()),
                 {"active_slot": 1},
             )
+
+    def test_scan_errors_are_reported_for_operator_reconciliation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            destination = root / "destination"
+
+            def erroring_walk(path, *, followlinks, onerror):
+                error = PermissionError("permission denied")
+                error.filename = str(source / "user")
+                onerror(error)
+                return iter(())
+
+            with patch.object(preserver.os, "walk", side_effect=erroring_walk):
+                with self.assertRaisesRegex(RuntimeError, "cannot scan user"):
+                    preserver.preserve_json_files(source, destination)
 
 
 if __name__ == "__main__":

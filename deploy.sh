@@ -788,7 +788,10 @@ for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-ter
             exit 1
         fi
         preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"
-        test -f "$preservation_tool"
+        if [[ ! -f "$preservation_tool" ]]; then
+            echo "ERROR: missing hosted-conversation preservation helper" >&2
+            exit 1
+        fi
         legacy_source="$(docker exec "$web_container" python3 -c '
 import os
 from pathlib import Path
@@ -825,12 +828,17 @@ print(Path(source).absolute())
                 # snapshot readable to the same unprivileged UID as the web app.
                 chmod -R a+rX "$migration_tmp/legacy"
                 web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
+                legacy_mount="type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly"
+                helper_mount="type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly"
+                # The image layer is read-only; /tmp is a bounded scratch tmpfs
+                # and the old container's /data volume remains writable for
+                # the intended preservation copy.
                 if ! docker run --rm --network none --read-only \
                     --tmpfs /tmp:rw,noexec,nosuid,size=16m \
                     --user "$web_user" \
                     --volumes-from "$web_container" \
-                    --mount "type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly" \
-                    --mount "type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly" \
+                    --mount "$legacy_mount" \
+                    --mount "$helper_mount" \
                     --entrypoint python3 "$web_image" \
                     /tmp/preserve_hosted_conversations.py \
                     --source-dir /tmp/legacy \

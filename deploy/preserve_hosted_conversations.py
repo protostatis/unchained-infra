@@ -38,32 +38,63 @@ def preserve_json_files(source: Path, destination: Path) -> tuple[int, int]:
 
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     copied = unchanged = 0
-    for root, dirnames, filenames in os.walk(source, followlinks=False):
+    errors: list[str] = []
+
+    def walk_error(exc: OSError) -> None:
+        failed_path = Path(exc.filename) if exc.filename else source
+        try:
+            relative_path = failed_path.relative_to(source)
+        except ValueError:
+            relative_path = Path("<outside-source>")
+        errors.append(f"cannot scan {relative_path}: {type(exc).__name__}")
+
+    for root, dirnames, filenames in os.walk(
+        source, followlinks=False, onerror=walk_error
+    ):
         root_path = Path(root)
-        if any((root_path / name).is_symlink() for name in dirnames):
-            raise RuntimeError("hosted conversation store contains a symlinked directory")
         relative_root = root_path.relative_to(source)
+        symlink_dirs = [name for name in dirnames if (root_path / name).is_symlink()]
+        for name in symlink_dirs:
+            errors.append(f"symlinked source directory: {relative_root / name}")
+        dirnames[:] = [name for name in dirnames if name not in symlink_dirs]
         target_root = destination / relative_root
         if target_root.is_symlink():
-            raise RuntimeError("persistent hosted conversation path contains a symlink")
-        target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            errors.append(f"symlinked destination directory: {relative_root}")
+            dirnames[:] = []
+            continue
+        try:
+            target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as exc:
+            errors.append(
+                f"cannot create destination directory {relative_root}: {type(exc).__name__}"
+            )
+            dirnames[:] = []
+            continue
         for name in filenames:
             if not name.endswith(".json"):
                 continue
             src = root_path / name
+            relative_file = relative_root / name
             if src.is_symlink():
-                raise RuntimeError("hosted conversation store contains a symlinked file")
+                errors.append(f"symlinked source file: {relative_file}")
+                continue
             if not src.is_file():
                 continue
             dest = target_root / name
             if dest.is_symlink():
-                raise RuntimeError("persistent hosted conversation path contains a symlink")
-            if dest.exists():
-                if dest.is_symlink() or not dest.is_file() or _digest(src) != _digest(dest):
-                    raise RuntimeError(
-                        "conflicting hosted conversation metadata exists in persistent storage"
-                    )
-                unchanged += 1
+                errors.append(f"symlinked destination file: {relative_file}")
+                continue
+            try:
+                if dest.exists():
+                    if dest.is_symlink() or not dest.is_file() or _digest(src) != _digest(dest):
+                        errors.append(f"conflicting destination file: {relative_file}")
+                        continue
+                    unchanged += 1
+                    continue
+            except OSError as exc:
+                errors.append(
+                    f"cannot compare {relative_file}: {type(exc).__name__}"
+                )
                 continue
 
             temp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp")
@@ -81,11 +112,20 @@ def preserve_json_files(source: Path, destination: Path) -> tuple[int, int]:
                     pass
                 os.replace(temp, dest)
                 copied += 1
+            except OSError as exc:
+                errors.append(f"cannot copy {relative_file}: {type(exc).__name__}")
             finally:
                 try:
                     temp.unlink()
                 except FileNotFoundError:
                     pass
+    if errors:
+        detail = "; ".join(errors[:20])
+        if len(errors) > 20:
+            detail += f"; and {len(errors) - 20} more"
+        raise RuntimeError(
+            f"hosted conversation preservation found {len(errors)} issue(s): {detail}"
+        )
     return copied, unchanged
 
 
@@ -119,5 +159,9 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"ERROR: could not preserve hosted conversation metadata ({type(exc).__name__})", file=sys.stderr)
+        print(
+            "ERROR: could not preserve hosted conversation metadata "
+            f"({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
