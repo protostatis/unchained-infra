@@ -25,6 +25,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -46,10 +47,16 @@ import websockets  # noqa: E402
 
 from chat_event_transport import (  # noqa: E402
     CHAT_WS_MAX_MESSAGE_BYTES,
+    MAX_LOCAL_ARCHIVE_TRANSFER_BYTES,
     SCREENSHOT_OMITTED_MESSAGE,
     iter_replay_safe_text_chunks,
     read_inline_screenshot,
     send_agent_event,
+)
+from conversation_transcript import (  # noqa: E402
+    SESSION_SCHEMA_VERSION,
+    has_supported_session_schema,
+    validate_visible_transcript,
 )
 from nudge import (
     NudgeState,
@@ -265,6 +272,8 @@ CHAT_DIR = os.path.join(
 )
 ARCHIVE_DIR = os.path.join(CHAT_DIR, "archive")
 META_FILE = os.path.join(CHAT_DIR, "meta.json")
+_ARCHIVE_PAGE_SIZE = 50
+_MAX_HOSTED_ARCHIVE_BYTES = MAX_LOCAL_ARCHIVE_TRANSFER_BYTES
 
 
 def _slot_file(n: int) -> str:
@@ -465,8 +474,17 @@ def _archive_slot(slot: int | None = None):
         if m.get("role") == "user":
             preview = m.get("content", "")[:80]
             break
+    model_id = str(data.get("model_id", "") or "")
+    if not model_id:
+        model_id = str(
+            data.get("codex_session", {}).get("model", "")
+            or data.get("opencode_session", {}).get("model", "")
+            or ""
+        )
     archive = {
+        "source": "local",
         "slot_data": data,
+        "model_id": model_id,
         "archived_at": ts,
         "slot": slot,
         "preview": preview,
@@ -479,29 +497,333 @@ def _archive_slot(slot: int | None = None):
     return archive_id
 
 
-def _list_archives(limit: int = 50) -> list[dict]:
-    """List archived chats, newest first."""
+def _hosted_archive_digest(payload: dict) -> tuple[str, bytes]:
+    stable_payload = dict(payload)
+    # A retry may rebuild the snapshot after its first write but before the
+    # server receives the ACK. Archive time is assigned on the first successful
+    # local write; it must not make the same session look like a conflict.
+    stable_payload.pop("archived_at", None)
+    encoded = json.dumps(
+        stable_payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), encoded
+
+
+def _valid_hosted_archive_payload(payload: object, archive_id: str) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("archive_id") == archive_id
+        and has_supported_session_schema(payload)
+        and isinstance(payload.get("messages"), list)
+        and validate_visible_transcript(payload.get("transcript")) is not None
+    )
+
+
+def _hosted_snapshot_extends(existing: object, incoming: dict) -> bool:
+    """Accept a newer retry only when it preserves the prior session history."""
+    if (
+        not isinstance(existing, dict)
+        or existing.get("session_id") != incoming.get("session_id")
+    ):
+        return False
+    for key in ("messages", "transcript"):
+        previous = existing.get(key)
+        current = incoming.get(key)
+        if (
+            not isinstance(previous, list)
+            or not isinstance(current, list)
+            or len(previous) > len(current)
+            or current[: len(previous)] != previous
+        ):
+            return False
+    return True
+
+
+@contextlib.contextmanager
+def _hosted_archive_lock(archive_id: str):
+    """Serialize archive replacement across threads and agent processes."""
+    path = _safe_archive_path(archive_id)
+    if path is None:
+        raise ValueError("invalid archive_id")
+    lock_dir = os.path.join(os.path.dirname(ARCHIVE_DIR), ".archive-locks")
+    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(lock_dir, 0o700)
+    except OSError:
+        pass
+    lock_name = hashlib.sha256(archive_id.encode("utf-8")).hexdigest() + ".lock"
+    lock_path = os.path.join(lock_dir, lock_name)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        locked = True
+        yield
+    finally:
+        if locked:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _store_hosted_archive(payload: object, owner_key: str) -> dict:
+    """Persist a hosted-model archive locally, idempotently and atomically."""
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_archive"}
+    if not re.fullmatch(r"[a-f0-9]{64}", str(owner_key or "")):
+        return {"ok": False, "error": "invalid_archive_owner"}
+    archive_id = str(payload.get("archive_id", "") or "")
+    if (
+        not re.fullmatch(r"[a-zA-Z0-9._-]{8,120}", archive_id)
+        or "/" in archive_id
+        or "\\" in archive_id
+        or ".." in archive_id
+    ):
+        return {"ok": False, "error": "invalid_archive_id"}
+    if not _valid_hosted_archive_payload(payload, archive_id):
+        return {"ok": False, "error": "invalid_archive_payload"}
+    try:
+        payload_digest, payload_bytes = _hosted_archive_digest(payload)
+        wire_size = len(
+            json.dumps(
+                payload, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError, UnicodeError):
+        return {"ok": False, "error": "invalid_archive_payload"}
+    if wire_size > _MAX_HOSTED_ARCHIVE_BYTES:
+        return {"ok": False, "error": "archive_too_large"}
+    try:
+        slot = int(payload.get("slot") or 1)
+        archived_at = float(payload.get("archived_at") or time.time())
+        message_count = int(payload.get("message_count") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "error": "invalid_archive_metadata"}
+    if (
+        slot not in (1, 2, 3)
+        or not math.isfinite(archived_at)
+        or archived_at <= 0
+        or message_count < 0
+    ):
+        return {"ok": False, "error": "invalid_archive_metadata"}
+
+    os.makedirs(ARCHIVE_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(ARCHIVE_DIR, 0o700)
+    except OSError:
+        return {"ok": False, "error": "archive_permissions_failed"}
+    path = _safe_archive_path(archive_id)
+    if path is None:
+        return {"ok": False, "error": "invalid_archive_id"}
+    try:
+        with _hosted_archive_lock(archive_id):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    return {"ok": False, "error": "archive_id_conflict"}
+                if not (
+                    isinstance(existing, dict)
+                    and existing.get("source") == "hosted"
+                    and existing.get("archive_id") == archive_id
+                    and existing.get("owner_key") == owner_key
+                ):
+                    return {"ok": False, "error": "archive_id_conflict"}
+                existing_payload = existing.get("hosted_payload")
+                if not _valid_hosted_archive_payload(existing_payload, archive_id):
+                    return {"ok": False, "error": "archive_id_conflict"}
+                try:
+                    existing_digest, _ = _hosted_archive_digest(existing_payload)
+                except (TypeError, ValueError, UnicodeError):
+                    return {"ok": False, "error": "archive_id_conflict"}
+                stored_digest = existing.get("payload_sha256")
+                if existing_digest != stored_digest:
+                    return {"ok": False, "error": "archive_id_conflict"}
+                if stored_digest == payload_digest:
+                    return {"ok": True, "archive_id": archive_id, "already_saved": True}
+                if not _hosted_snapshot_extends(existing_payload, payload):
+                    return {"ok": False, "error": "archive_id_conflict"}
+                # A prior write may have succeeded while its ACK was lost.
+                # Replace only with a verified append-only extension; a stale
+                # retry cannot roll the saved snapshot back.
+
+            record = {
+                "source": "hosted",
+                "archive_id": archive_id,
+                "owner_key": owner_key,
+                "archived_at": archived_at,
+                "slot": slot,
+                "preview": str(payload.get("preview", ""))[:200],
+                "message_count": message_count,
+                "model_id": str(payload.get("model_id", "") or "")[:256],
+                "payload_sha256": payload_digest,
+                "hosted_payload": payload,
+            }
+            temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+            try:
+                fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(record, f, separators=(",", ":"), sort_keys=True)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, path)
+                try:
+                    os.utime(path, (archived_at, archived_at))
+                except OSError:
+                    pass
+                try:
+                    dir_fd = os.open(ARCHIVE_DIR, os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
+            except OSError:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+                return {"ok": False, "error": "archive_write_failed"}
+    except OSError:
+        return {"ok": False, "error": "archive_lock_failed"}
+    return {"ok": True, "archive_id": archive_id, "already_saved": False}
+
+
+def _read_hosted_archive(archive_id: str, owner_key: str) -> dict | None:
+    path = _safe_archive_path(archive_id)
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    payload = record.get("hosted_payload") if isinstance(record, dict) else None
+    if (
+        not isinstance(record, dict)
+        or record.get("source") != "hosted"
+        or record.get("archive_id") != archive_id
+        or not re.fullmatch(r"[a-f0-9]{64}", str(owner_key or ""))
+        or record.get("owner_key") != owner_key
+        or not _valid_hosted_archive_payload(payload, archive_id)
+    ):
+        return None
+    try:
+        digest, _encoded = _hosted_archive_digest(payload)
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    if digest != record.get("payload_sha256"):
+        return None
+    return payload
+
+
+def _list_archives_page(
+    limit: int = _ARCHIVE_PAGE_SIZE,
+    cursor: str = "",
+    owner_key: str = "",
+) -> dict:
+    """Return one bounded archive page with a stable file-ID cursor."""
     if not os.path.isdir(ARCHIVE_DIR):
-        return []
+        return {"archives": [], "next_cursor": None}
+    limit = min(max(int(limit or _ARCHIVE_PAGE_SIZE), 1), 100)
+    cursor = str(cursor or "")[:160]
+    try:
+        with os.scandir(ARCHIVE_DIR) as scan:
+            files = [
+                entry for entry in scan
+                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
+            ]
+        files.sort(
+            key=lambda entry: (entry.stat(follow_symlinks=False).st_mtime, entry.name),
+            reverse=True,
+        )
+    except OSError:
+        return {"archives": [], "next_cursor": None}
+    start = 0
+    if cursor:
+        cursor_name = f"{cursor}.json"
+        cursor_index = next(
+            (index for index, entry in enumerate(files) if entry.name == cursor_name),
+            None,
+        )
+        if cursor_index is None:
+            return {"archives": [], "next_cursor": None}
+        start = cursor_index + 1
+
     entries = []
-    for fname in os.listdir(ARCHIVE_DIR):
-        if not fname.endswith(".json"):
-            continue
-        fpath = os.path.join(ARCHIVE_DIR, fname)
+    for file_entry in files[start:]:
         try:
-            with open(fpath, "r") as f:
+            with open(file_entry.path, "r", encoding="utf-8") as f:
                 arc = json.load(f)
+            if not isinstance(arc, dict):
+                continue
+            source = str(arc.get("source", "local") or "local")
+            if source == "hosted" and (
+                not re.fullmatch(r"[a-f0-9]{64}", str(owner_key or ""))
+                or arc.get("owner_key") != owner_key
+            ):
+                continue
+            model_id = str(arc.get("model_id", "") or "")
+            if not model_id and isinstance(arc.get("slot_data"), dict):
+                slot_data = arc["slot_data"]
+                codex_session = slot_data.get("codex_session")
+                opencode_session = slot_data.get("opencode_session")
+                codex_model = str(
+                    codex_session.get("model", "")
+                    if isinstance(codex_session, dict) else ""
+                ).strip()
+                opencode_model = str(
+                    opencode_session.get("model", "")
+                    if isinstance(opencode_session, dict) else ""
+                ).strip()
+                if codex_model:
+                    model_id = codex_model if codex_model.startswith("codex-cli:") else f"codex-cli:{codex_model}"
+                elif opencode_model:
+                    model_id = opencode_model if opencode_model.startswith("opencode-cli:") else f"opencode-cli:{opencode_model}"
             entries.append({
-                "id": fname[:-5],  # strip .json
+                "id": file_entry.name[:-5],  # strip .json
                 "preview": arc.get("preview", ""),
                 "message_count": arc.get("message_count", 0),
                 "archived_at": arc.get("archived_at", 0),
                 "slot": arc.get("slot", 0),
+                "source": source,
+                "model_id": model_id,
             })
-        except (json.JSONDecodeError, OSError):
+            if len(entries) > limit:
+                break
+        except (json.JSONDecodeError, OSError, UnicodeError):
             continue
-    entries.sort(key=lambda e: e["archived_at"], reverse=True)
-    return entries[:limit]
+    page = entries[:limit]
+    next_cursor = page[-1]["id"] if len(entries) > limit and page else None
+    return {"archives": page, "next_cursor": next_cursor}
+
+
+def _list_archives(
+    limit: int = 50, cursor: str = "", owner_key: str = ""
+) -> list[dict]:
+    """List one page of archived chats, newest first."""
+    return _list_archives_page(
+        limit=limit, cursor=cursor, owner_key=owner_key
+    )["archives"]
 
 
 def _safe_archive_path(archive_id: str) -> str | None:
@@ -527,15 +849,24 @@ def _restore_archive(archive_id: str) -> dict | None:
         return None
 
 
-def _delete_archive(archive_id: str) -> bool:
+def _delete_archive(archive_id: str, owner_key: str = "") -> bool:
     """Delete an archive file. Returns True if deleted."""
     fpath = _safe_archive_path(archive_id)
     if fpath is None:
         return False
     try:
-        os.remove(fpath)
-        return True
-    except OSError:
+        with _hosted_archive_lock(archive_id):
+            with open(fpath, "r", encoding="utf-8") as f:
+                record = json.load(f)
+            if isinstance(record, dict) and record.get("source") == "hosted":
+                if (
+                    not re.fullmatch(r"[a-f0-9]{64}", str(owner_key or ""))
+                    or record.get("owner_key") != owner_key
+                ):
+                    return False
+            os.remove(fpath)
+            return True
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return False
 
 
@@ -3376,6 +3707,11 @@ async def main():
                     # conversation the user is actually viewing.
                     msg_slot = _normalize_slot(msg.get("slot"))
                     _sync_active_slot(msg_slot, "user_message")
+                    if msg_model:
+                        slot_data = _load_chat(msg_slot)
+                        if slot_data.get("model_id") != msg_model:
+                            slot_data["model_id"] = str(msg_model)[:256]
+                            _save_chat(slot_data, msg_slot)
                     msg_scheduler_armed = bool(msg.get("scheduler_armed"))
                     msg_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
                     msg_req_id = str(msg.get("req_id", "") or "").strip()
@@ -3502,12 +3838,58 @@ async def main():
                     await send_agent_event(ws, info)
                 elif msg.get("type") == "get_archives":
                     req_id = msg.get("req_id", "")
-                    archives = _list_archives()
+                    try:
+                        limit = int(msg.get("limit", _ARCHIVE_PAGE_SIZE))
+                    except (TypeError, ValueError):
+                        limit = _ARCHIVE_PAGE_SIZE
+                    cursor = str(msg.get("cursor", "") or "")
+                    owner_key = str(msg.get("owner_key", "") or "")
+                    page = _list_archives_page(
+                        limit=limit, cursor=cursor, owner_key=owner_key
+                    )
                     await send_agent_event(ws, {
                         "type": "archives_response",
                         "req_id": req_id,
-                        "archives": archives,
+                        **page,
                     })
+                elif msg.get("type") == "store_hosted_archive":
+                    req_id = msg.get("req_id", "")
+                    result = _store_hosted_archive(
+                        msg.get("payload"),
+                        str(msg.get("owner_key", "") or ""),
+                    )
+                    await send_agent_event(ws, {
+                        "type": "store_hosted_archive_ok"
+                        if result.get("ok") else "store_hosted_archive_error",
+                        "req_id": req_id,
+                        **result,
+                    })
+                elif msg.get("type") == "get_hosted_archive":
+                    req_id = msg.get("req_id", "")
+                    archive_id = str(msg.get("archive_id", "") or "")
+                    owner_key = str(msg.get("owner_key", "") or "")
+                    payload = _read_hosted_archive(archive_id, owner_key)
+                    if payload is None:
+                        await send_agent_event(ws, {
+                            "type": "hosted_archive_error",
+                            "req_id": req_id,
+                            "error": "Archive not found or invalid",
+                        })
+                    else:
+                        _, payload_bytes = _hosted_archive_digest(payload)
+                        if len(payload_bytes) > _MAX_HOSTED_ARCHIVE_BYTES:
+                            await send_agent_event(ws, {
+                                "type": "hosted_archive_error",
+                                "req_id": req_id,
+                                "error": "Archive is too large to restore through this client",
+                            })
+                        else:
+                            await send_agent_event(ws, {
+                                "type": "hosted_archive_response",
+                                "req_id": req_id,
+                                "archive_id": archive_id,
+                                "payload": payload,
+                            })
                 elif msg.get("type") == "restore_archive":
                     req_id = msg.get("req_id", "")
                     archive_id = msg.get("archive_id", "")
@@ -3526,13 +3908,19 @@ async def main():
                             "req_id": req_id,
                             "active_slot": current,
                         }
+                        model_id = str(slot_data.get("model_id", "") or "")
+                        if model_id:
+                            payload["model_id"] = model_id
                         if chat_session_id:
                             payload["session_id"] = chat_session_id
                         await send_agent_event(ws, payload)
                 elif msg.get("type") == "delete_archive":
                     req_id = msg.get("req_id", "")
                     archive_id = msg.get("archive_id", "")
-                    ok = _delete_archive(archive_id)
+                    ok = _delete_archive(
+                        archive_id,
+                        owner_key=str(msg.get("owner_key", "") or ""),
+                    )
                     await send_agent_event(ws, {
                         "type": "delete_archive_ok" if ok else "delete_archive_error",
                         "req_id": req_id,

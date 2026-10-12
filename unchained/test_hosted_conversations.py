@@ -19,6 +19,93 @@ from conversation_transcript import SESSION_SCHEMA_VERSION
 from hosted_conversations import ArchivePreservationError, HostedConversationRepo
 
 
+class _LocalArchiveAgent:
+    closed = False
+
+    def __init__(self, core):
+        self.core = core
+
+    async def send_json(self, msg):
+        req_id = msg.get("req_id", "")
+        kind = msg.get("type")
+        store = self.core._local_archive_store
+        archive_id = str(msg.get("archive_id", "") or "")
+        if kind == "store_hosted_archive":
+            payload = msg.get("payload") or {}
+            archive_id = payload.get("archive_id", "")
+            store[archive_id] = {
+                **payload,
+                "source": "hosted",
+                "_owner_key": msg.get("owner_key", ""),
+            }
+            response = {
+                "type": "store_hosted_archive_ok",
+                "req_id": req_id,
+                "ok": True,
+                "archive_id": archive_id,
+            }
+        elif kind == "get_hosted_archive":
+            stored = store.get(archive_id)
+            payload = (
+                {key: value for key, value in stored.items() if key != "_owner_key"}
+                if stored and stored.get("_owner_key") == msg.get("owner_key")
+                else None
+            )
+            response = (
+                {
+                    "type": "hosted_archive_response",
+                    "req_id": req_id,
+                    "archive_id": archive_id,
+                    "payload": payload,
+                }
+                if payload is not None
+                else {"type": "hosted_archive_error", "req_id": req_id, "error": "Archive not found"}
+            )
+        elif kind == "get_archives":
+            archives = [
+                {
+                    "id": key,
+                    "source": "hosted",
+                    "preview": stored.get("preview", ""),
+                    "message_count": stored.get("message_count", 0),
+                    "archived_at": stored.get("archived_at", 0),
+                    "slot": stored.get("slot", 1),
+                    "model_id": stored.get("model_id", ""),
+                }
+                for key, stored in store.items()
+                if stored.get("_owner_key") == msg.get("owner_key")
+            ]
+            response = {"type": "archives_response", "req_id": req_id, "archives": archives}
+        elif kind == "delete_archive":
+            stored = store.get(archive_id)
+            removed = None
+            if stored and stored.get("_owner_key") == msg.get("owner_key"):
+                removed = store.pop(archive_id, None)
+            response = {
+                "type": "delete_archive_ok" if removed else "delete_archive_error",
+                "req_id": req_id,
+            }
+        elif kind == "restore_archive":
+            response = {
+                "type": "restore_archive_ok",
+                "req_id": req_id,
+                "active_slot": msg.get("slot", 1),
+                "session_id": "s-local-restored",
+            }
+        else:
+            return
+        queue_for_request = self.core._agent_req_queues.get(req_id)
+        if queue_for_request is not None:
+            await queue_for_request.put(response)
+
+
+def _attach_local_archive_agent(core, agent_id: str = "trial-agent"):
+    core._agent_req_queues = {}
+    core._local_archive_store = {}
+    core._chat_agents = {agent_id: _LocalArchiveAgent(core)}
+    return core
+
+
 def _json_file(path: str) -> dict:
     with open(path) as f:
         return json.load(f)
@@ -174,6 +261,53 @@ class TestHostedConversationRepo(unittest.TestCase):
         self.assertEqual(archives[0]["archive_id"], archive_id)
         self.assertEqual(archives[0]["message_count"], 2)
         self.assertEqual(archives[0]["slot"], 1)
+
+    def test_build_archive_payload_is_non_persistent_and_replay_stable(self):
+        sid = "s-trial-agent-local-archive-payload"
+        self._write_session(
+            sid,
+            [{"role": "user", "content": "Archive this locally"}],
+            transcript=[{"role": "user", "content": "Archive this locally"}],
+            schema_version=SESSION_SCHEMA_VERSION,
+        )
+        path = self.repo.session_path(sid)
+
+        payload = self.repo.build_archive_payload(
+            sid,
+            slot=2,
+            model_id="deepseek-flash",
+            archive_id="hosted-1234567890abcdef1234567890abcdef",
+        )
+
+        self.assertTrue(self.repo.is_valid_archive_payload(payload))
+        self.assertEqual(payload["model_id"], "deepseek-flash")
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(self.repo.list_archives("u-local-payload"), [])
+
+    def test_restore_archive_payload_does_not_create_a_server_archive(self):
+        sid = "s-trial-agent-local-restore-src"
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-1234567890abcdef1234567890abcdef",
+            "session_id": sid,
+            "slot": 2,
+            "preview": "Restore locally-owned archive",
+            "message_count": 1,
+            "archived_at": 1234.0,
+            "model_id": "deepseek-flash",
+            "messages": [{"role": "user", "content": "restore"}],
+            "transcript": [{"role": "user", "content": "restore"}],
+        }
+
+        restored_sid, slot, messages = self.repo.restore_archive_payload(
+            "u-local-restore", payload, agent_id="claude-testhash"
+        )
+
+        self.assertIsNotNone(restored_sid)
+        self.assertEqual(slot, 2)
+        self.assertEqual(messages, payload["messages"])
+        self.assertEqual(self.repo.list_archives("u-local-restore"), [])
+        self.assertTrue(os.path.isfile(self.repo.session_path(restored_sid)))
 
     def test_archive_session_returns_none_for_missing_session(self):
         archive_id = self.repo.archive_session(
@@ -658,6 +792,13 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         chat_flow._HOSTED_SESSIONS_DIR = str(self.session_dir)
         # Reset the global singleton to pick up the new data dir
         chat_flow._HOSTED_REPO = None
+        self.local_archives: dict[str, dict] = {}
+        agent_request_patch = patch(
+            "web_app.handlers.chat_flow.agent_request",
+            side_effect=self._local_agent_request,
+        )
+        agent_request_patch.start()
+        self.addCleanup(agent_request_patch.stop)
 
     def tearDown(self):
         from web_app.handlers import chat_flow
@@ -668,8 +809,61 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         chat_flow._HOSTED_REPO = None
         self.temp_dir.cleanup()
 
+    async def _local_agent_request(self, _agent_id, msg, timeout=10):
+        kind = msg.get("type")
+        if kind == "store_hosted_archive":
+            payload = msg["payload"]
+            self.local_archives[payload["archive_id"]] = {**payload, "source": "hosted"}
+            return {
+                "type": "store_hosted_archive_ok",
+                "ok": True,
+                "archive_id": payload["archive_id"],
+            }
+        if kind == "get_hosted_archive":
+            payload = self.local_archives.get(msg.get("archive_id"))
+            if payload is None:
+                return {"type": "hosted_archive_error", "error": "Archive not found"}
+            return {
+                "type": "hosted_archive_response",
+                "archive_id": msg.get("archive_id"),
+                "payload": payload,
+            }
+        if kind == "get_archives":
+            archives = [
+                {
+                    "id": archive_id,
+                    "source": "hosted",
+                    "preview": payload.get("preview", ""),
+                    "message_count": payload.get("message_count", 0),
+                    "archived_at": payload.get("archived_at", 0),
+                    "slot": payload.get("slot", 1),
+                    "model_id": payload.get("model_id", ""),
+                }
+                for archive_id, payload in self.local_archives.items()
+            ]
+            return {"type": "archives_response", "archives": archives, "next_cursor": None}
+        if kind == "delete_archive":
+            removed = self.local_archives.pop(msg.get("archive_id", ""), None)
+            return {
+                "type": "delete_archive_ok" if removed else "delete_archive_error",
+                "req_id": msg.get("req_id", ""),
+            }
+        if kind == "restore_archive":
+            archive = self.local_archives.get(msg.get("archive_id", ""))
+            if archive is None or archive.get("source") == "hosted":
+                return {
+                    "type": "restore_archive_error",
+                    "error": "Archive not found",
+                }
+            return {
+                "type": "restore_archive_ok",
+                "active_slot": msg.get("slot", 1),
+                "session_id": "s-local-restored",
+            }
+        return None
+
     def _core(self, user_id: str = "u-test-001"):
-        return SimpleNamespace(
+        return _attach_local_archive_agent(SimpleNamespace(
             _authenticate=lambda request: {
                 "user_id": user_id,
                 "agent_id": "trial-agent",
@@ -718,7 +912,7 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             JWT_SECRET="test-jwt-secret",
             _attach_first_look_guest_cookies=Mock(),
-        )
+        ))
 
     def _write_session(self, session_id: str, messages: list[dict]):
         path = HostedConversationRepo.make_session_path(
@@ -761,8 +955,8 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch("web_app.handlers.chat_flow._core")
-    async def test_new_chat_ack_archives_old_session(self, mock_core):
-        """After ack, old session messages appear in the hosted archive."""
+    async def test_new_chat_ack_archives_old_session_on_local_agent(self, mock_core):
+        """After ack, the old hosted transcript is saved on the local agent."""
         from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
 
         old_session = "s-trial-agent-old-session"
@@ -801,11 +995,12 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(os.path.isfile(old_path))
 
-        # Archive should exist in hosted repo
-        archives = self.repo().list_archives(user_id)
+        self.assertEqual(self.repo().list_archives(user_id), [])
+        archives = list(self.local_archives.values())
         self.assertEqual(len(archives), 1)
         self.assertIn("Hello", archives[0]["preview"])
         self.assertEqual(archives[0]["message_count"], 2)
+        self.assertEqual(archives[0]["model_id"], "google/gemini-3.1-flash-lite")
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_new_chat_never_deletes_history(self, mock_core):
@@ -833,10 +1028,11 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        # Verify archive exists
-        archives = self.repo().list_archives(user_id)
+        # The server retires the active session only after local ACK.
+        archives = list(self.local_archives.values())
         self.assertEqual(len(archives), 1)
         self.assertEqual(archives[0]["preview"], "Valuable research")
+        self.assertEqual(self.repo().list_archives(user_id), [])
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_new_chat_quiesces_before_archiving_source(self, mock_core):
@@ -851,9 +1047,6 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         mock_core.return_value = core
         self._write_session(old_session, [{"role": "user", "content": "Keep me"}])
         events = []
-        repo = self.repo()
-        original_archive = repo.archive_session
-
         async def quiesce(_core, session_id):
             self.assertEqual(session_id, old_session)
             events.append("quiesce")
@@ -863,9 +1056,11 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session_id, old_session)
             events.append("retire")
 
-        def archive(*args, **kwargs):
+        async def archive(_core, _user_id, _agent_id, session_id, **kwargs):
             self.assertEqual(events, ["quiesce"])
-            return original_archive(*args, **kwargs)
+            self.assertEqual(session_id, old_session)
+            events.append("archive_ack")
+            return True, ""
 
         request_id = "request-00000000000000A6"
         reservation = await handle_chat_new(self._request(request_id, old_session))
@@ -873,7 +1068,7 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(chat_stream, "quiesce_hosted_session", side_effect=quiesce),
             patch.object(chat_stream, "retire_hosted_session", side_effect=retire),
-            patch.object(repo, "archive_session", side_effect=archive),
+            patch("web_app.handlers.chat_flow._archive_hosted_session_locally", side_effect=archive),
         ):
             response = await handle_chat_new_ack(
                 self._ack_request(
@@ -882,7 +1077,7 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(events, ["quiesce", "retire"])
+        self.assertEqual(events, ["quiesce", "archive_ack", "retire"])
         self.assertEqual(hosted_session_phase(core, old_session), "retired")
 
     @patch("web_app.handlers.chat_flow._core")
@@ -911,8 +1106,9 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        archives = self.repo().list_archives(user_id)
+        archives = list(self.local_archives.values())
         self.assertEqual(len(archives), 0)
+        self.assertEqual(self.repo().list_archives(user_id), [])
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_missing_session_file_during_archive_is_safe(self, mock_core):
@@ -961,16 +1157,17 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
         ack_request = self._ack_request(
             request_id, old_session, data["session_id"], data["commit_token"]
         )
-        with patch.object(
-            repo,
-            "archive_session",
-            side_effect=ArchivePreservationError("disk unavailable"),
+        with patch(
+            "web_app.handlers.chat_flow._archive_hosted_session_locally",
+            side_effect=[(False, "local_agent_offline"), (True, "")],
         ):
             response = await handle_chat_new_ack(ack_request)
 
         self.assertEqual(response.status, 503)
+        self.assertEqual(json.loads(response.body.decode())["code"], "local_agent_offline")
         self.assertTrue(os.path.isfile(repo.session_path(old_session)))
         self.assertEqual(repo.get_slot_state(user_id)["slots"]["1"], old_session)
+        self.assertEqual(repo.list_archives(user_id), [])
         self.assertEqual(core._session_tabs[old_session], "active-tab")
         self.assertNotIn(data["session_id"], core._session_tabs)
 
@@ -985,7 +1182,7 @@ class TestTrialNewChatArchives(unittest.IsolatedAsyncioTestCase):
 
 
 class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
-    """Verify archive list/restore/delete handlers for OpenRouter lane."""
+    """Verify model-independent local archive handlers for /workspace."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -1005,6 +1202,16 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             data_dir=str(self.hosted_data_dir),
             sessions_dir=str(self.session_dir),
         )
+        self.local_archives: dict[str, dict] = {}
+        self.local_archive_owners: dict[str, str] = {}
+        self.agent_requests: list[tuple[str, dict]] = []
+        self.current_user_id = "u-test-hdlr"
+        agent_request_patch = patch(
+            "web_app.handlers.chat_flow.agent_request",
+            side_effect=self._local_agent_request,
+        )
+        agent_request_patch.start()
+        self.addCleanup(agent_request_patch.stop)
 
     def tearDown(self):
         from web_app.handlers import chat_flow
@@ -1021,7 +1228,8 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             json.dump({"messages": messages}, f)
 
     def _core(self, user_id: str = "u-test-hdlr"):
-        return SimpleNamespace(
+        self.current_user_id = user_id
+        return _attach_local_archive_agent(SimpleNamespace(
             _authenticate=lambda request: {
                 "user_id": user_id,
                 "agent_id": "trial-agent",
@@ -1035,10 +1243,75 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             time=SimpleNamespace(time=lambda: 1234.5),
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             _pending_limited_response=lambda: SimpleNamespace(status=403),
-        )
+        ))
+
+    async def _local_agent_request(self, _agent_id, msg, timeout=10):
+        self.agent_requests.append((_agent_id, dict(msg)))
+        kind = msg.get("type")
+        if kind == "store_hosted_archive":
+            payload = msg["payload"]
+            self.local_archives[payload["archive_id"]] = {**payload, "source": "hosted"}
+            self.local_archive_owners[payload["archive_id"]] = msg.get("owner_key", "")
+            return {
+                "type": "store_hosted_archive_ok",
+                "ok": True,
+                "archive_id": payload["archive_id"],
+            }
+        if kind == "get_hosted_archive":
+            payload = self.local_archives.get(msg.get("archive_id"))
+            if self.local_archive_owners.get(msg.get("archive_id")) != msg.get("owner_key"):
+                payload = None
+            return (
+                {
+                    "type": "hosted_archive_response",
+                    "archive_id": msg.get("archive_id"),
+                    "payload": payload,
+                }
+                if payload is not None
+                else {"type": "hosted_archive_error", "error": "Archive not found"}
+            )
+        if kind == "get_archives":
+            archives = [
+                {
+                    "id": archive_id,
+                    "source": "hosted",
+                    "preview": payload.get("preview", ""),
+                    "message_count": payload.get("message_count", 0),
+                    "archived_at": payload.get("archived_at", 0),
+                    "slot": payload.get("slot", 1),
+                    "model_id": payload.get("model_id", ""),
+                }
+                for archive_id, payload in self.local_archives.items()
+                if self.local_archive_owners.get(archive_id) == msg.get("owner_key")
+            ]
+            return {"type": "archives_response", "archives": archives, "next_cursor": None}
+        if kind == "delete_archive":
+            archive_id = msg.get("archive_id", "")
+            removed = None
+            if self.local_archive_owners.get(archive_id) == msg.get("owner_key"):
+                removed = self.local_archives.pop(archive_id, None)
+                self.local_archive_owners.pop(archive_id, None)
+            return {
+                "type": "delete_archive_ok" if removed else "delete_archive_error",
+                "req_id": msg.get("req_id", ""),
+            }
+        if kind == "restore_archive":
+            archive = self.local_archives.get(msg.get("archive_id", ""))
+            if archive is None or archive.get("source") == "hosted":
+                return {
+                    "type": "restore_archive_error",
+                    "error": "Archive not found",
+                }
+            return {
+                "type": "restore_archive_ok",
+                "active_slot": msg.get("slot", 1),
+                "session_id": "s-local-restored",
+                "model_id": "codex-cli:gpt-5.6-sol",
+            }
+        return None
 
     @patch("web_app.handlers.chat_flow._core")
-    async def test_trial_archives_list_uses_hosted_repo(self, mock_core):
+    async def test_trial_archives_list_migrates_legacy_hosted_data_to_local(self, mock_core):
         from web_app.handlers.chat_flow import handle_chat_archives
 
         user_id = "u-test-archives"
@@ -1055,12 +1328,65 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         data = json.loads(response.body.decode())
 
         self.assertEqual(response.status, 200)
-        self.assertTrue(data.get("trial"))
+        self.assertEqual(data.get("source"), "local")
         self.assertEqual(len(data["archives"]), 1)
         self.assertEqual(data["archives"][0]["preview"], "Archive me")
+        self.assertEqual(self.repo.list_archives(user_id), [])
+        self.assertIn(data["archives"][0]["id"], self.local_archives)
 
     @patch("web_app.handlers.chat_flow._core")
-    async def test_trial_restore_archive_uses_hosted_repo(self, mock_core):
+    async def test_hosted_local_archives_are_scoped_to_authenticated_account(self, mock_core):
+        from web_app.handlers.chat_flow import (
+            handle_chat_archives,
+            handle_chat_delete_archive,
+            handle_chat_restore_archive,
+        )
+
+        owner_id = "u-local-archive-owner"
+        sid = "s-trial-agent-local-archive-owner"
+        self._write_session(sid, [{"role": "user", "content": "Owner-only archive"}])
+        archive_id = self.repo.archive_session(
+            owner_id, sid, slot=1, sessions_dir=str(self.session_dir)
+        )
+        self.assertIsNotNone(archive_id)
+
+        mock_core.return_value = self._core(owner_id)
+        owner_response = await handle_chat_archives(
+            SimpleNamespace(query={"model": "google/gemini-3.1-flash-lite"})
+        )
+        owner_data = json.loads(owner_response.body.decode())
+        self.assertEqual(owner_response.status, 200)
+        self.assertEqual([item["id"] for item in owner_data["archives"]], [archive_id])
+
+        other_user_id = "u-local-archive-other"
+        mock_core.return_value = self._core(other_user_id)
+        other_response = await handle_chat_archives(
+            SimpleNamespace(query={"model": "google/gemini-3.1-flash-lite"})
+        )
+        other_data = json.loads(other_response.body.decode())
+        self.assertEqual(other_response.status, 200)
+        self.assertEqual(other_data["archives"], [])
+
+        restore_response = await handle_chat_restore_archive(
+            SimpleNamespace(
+                json=AsyncMock(
+                    return_value={
+                        "model": "google/gemini-3.1-flash-lite",
+                        "archive_id": archive_id,
+                        "source": "hosted",
+                    }
+                )
+            )
+        )
+        delete_response = await handle_chat_delete_archive(
+            SimpleNamespace(json=AsyncMock(return_value={"archive_id": archive_id}))
+        )
+        self.assertEqual(restore_response.status, 404)
+        self.assertEqual(delete_response.status, 404)
+        self.assertIn(archive_id, self.local_archives)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_trial_restore_archive_retrieves_device_owned_hosted_snapshot(self, mock_core):
         from web_app.handlers.chat_flow import handle_chat_restore_archive
 
         user_id = "u-test-restore"
@@ -1091,10 +1417,12 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertTrue(data["ok"])
-        self.assertTrue(data.get("trial"))
+        self.assertEqual(data.get("source"), "hosted")
         self.assertIsNotNone(data.get("session_id"))
         self.assertTrue(data["session_id"].startswith("s-trial-agent-"))
         self.assertEqual(data["active_slot"], 2)
+        self.assertIn(archive_id, self.local_archives)
+        self.assertEqual(self.repo.list_archives(user_id), [])
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_trial_restore_without_slot_archives_archive_target_slot(self, mock_core):
@@ -1136,11 +1464,11 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["active_slot"], 2)
         self.assertNotEqual(data["session_id"], current_sid)
         self.assertFalse(os.path.isfile(self.repo.session_path(current_sid)))
-        archives = self.repo.list_archives(user_id)
-        self.assertEqual(len(archives), 2)
+        self.assertEqual(self.repo.list_archives(user_id), [])
+        self.assertEqual(len(self.local_archives), 2)
         self.assertIn(
             "Keep slot two before restore",
-            [archive["preview"] for archive in archives],
+            [archive.get("preview") for archive in self.local_archives.values()],
         )
 
     @patch("web_app.handlers.chat_flow._core")
@@ -1173,13 +1501,11 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             )
         )
         with (
-            patch("web_app.handlers.chat_flow._hosted_repo", return_value=self.repo),
-            patch.object(
-                self.repo,
-                "archive_session",
-                side_effect=ArchivePreservationError("disk unavailable"),
+            patch(
+                "web_app.handlers.chat_flow._archive_hosted_session_locally",
+                AsyncMock(return_value=(False, "local_agent_offline")),
             ),
-            patch.object(self.repo, "restore_archive", wraps=self.repo.restore_archive) as restore,
+            patch.object(self.repo, "restore_archive_payload") as restore,
         ):
             response = await handle_chat_restore_archive(request)
 
@@ -1252,14 +1578,11 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         state["slots"]["1"] = archived_target_sid
         self.repo.set_slot_state(user_id, state)
 
-        original_archive = self.repo.archive_session
-
-        def archive_then_switch(*args, **kwargs):
-            result = original_archive(*args, **kwargs)
+        async def archive_then_switch(*args, **kwargs):
             changed = self.repo.get_slot_state(user_id)
             changed["slots"]["1"] = competing_sid
             self.repo.set_slot_state(user_id, changed)
-            return result
+            return True, ""
 
         core = self._core(user_id)
         mock_core.return_value = core
@@ -1272,9 +1595,9 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        with (
-            patch("web_app.handlers.chat_flow._hosted_repo", return_value=self.repo),
-            patch.object(self.repo, "archive_session", side_effect=archive_then_switch),
+        with patch(
+            "web_app.handlers.chat_flow._archive_hosted_session_locally",
+            side_effect=archive_then_switch,
         ):
             response = await handle_chat_restore_archive(request)
 
@@ -1392,7 +1715,7 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 404)
 
     @patch("web_app.handlers.chat_flow._core")
-    async def test_trial_delete_archive_uses_hosted_repo(self, mock_core):
+    async def test_trial_delete_archive_deletes_from_local_owner(self, mock_core):
         from web_app.handlers.chat_flow import handle_chat_delete_archive
 
         user_id = "u-test-delete"
@@ -1418,12 +1741,12 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertTrue(data["ok"])
-        self.assertTrue(data.get("trial"))
         self.assertFalse(self.repo.archive_owned_by(user_id, archive_id))
+        self.assertNotIn(archive_id, self.local_archives)
 
     @patch("web_app.handlers.chat_flow._core")
-    async def test_trial_archive_request_does_not_rpc_local_agent(self, mock_core):
-        """OpenRouter archive handlers must not fall through to agent RPC."""
+    async def test_archives_route_to_local_agent_for_hosted_model(self, mock_core):
+        """The selected hosted model no longer changes archive ownership."""
         from web_app.handlers.chat_flow import handle_chat_archives
 
         core = self._core()
@@ -1433,8 +1756,86 @@ class TestTrialArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         data = json.loads(response.body.decode())
 
         self.assertEqual(response.status, 200)
-        self.assertTrue(data.get("trial"))
+        self.assertEqual(data.get("source"), "local")
         self.assertEqual(data["archives"], [])
+        self.assertIn(
+            "get_archives",
+            [msg["type"] for _agent_id, msg in self.agent_requests],
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_archives_do_not_report_offline_local_agent_as_empty(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_archives
+
+        mock_core.return_value = self._core()
+        with patch.object(chat_flow, "agent_request", AsyncMock(return_value=None)):
+            response = await handle_chat_archives(
+                SimpleNamespace(query={"model": "deepseek-flash"})
+            )
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(data["code"], "local_agent_offline")
+        self.assertIn("Connect the local agent", data["error"])
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_legacy_server_archive_is_not_deleted_until_local_ack(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_archives
+
+        user_id = "u-test-migration-offline"
+        session_id = "s-trial-agent-migration-offline"
+        self._write_session(session_id, [{"role": "user", "content": "Keep this archive"}])
+        archive_id = self.repo.archive_session(
+            user_id, session_id, sessions_dir=str(self.session_dir)
+        )
+        mock_core.return_value = self._core(user_id)
+
+        with patch.object(chat_flow, "agent_request", AsyncMock(return_value=None)):
+            response = await handle_chat_archives(SimpleNamespace(query={}))
+
+        self.assertEqual(response.status, 503)
+        self.assertTrue(self.repo.archive_owned_by(user_id, archive_id))
+        self.assertEqual(self.local_archives, {})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_local_archive_restore_uses_local_agent_even_with_hosted_model(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-local-archive-restore"
+        local_archive_id = "1775009625419_1_12ad4c25"
+        core = self._core(user_id)
+        mock_core.return_value = core
+        self.local_archives[local_archive_id] = {
+            "archive_id": local_archive_id,
+            "source": "local",
+            "preview": "Local conversation",
+            "message_count": 3,
+            "archived_at": 1775009625,
+            "slot": 1,
+            "model_id": "codex-cli:gpt-5.6-sol",
+        }
+        response = await handle_chat_restore_archive(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "archive_id": local_archive_id,
+                    "source": "local",
+                    "model": "deepseek-flash",
+                    "slot": 1,
+                })
+            )
+        )
+
+        data = json.loads(response.body.decode())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["source"], "local")
+        self.assertEqual(data["model_id"], "codex-cli:gpt-5.6-sol")
+        self.assertTrue(any(
+            msg.get("type") == "restore_archive"
+            for _agent_id, msg in self.agent_requests
+        ))
+        self.assertEqual(self.repo.list_archives(user_id), [])
 
 
 class TestTrialSlotsServerAuthority(unittest.IsolatedAsyncioTestCase):
@@ -1706,7 +2107,7 @@ class TestTrialNewChatSlotUpdate(unittest.IsolatedAsyncioTestCase):
                 session_id, sessions_dir=sessions_dir
             )
 
-        return SimpleNamespace(
+        return _attach_local_archive_agent(SimpleNamespace(
             _authenticate=lambda request: {
                 "user_id": user_id,
                 "agent_id": "trial-agent",
@@ -1733,7 +2134,7 @@ class TestTrialNewChatSlotUpdate(unittest.IsolatedAsyncioTestCase):
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             JWT_SECRET="test-jwt-secret",
             _attach_first_look_guest_cookies=Mock(),
-        )
+        ))
 
     def _repo(self):
         from web_app.handlers.chat_flow import _hosted_repo
@@ -1840,16 +2241,16 @@ class TestTrialNewChatSlotUpdate(unittest.IsolatedAsyncioTestCase):
                 "slot": 1,
             })
         )
-        original_archive = repo.archive_session
-
-        def archive_then_switch(*args, **kwargs):
-            result = original_archive(*args, **kwargs)
+        async def archive_then_switch(_core, _user_id, _agent_id, _session_id, **kwargs):
             changed = repo.get_slot_state(user_id)
             changed["slots"]["1"] = competing_session
             repo.set_slot_state(user_id, changed)
-            return result
+            return True, ""
 
-        with patch.object(repo, "archive_session", side_effect=archive_then_switch):
+        with patch(
+            "web_app.handlers.chat_flow._archive_hosted_session_locally",
+            side_effect=archive_then_switch,
+        ):
             response = await handle_chat_new_ack(ack_request)
 
         self.assertEqual(response.status, 503)
@@ -2226,7 +2627,7 @@ class TestRestoreSessionOwnedCompatibility(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(archive_id)
 
         # Wire up the mock core with auto-registered user identity.
-        core = SimpleNamespace(
+        core = _attach_local_archive_agent(SimpleNamespace(
             _authenticate=lambda request: {
                 "user_id": user_id,
                 "agent_id": agent_id,
@@ -2240,7 +2641,7 @@ class TestRestoreSessionOwnedCompatibility(unittest.IsolatedAsyncioTestCase):
             time=SimpleNamespace(time=lambda: 1234.5),
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             _pending_limited_response=lambda: SimpleNamespace(status=403),
-        )
+        ), agent_id=agent_id)
         mock_core.return_value = core
 
         request = SimpleNamespace(
@@ -2358,7 +2759,7 @@ class TestRestoreCleansOrphanSession(unittest.IsolatedAsyncioTestCase):
         archive_path = self.repo._archive_path(user_id, archive_id)
         self.assertTrue(os.path.isfile(archive_path))
 
-        core = SimpleNamespace(
+        core = _attach_local_archive_agent(SimpleNamespace(
             _authenticate=lambda request: {
                 "user_id": user_id,
                 "agent_id": agent_id,
@@ -2372,7 +2773,7 @@ class TestRestoreCleansOrphanSession(unittest.IsolatedAsyncioTestCase):
             time=SimpleNamespace(time=lambda: 1234.5),
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             _pending_limited_response=lambda: SimpleNamespace(status=403),
-        )
+        ), agent_id=agent_id)
         mock_core.return_value = core
 
         request = SimpleNamespace(
@@ -2396,15 +2797,14 @@ class TestRestoreCleansOrphanSession(unittest.IsolatedAsyncioTestCase):
             "active session file should be removed after archive+restore",
         )
 
-        # The source archive file must still exist (not deleted).
-        self.assertTrue(
-            os.path.isfile(archive_path),
-            "source archive must not be deleted",
-        )
+        # The old hosted file was removed only after its local copy was saved.
+        self.assertFalse(os.path.isfile(archive_path))
+        self.assertIn(archive_id, core._local_archive_store)
 
-        # The active session must have been archived (appears in list).
-        archives = self.repo.list_archives(user_id)
-        previews = [a["preview"] for a in archives]
+        # The current active session was also archived locally before restore.
+        previews = [
+            archive["preview"] for archive in core._local_archive_store.values()
+        ]
         self.assertIn("Active content to be archived", previews)
 
         # Slot must now point to the restored session.

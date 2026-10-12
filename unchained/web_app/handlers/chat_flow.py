@@ -19,7 +19,13 @@ from urllib.parse import urlsplit
 import httpx
 from aiohttp import WSMsgType, web
 
+from chat_event_transport import MAX_LOCAL_ARCHIVE_TRANSFER_BYTES
 from challenge_detection import detect_challenge
+from conversation_transcript import (
+    SESSION_SCHEMA_VERSION,
+    validate_visible_transcript,
+    visible_transcript_from_payload,
+)
 from domain_policy import execution_policy_for_url
 from rate_limit import SlidingWindowRateLimiter
 
@@ -45,7 +51,7 @@ _HOSTED_REPO: HostedConversationRepo | None = None
 _HOSTED_REPO_DATA_DIR = os.environ.get(
     "UNCHAINED_HOSTED_DATA_DIR",
     os.path.join(
-        os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
+        os.environ.get("UNCHAINED_DATA_DIR", "/data"),
         "hosted-conversations",
     ),
 )
@@ -316,8 +322,16 @@ async def _commit_trial_new_chat_transition(
             repo = _hosted_repo()
             slot = record.get("slot", 1)
             try:
-                repo.archive_session(user_id, previous_session_id, slot=slot)
+                archived, archive_error = await _archive_hosted_session_locally(
+                    core,
+                    user_id,
+                    str(record.get("agent_id") or ""),
+                    previous_session_id,
+                    slot=slot,
+                    model_id=str(record.get("model_id") or ""),
+                )
             except ArchivePreservationError:
+                record["local_archive_failure"] = "session_unreadable"
                 log.warning(
                     "[chat] refusing to replace unpreserved session %s for user %s",
                     previous_session_id,
@@ -325,10 +339,18 @@ async def _commit_trial_new_chat_transition(
                 )
                 return False
             except Exception:
+                record["local_archive_failure"] = "local_archive_save_failed"
                 log.exception(
                     "[chat] failed to archive session %s for user %s",
                     previous_session_id,
                     user_id,
+                )
+                return False
+            if not archived:
+                record["local_archive_failure"] = archive_error
+                log.warning(
+                    "[chat] refusing to replace hosted session %s before local archive ACK",
+                    previous_session_id,
                 )
                 return False
             # Claim the authoritative slot before moving resources or deleting
@@ -382,6 +404,26 @@ async def _commit_trial_new_chat_transition(
         return True
     finally:
         await finish_hosted_session_transition(lifecycle, retired=retired)
+
+
+def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
+    reason = str(record.get("local_archive_failure", "") or "")
+    if reason == "local_agent_offline":
+        return (
+            "Reconnect the local agent to archive this chat on this device. Your previous chat remains preserved, and the new chat is not finalized.",
+            "local_agent_offline",
+        )
+    if reason == "archive_too_large":
+        return (
+            "This chat is too large to transfer to local archive storage. Your current chat was not replaced.",
+            reason,
+        )
+    if reason:
+        return (
+            "The current chat could not be saved to this device, so it was not replaced.",
+            reason,
+        )
+    return ("Could not safely preserve the current chat", "archive_save_failed")
 
 
 def _first_user_message_preview(session_id: str) -> str:
@@ -530,8 +572,9 @@ async def _trial_new_chat_unavailable_response(
     try:
         if recovery_choice == "destination":
             if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+                error, code = _new_chat_preservation_error(record)
                 return web.json_response(
-                    {"error": "Could not safely preserve the current chat"},
+                    {"error": error, "code": code},
                     status=503,
                     headers={"Retry-After": "5"},
                 )
@@ -2430,6 +2473,146 @@ async def agent_request(agent_id: str, msg: dict, timeout: float = 10) -> dict |
         core._agent_req_queues.pop(req_id, None)
 
 
+def _hosted_local_archive_id(user_id: str, source_id: str) -> str:
+    """Derive a stable, opaque filename for a hosted archive on the device."""
+    digest = hashlib.sha256(
+        f"session\0{user_id}\0{source_id}".encode()
+    ).hexdigest()[:32]
+    return f"hosted-{digest}"
+
+
+def _local_archive_owner_key(user_id: str) -> str:
+    """Derive an opaque account scope for hosted records in a shared device store."""
+    return hashlib.sha256(f"workspace-archive-owner\0{user_id}".encode()).hexdigest()
+
+
+async def _store_archive_on_local_agent(
+    agent_id: str,
+    user_id: str,
+    payload: dict,
+    *,
+    timeout: float = 30,
+) -> dict:
+    """Require the connected local agent to durably acknowledge an archive."""
+    try:
+        encoded = json.dumps(
+            payload, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        return {"ok": False, "error": "invalid_archive"}
+    if len(encoded) > MAX_LOCAL_ARCHIVE_TRANSFER_BYTES:
+        return {"ok": False, "error": "archive_too_large"}
+    response = await agent_request(
+        agent_id,
+        {
+            "type": "store_hosted_archive",
+            "owner_key": _local_archive_owner_key(user_id),
+            "payload": payload,
+        },
+        timeout=timeout,
+    )
+    if not isinstance(response, dict):
+        return {"ok": False, "error": "local_agent_offline"}
+    if (
+        response.get("type") != "store_hosted_archive_ok"
+        or response.get("ok") is not True
+        or response.get("archive_id") != payload.get("archive_id")
+    ):
+        return {
+            "ok": False,
+            "error": str(response.get("error") or "local_archive_save_failed"),
+        }
+    return {"ok": True, "archive_id": response["archive_id"]}
+
+
+async def _archive_hosted_session_locally(
+    core,
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+    *,
+    slot: int,
+    model_id: str = "",
+) -> tuple[bool, str]:
+    """Snapshot an active hosted session to the user's local archive store."""
+    local_archive_id = _hosted_local_archive_id(user_id, session_id)
+    payload = _hosted_repo().build_archive_payload(
+        session_id,
+        slot=slot,
+        model_id=model_id,
+        archive_id=local_archive_id,
+    )
+    if payload is None:
+        return True, ""
+    saved = await _store_archive_on_local_agent(agent_id, user_id, payload)
+    if not saved.get("ok"):
+        log.warning(
+            "[chat] local archive save not acknowledged for session %s: %s",
+            session_id,
+            saved.get("error", "unknown"),
+        )
+        return False, str(saved.get("error") or "local_archive_save_failed")
+    return True, ""
+
+
+async def _migrate_legacy_hosted_archives(
+    user_id: str,
+    agent_id: str,
+) -> tuple[bool, str]:
+    """Move legacy hosted archive files to local storage after durable ACKs."""
+    repo = _hosted_repo()
+    for summary in repo.list_archives(user_id, limit=10_000):
+        source_archive_id = str(summary.get("archive_id") or summary.get("id") or "")
+        if not source_archive_id:
+            continue
+        payload = repo.read_archive_payload(user_id, source_archive_id)
+        if payload is None:
+            log.error(
+                "[chat] refusing to remove unreadable legacy hosted archive %s",
+                source_archive_id,
+            )
+            return False, "legacy_archive_invalid"
+        if (
+            payload.get("schema_version") != SESSION_SCHEMA_VERSION
+            or validate_visible_transcript(payload.get("transcript")) is None
+        ):
+            transcript = visible_transcript_from_payload(payload)
+            if not transcript:
+                log.error(
+                    "[chat] refusing to migrate legacy hosted archive without visible transcript"
+                )
+                return False, "legacy_archive_invalid"
+            payload = dict(payload)
+            payload["schema_version"] = SESSION_SCHEMA_VERSION
+            payload["transcript"] = transcript
+            payload["message_count"] = len(transcript)
+        if not payload.get("preview"):
+            for message in payload.get("transcript", []):
+                if message.get("role") == "user":
+                    payload["preview"] = re.sub(
+                        r"\s+", " ", str(message.get("content", "")).strip()
+                    )[:80]
+                    break
+        # Preserve the legacy ID so a page left open across the rollout can
+        # still restore/delete the same item after migration.
+        local_archive_id = source_archive_id
+        payload = dict(payload)
+        payload["archive_id"] = local_archive_id
+        payload["source_archive_id"] = source_archive_id
+        payload.setdefault("model_id", "")
+        saved = await _store_archive_on_local_agent(agent_id, user_id, payload)
+        if not saved.get("ok"):
+            return False, str(saved.get("error") or "local_archive_save_failed")
+        # Server copy is removed only after the local agent confirms its
+        # atomic write. A retried migration uses the same stable local ID.
+        if not repo.delete_archive(user_id, source_archive_id):
+            log.warning(
+                "[chat] local copy saved but legacy hosted archive cleanup is pending: %s",
+                source_archive_id,
+            )
+    return True, ""
+
+
 async def _agent_request_after_reconnect(
     agent_id: str, msg: dict, *, timeout: float = 10, retry_delay: float = 1.0
 ) -> dict | None:
@@ -3084,6 +3267,7 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             "previous_session_id": old_session,
             "session_id": _trial_new_chat_session_id(agent_id, request_id),
             "slot": slot,
+            "model_id": str(model or "")[:256],
             "created_at": now,
             "issued_at": int(now),
             "expires_at": int(now) + _TRIAL_NEW_CHAT_COMMIT_TTL,
@@ -3182,6 +3366,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         "previous_session_id": previous_session_id,
         "session_id": session_id,
         "slot": slot,
+        "model_id": str(model or "")[:256],
         "created_at": issued_at,
         "issued_at": issued_at,
         "expires_at": expires_at,
@@ -3201,6 +3386,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         recovery_record = canonical_record
         recovery_known_state = "unknown"
     else:
+        recovery_record.setdefault("model_id", str(model or "")[:256])
         recovery_known_state = (
             "acknowledged" if recovery_record.get("acknowledged") else "pending"
         )
@@ -3247,8 +3433,9 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
             status = durable_status["status"]
         elif status == "committing":
             if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+                error, code = _new_chat_preservation_error(record)
                 return web.json_response(
-                    {"error": "Could not safely preserve the current chat"},
+                    {"error": error, "code": code},
                     status=503,
                     headers={"Retry-After": "5"},
                 )
@@ -3278,8 +3465,9 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         if status == "pending":
             _write_trial_new_chat_status(record, "committing", now)
         if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
+            error, code = _new_chat_preservation_error(record)
             return web.json_response(
-                {"error": "Could not safely preserve the current chat"},
+                {"error": error, "code": code},
                 status=503,
                 headers={"Retry-After": "5"},
             )
@@ -3430,29 +3618,231 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
 
 
 async def handle_chat_archives(request: web.Request) -> web.Response:
-    """GET /web/chat/archives — list archived conversations."""
+    """GET /web/chat/archives — list this machine's archives, independent of model."""
     core = _core()
     auth_info = core._authenticate(request)
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
-    model = request.query.get("model", "")
     user_id = auth_info.get("user_id", "")
+    if not agent_id:
+        return web.json_response(
+            {"error": "Connect the local agent to view this machine's archives", "code": "local_agent_offline"},
+            status=503,
+        )
 
-    # OpenRouter/hosted lanes use the server-owned repository.
-    if core._is_openrouter_model(model) and user_id:
-        try:
-            archives = _hosted_repo().list_archives(user_id)
-        except Exception:
-            log.exception("[chat] failed to list archives for user %s", user_id)
-            archives = []
-        return web.json_response({"archives": archives, "trial": True})
+    migration_warning = ""
+    if user_id:
+        migrated, migration_warning = await _migrate_legacy_hosted_archives(
+            user_id, agent_id
+        )
+        if not migrated and migration_warning == "local_agent_offline":
+            return web.json_response(
+                {"error": "Connect the local agent to view this machine's archives", "code": "local_agent_offline"},
+                status=503,
+            )
 
-    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
-    resp = await agent_request(chat_agent_id, {"type": "get_archives"})
+    try:
+        limit = min(max(int(request.query.get("limit", "50")), 1), 100)
+    except (TypeError, ValueError):
+        limit = 50
+    cursor = str(request.query.get("cursor", "") or "")[:160]
+    resp = await agent_request(
+        agent_id,
+        {
+            "type": "get_archives",
+            "limit": limit,
+            "cursor": cursor,
+            "owner_key": _local_archive_owner_key(user_id) if user_id else "",
+        },
+        timeout=20,
+    )
     if resp is None:
-        return web.json_response({"archives": [], "offline": True})
-    return web.json_response({"archives": resp.get("archives", [])})
+        return web.json_response(
+            {"error": "Connect the local agent to view this machine's archives", "code": "local_agent_offline"},
+            status=503,
+        )
+    if resp.get("type") != "archives_response" or not isinstance(
+        resp.get("archives"), list
+    ):
+        return web.json_response(
+            {"error": "The local agent returned an invalid archive list"},
+            status=502,
+        )
+    result = {
+        "archives": resp["archives"],
+        "next_cursor": resp.get("next_cursor"),
+        "source": "local",
+    }
+    if migration_warning:
+        result["migration_warning"] = (
+            "A previous hosted archive could not be moved to this device yet. "
+            "It remains preserved on the server; reconnect the local agent and retry."
+        )
+    return web.json_response(result)
+
+
+async def _restore_local_hosted_archive(
+    core,
+    auth_info: dict,
+    archive_id: str,
+    requested_slot: int | None,
+    current_model: str,
+) -> web.Response:
+    """Restore a device-owned hosted transcript into an active hosted session."""
+    agent_id = str(auth_info.get("agent_id", "") or "")
+    user_id = str(auth_info.get("user_id", "") or "")
+    if not agent_id or not user_id:
+        return web.json_response({"error": "Local archive owner is unavailable"}, status=401)
+    payload, archive_error = await _get_hosted_archive_from_local(
+        user_id, agent_id, archive_id
+    )
+    if archive_error == "local_agent_offline":
+        return web.json_response(
+            {"error": "Connect the local agent to restore this archive", "code": "local_agent_offline"},
+            status=503,
+        )
+    if archive_error == "archive_not_found":
+        return web.json_response({"error": "Archive not found"}, status=404)
+    if payload is None:
+        return web.json_response(
+            {"error": "Archive cannot be restored by this agent version"},
+            status=409,
+        )
+
+    model_id = str(
+        payload.get("model_id")
+        or (current_model if core._is_openrouter_model(current_model) else "")
+        or core._HOSTED_DEFAULT_MODEL
+    ).strip()
+    if not core._is_openrouter_model(model_id):
+        return web.json_response(
+            {"error": "The archived model is no longer supported by the hosted workspace"},
+            status=409,
+        )
+    slot = requested_slot or payload.get("slot") or 1
+    if slot not in (1, 2, 3):
+        slot = 1
+
+    repo = _hosted_repo()
+    slot_state = repo.get_slot_state(user_id)
+    current_sid = slot_state["slots"].get(str(slot), "")
+    lifecycle = None
+    retired = False
+    if current_sid:
+        lifecycle = await begin_hosted_session_transition(core, current_sid)
+        if lifecycle is None:
+            return web.json_response(
+                {"error": "The current chat is changing. Reload and try again."},
+                status=409,
+            )
+    try:
+        if current_sid:
+            from web_app.handlers.chat_stream import (
+                quiesce_hosted_session,
+                retire_hosted_session,
+            )
+
+            if not await quiesce_hosted_session(core, current_sid):
+                return web.json_response(
+                    {"error": "Could not safely preserve the current chat"},
+                    status=503,
+                    headers={"Retry-After": "5"},
+                )
+            saved_current, archive_error = await _archive_hosted_session_locally(
+                core,
+                user_id,
+                agent_id,
+                current_sid,
+                slot=slot,
+                model_id=current_model,
+            )
+            if not saved_current:
+                error_text = (
+                    "Connect the local agent to save the current chat before restoring"
+                    if archive_error == "local_agent_offline"
+                    else "The current chat could not be saved to this device; it was not replaced"
+                )
+                return web.json_response(
+                    {
+                        "error": error_text,
+                        "code": archive_error or "local_archive_save_failed",
+                    },
+                    status=503,
+                    headers={"Retry-After": "5"},
+                )
+        try:
+            new_sid, slot, _messages = repo.restore_archive_payload(
+                user_id,
+                payload,
+                target_slot=slot,
+                expected_session_id=current_sid,
+                agent_id=agent_id,
+            )
+        except ArchiveRestoreConflictError:
+            return web.json_response(
+                {"error": "The current chat changed. Reload and try again."},
+                status=409,
+            )
+        if not new_sid:
+            return web.json_response({"error": "Archive could not be restored"}, status=409)
+        if current_sid:
+            try:
+                os.remove(repo.session_path(current_sid, sessions_dir=_HOSTED_SESSIONS_DIR))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.exception("[chat] failed to remove replaced hosted session %s", current_sid)
+            await retire_hosted_session(core, current_sid)
+            retired = True
+        return web.json_response({
+            "ok": True,
+            "active_slot": slot,
+            "session_id": new_sid,
+            "model_id": model_id,
+            "source": "hosted",
+        })
+    finally:
+        if lifecycle is not None:
+            await finish_hosted_session_transition(lifecycle, retired=retired)
+
+
+async def _get_hosted_archive_from_local(
+    user_id: str, agent_id: str, archive_id: str
+) -> tuple[dict | None, str]:
+    """Read a hosted archive from the device, migrating one legacy server file if needed."""
+    response = await agent_request(
+        agent_id,
+        {
+            "type": "get_hosted_archive",
+            "archive_id": archive_id,
+            "owner_key": _local_archive_owner_key(user_id),
+        },
+        timeout=30,
+    )
+    if response is None:
+        return None, "local_agent_offline"
+    if response.get("type") == "hosted_archive_response":
+        payload = response.get("payload")
+        if (
+            isinstance(payload, dict)
+            and payload.get("archive_id") == archive_id
+            and HostedConversationRepo.is_valid_archive_payload(payload)
+        ):
+            return payload, ""
+        return None, "invalid_archive"
+
+    repo = _hosted_repo()
+    if not user_id or not repo.archive_owned_by(user_id, archive_id):
+        return None, "archive_not_found"
+    payload = repo.read_archive_payload(user_id, archive_id)
+    if payload is None:
+        return None, "invalid_archive"
+    saved = await _store_archive_on_local_agent(agent_id, user_id, payload)
+    if not saved.get("ok"):
+        return None, str(saved.get("error") or "local_archive_save_failed")
+    repo.delete_archive(user_id, archive_id)
+    return payload, ""
 
 
 async def handle_chat_restore_archive(request: web.Request) -> web.Response:
@@ -3472,119 +3862,26 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
     user_id = auth_info.get("user_id", "")
-
-    # OpenRouter/hosted lanes use the server-owned repository.
-    if core._is_openrouter_model(model) and user_id:
-        repo = _hosted_repo()
-        if not repo.archive_owned_by(user_id, archive_id):
-            return web.json_response(
-                {"error": "Archive not found"}, status=404
-            )
-        # Validate before archiving/deleting the target slot. Unsupported
-        # future-schema archives must leave the current conversation intact.
-        target_slot = repo.archive_restore_slot(
-            user_id, archive_id, requested_slot
+    archive_source = str(body.get("source", "") or "").strip().lower()
+    if archive_source not in {"", "local", "hosted"}:
+        return web.json_response({"error": "Invalid archive source"}, status=400)
+    if archive_source == "hosted":
+        return await _restore_local_hosted_archive(
+            core, auth_info, archive_id, requested_slot, str(model or "")
         )
-        if target_slot is None:
-            return web.json_response(
-                {"error": "Archive cannot be restored by this agent version"},
-                status=409,
-            )
-        # Archive the currently-occupied target slot exactly once before
-        # restoring, then delete the old session file so it doesn't leave
-        # an unbounded orphan.  Do NOT delete the source archive file.
-        slot_state = repo.get_slot_state(user_id)
-        current_sid = slot_state["slots"].get(str(target_slot), "")
-        lifecycle = None
-        retired = False
-        if current_sid:
-            lifecycle = await begin_hosted_session_transition(core, current_sid)
-            if lifecycle is None:
-                return web.json_response(
-                    {"error": "The current chat is changing. Reload and try again."},
-                    status=409,
-                )
-        try:
-            if current_sid:
-                from web_app.handlers.chat_stream import (
-                    quiesce_hosted_session,
-                    retire_hosted_session,
-                )
+    if not archive_source and user_id and core._is_openrouter_model(model):
+        # Backward compatibility for an already-open tab running the previous
+        # model-selected archive UI. If this ID is a device-local CLI archive,
+        # fall through to the local restore operation instead.
+        hosted_result = await _restore_local_hosted_archive(
+            core, auth_info, archive_id, requested_slot, str(model or "")
+        )
+        if hosted_result.status != 404:
+            return hosted_result
 
-                if not await quiesce_hosted_session(core, current_sid):
-                    return web.json_response(
-                        {"error": "Could not safely preserve the current chat"},
-                        status=503,
-                        headers={"Retry-After": "5"},
-                    )
-                try:
-                    repo.archive_session(user_id, current_sid, slot=target_slot)
-                except ArchivePreservationError:
-                    log.warning(
-                        "[chat] refusing restore over unpreserved session %s",
-                        current_sid,
-                    )
-                    return web.json_response(
-                        {"error": "Could not safely preserve the current chat"},
-                        status=503,
-                        headers={"Retry-After": "5"},
-                    )
-                except Exception:
-                    log.exception(
-                        "[chat] failed to archive current session before restore"
-                    )
-                    return web.json_response(
-                        {"error": "Could not safely preserve the current chat"},
-                        status=503,
-                        headers={"Retry-After": "5"},
-                    )
-            try:
-                new_sid, slot, msgs = repo.restore_archive(
-                    user_id,
-                    archive_id,
-                    target_slot=target_slot,
-                    expected_session_id=current_sid,
-                    agent_id=agent_id,
-                )
-            except ArchiveRestoreConflictError:
-                return web.json_response(
-                    {"error": "The current chat changed. Reload and try again."},
-                    status=409,
-                )
-            if new_sid is None:
-                return web.json_response(
-                    {"error": "Archive not found or could not be restored"}, status=404
-                )
-            # Remove an archived source only after the replacement session and
-            # slot mapping are durable. If restore fails, the active chat remains.
-            if current_sid:
-                try:
-                    os.remove(
-                        repo.session_path(
-                            current_sid,
-                            sessions_dir=_HOSTED_SESSIONS_DIR,
-                        )
-                    )
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    log.exception(
-                        "[chat] failed to remove orphan session file %s",
-                        current_sid,
-                    )
-                await retire_hosted_session(core, current_sid)
-                retired = True
-            return web.json_response({
-                "ok": True,
-                "trial": True,
-                "active_slot": slot,
-                "session_id": new_sid,
-            })
-        finally:
-            if lifecycle is not None:
-                await finish_hosted_session_transition(lifecycle, retired=retired)
-
-    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
+    # Local CLI archive files are owned by the account's connected machine
+    # agent, independent of whichever model the page currently selects.
+    chat_agent_id = str(agent_id or "")
     restore_msg = {"type": "restore_archive", "archive_id": archive_id}
     if requested_slot is not None:
         restore_msg["slot"] = requested_slot
@@ -3599,6 +3896,9 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
     payload = {"ok": True, "active_slot": resp.get("active_slot", 1)}
     if resp.get("session_id"):
         payload["session_id"] = resp["session_id"]
+    if resp.get("model_id"):
+        payload["model_id"] = resp["model_id"]
+    payload["source"] = "local"
     return web.json_response(payload)
 
 
@@ -3616,20 +3916,32 @@ async def handle_chat_delete_archive(request: web.Request) -> web.Response:
     if not archive_id:
         return web.json_response({"error": "archive_id required"}, status=400)
     agent_id = auth_info.get("agent_id", "")
-    model = body.get("model", "")
     user_id = auth_info.get("user_id", "")
-
-    # OpenRouter/hosted lanes use the server-owned repository.
-    if core._is_openrouter_model(model) and user_id:
-        removed = _hosted_repo().delete_archive(user_id, archive_id)
-        if not removed:
+    if user_id:
+        migrated, migration_error = await _migrate_legacy_hosted_archives(
+            user_id, str(agent_id or "")
+        )
+        if not migrated:
             return web.json_response(
-                {"error": "Archive not found"}, status=404
+                {
+                    "error": "Connect the local agent to preserve existing archives before deleting",
+                    "code": migration_error or "local_archive_save_failed",
+                },
+                status=503,
+                headers={"Retry-After": "5"},
             )
-        return web.json_response({"ok": True, "trial": True})
-
-    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
-    resp = await agent_request(chat_agent_id, {"type": "delete_archive", "archive_id": archive_id})
+    # Local and hosted archive records are both owned by the local archive
+    # store. Never infer an archive's owner from the current model selection.
+    chat_agent_id = str(agent_id or "")
+    resp = await agent_request(
+        chat_agent_id,
+        {
+            "type": "delete_archive",
+            "archive_id": archive_id,
+            "owner_key": _local_archive_owner_key(str(user_id or ""))
+            if user_id else "",
+        },
+    )
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
     if resp.get("type") == "delete_archive_error":

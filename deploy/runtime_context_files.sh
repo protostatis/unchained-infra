@@ -16,6 +16,7 @@ HOST_RUNTIME_FILES=(
     "browser_terminal_canary_preflight.sh"
     "terminal_runtime_reconciler.py"
     "terminal-runtime-reconciler.service"
+    "preserve_hosted_conversations.py"
 )
 
 UNCHAINED_RUNTIME_FILES=(

@@ -80,6 +80,7 @@ class RuntimeContextFilesTests(unittest.TestCase):
                 "browser_terminal_canary_preflight.sh",
                 "terminal_runtime_reconciler.py",
                 "terminal-runtime-reconciler.service",
+                "preserve_hosted_conversations.py",
             },
         )
         self.assertTrue(all((ROOT / "deploy" / name).is_file() for name in host_files))
@@ -88,6 +89,23 @@ class RuntimeContextFilesTests(unittest.TestCase):
         self.assertIn('upload_host_runtime_files\n', deploy)
         for name in host_files:
             self.assertIn(f'deploy/{name}', deploy)
+
+    def test_web_recreate_preserves_legacy_hosted_data_before_replacement(self) -> None:
+        deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+        preserve = deploy.index('preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"')
+        stop = deploy.index('docker compose stop --timeout 30 web', preserve)
+        snapshot = deploy.index('docker cp "$web_container:$legacy_source/."', stop)
+        helper = deploy.index('docker run --rm --network none', snapshot)
+        recreate = deploy.index('docker compose up -d --no-deps --no-build --force-recreate "$service"')
+        self.assertLess(preserve, stop)
+        self.assertLess(stop, snapshot)
+        self.assertLess(snapshot, helper)
+        self.assertLess(helper, recreate)
+        self.assertIn('--user 10001:10001', deploy)
+        self.assertIn('--volumes-from "$web_container"', deploy)
+        self.assertIn('--source-dir /tmp/legacy', deploy)
+        self.assertIn('--destination-dir /data/hosted-conversations', deploy)
+        self.assertIn('UNCHAINED_HOSTED_DATA_DIR=/data/hosted-conversations', (ROOT / "docker-compose.yml").read_text())
 
     def test_pip_requirements_do_not_become_shell_redirections(self) -> None:
         failures: list[str] = []

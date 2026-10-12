@@ -776,6 +776,62 @@ for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-ter
     if ! selected "$service"; then
         continue
     fi
+    if [[ "$service" == "web" ]]; then
+        # Older web containers stored hosted-conversation slot/archive JSON
+        # under $HOME, outside relay_data:/data. Preserve those records into
+        # the persistent volume before Compose removes the old writable layer.
+        # Stop the writer first, then copy from the stopped container so no
+        # archive or slot-state write can land after the preservation snapshot.
+        web_container="$(docker compose ps -q web)"
+        [[ "$web_container" =~ ^[0-9a-f]{12,64}$ ]]
+        preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"
+        test -f "$preservation_tool"
+        legacy_source="$(docker exec "$web_container" python3 -c '
+import os
+from pathlib import Path
+data_dir = os.environ.get("UNCHAINED_DATA_DIR")
+source = os.environ.get("UNCHAINED_HOSTED_DATA_DIR")
+if not source:
+    source = str((Path(data_dir) if data_dir else Path.home() / ".unchained") / "hosted-conversations")
+print(Path(source).absolute())
+')"
+        legacy_source_present=false
+        if docker exec "$web_container" test -d "$legacy_source"; then
+            legacy_source_present=true
+        fi
+        docker compose stop --timeout 30 web
+
+        if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
+            migration_tmp="$(mktemp -d /tmp/hosted-conversation-migration.XXXXXX)"
+            mkdir -p "$migration_tmp/legacy"
+            if docker cp "$web_container:$legacy_source/." "$migration_tmp/legacy/" 2>/dev/null; then
+                # docker cp stages files as the deploy user; make the temporary
+                # snapshot readable to the same unprivileged UID as the web app.
+                chmod -R a+rX "$migration_tmp/legacy"
+                web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
+                if ! docker run --rm --network none \
+                    --user 10001:10001 \
+                    --volumes-from "$web_container" \
+                    --mount "type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly" \
+                    --mount "type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly" \
+                    --entrypoint python3 "$web_image" \
+                    /tmp/preserve_hosted_conversations.py \
+                    --source-dir /tmp/legacy \
+                    --destination-dir /data/hosted-conversations; then
+                    docker start "$web_container" >/dev/null || true
+                    rm -rf -- "$migration_tmp"
+                    echo "ERROR: failed to preserve legacy hosted-conversation data" >&2
+                    exit 1
+                fi
+            elif [[ "$legacy_source_present" == "true" ]]; then
+                docker start "$web_container" >/dev/null || true
+                rm -rf -- "$migration_tmp"
+                echo "ERROR: could not snapshot legacy hosted-conversation data" >&2
+                exit 1
+            fi
+            rm -rf -- "$migration_tmp"
+        fi
+    fi
     echo "    Restarting $service..."
     docker compose up -d --no-deps --no-build --force-recreate "$service"
     wait_for_state "$service" "$(expected_state "$service")"

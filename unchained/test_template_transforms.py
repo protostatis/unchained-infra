@@ -947,6 +947,22 @@ expect(fidelityElement.title.includes('resolved styles 8 KB projected into 1 KB'
                 self.assertIn("function loadSidebarHistory()", html)
                 self.assertNotIn('id="full-width-chat-shell"', html)
 
+    def test_workspace_archive_picker_is_device_owned_and_source_aware(self):
+        from web_app import templates
+
+        for html in (templates.TRIAL_CHAT_HTML, templates.CLAUDE_CHAT_HTML):
+            with self.subTest(template=html[html.index("<title>"):html.index("</title>")]):
+                start = html.index("async function _loadArchivePage(")
+                end = html.index("function closeArchives()", start)
+                source = html[start:end]
+                self.assertIn("/web/chat/archives?' + params.toString()", source)
+                self.assertNotIn("encodeURIComponent(currentModel())", source)
+                self.assertIn("next_cursor", source)
+                self.assertIn("loadMoreArchives", source)
+                self.assertIn("arc.source === 'hosted'", source)
+                self.assertIn("restoreArchive(arc.id, arc.source, arc.model_id)", source)
+                self.assertIn("Connect the local agent", source)
+
     def test_landing_signin_targets_last_provider_route(self):
         from web_app import templates
 

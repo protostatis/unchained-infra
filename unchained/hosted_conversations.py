@@ -561,18 +561,22 @@ class HostedConversationRepo:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
-        if (
-            not isinstance(data, dict)
-            or not has_supported_session_schema(data)
-            or not isinstance(data.get("messages"), list)
-        ):
-            return None
-        if (
-            data.get("schema_version") == SESSION_SCHEMA_VERSION
-            and validate_visible_transcript(data.get("transcript")) is None
-        ):
+        if not self.is_valid_archive_payload(data):
             return None
         return data
+
+    @staticmethod
+    def is_valid_archive_payload(data: object) -> bool:
+        """Validate the portable transcript payload without touching storage."""
+        return bool(
+            isinstance(data, dict)
+            and has_supported_session_schema(data)
+            and isinstance(data.get("messages"), list)
+            and (
+                data.get("schema_version") != SESSION_SCHEMA_VERSION
+                or validate_visible_transcript(data.get("transcript")) is not None
+            )
+        )
 
     def archive_session(
         self,
@@ -590,35 +594,18 @@ class HostedConversationRepo:
         The original session file is NOT removed by this method — callers
         are responsible for cleaning it up after a successful archive.
         """
-        session, found = self._read_archive_session_payload(
-            session_id, sessions_dir=sessions_dir
+        payload = self.build_archive_payload(
+            session_id,
+            slot=slot,
+            preview=preview,
+            sessions_dir=sessions_dir,
         )
-        msgs = session.get("messages", [])
-        transcript = session.get("transcript", [])
-        if not found or not transcript:
+        if payload is None:
             return None
         tmp = ""
         try:
             self._ensure_user_dirs(user_id)
-            # Auto-extract preview from first user message if none given.
-            if not preview:
-                for m in transcript:
-                    if m.get("role") == "user":
-                        preview = re.sub(r"\s+", " ", str(m.get("content", "")).strip())[:80]
-                        break
-            archive_id = f"{int(time.time() * 1000)}.{uuid.uuid4().hex[:12]}"
-            payload = {
-                "schema_version": SESSION_SCHEMA_VERSION,
-                "archive_id": archive_id,
-                "session_id": session_id,
-                "slot": slot,
-                "preview": preview[:200],
-                "message_count": len(transcript),
-                "archived_at": time.time(),
-                "messages": msgs,
-                "transcript": transcript,
-            }
-            path = self._archive_path(user_id, archive_id)
+            path = self._archive_path(user_id, payload["archive_id"])
             tmp = f"{path}.{uuid.uuid4().hex}.tmp"
             with open(tmp, "w") as f:
                 json.dump(payload, f, separators=(",", ":"), sort_keys=True)
@@ -635,7 +622,55 @@ class HostedConversationRepo:
                     os.remove(tmp)
                 except FileNotFoundError:
                     pass
-        return archive_id
+        return payload["archive_id"]
+
+    def build_archive_payload(
+        self,
+        session_id: str,
+        *,
+        slot: int | None = None,
+        preview: str = "",
+        model_id: str = "",
+        archive_id: str | None = None,
+        archived_at: float | None = None,
+        sessions_dir: str | None = None,
+    ) -> dict | None:
+        """Build a validated archive snapshot without persisting it.
+
+        Callers may transfer this payload to the user's local agent. The
+        stable optional ``archive_id`` makes retries idempotent across a lost
+        local-agent acknowledgement.
+        """
+        session, found = self._read_archive_session_payload(
+            session_id, sessions_dir=sessions_dir
+        )
+        messages = session.get("messages", [])
+        transcript = session.get("transcript", [])
+        if not found or not transcript:
+            return None
+        if not preview:
+            for message in transcript:
+                if message.get("role") == "user":
+                    preview = re.sub(
+                        r"\s+", " ", str(message.get("content", "")).strip()
+                    )[:80]
+                    break
+        return {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": archive_id or f"{int(time.time() * 1000)}.{uuid.uuid4().hex[:12]}",
+            "session_id": session_id,
+            "slot": slot,
+            "preview": preview[:200],
+            "message_count": len(transcript),
+            "archived_at": float(archived_at if archived_at is not None else time.time()),
+            "model_id": str(model_id or "")[:256],
+            "messages": messages,
+            "transcript": transcript,
+        }
+
+    def read_archive_payload(self, user_id: str, archive_id: str) -> dict | None:
+        """Return a validated owned archive payload for one-time migration."""
+        return self._read_restore_archive_payload(user_id, archive_id)
 
     def list_archives(self, user_id: str, *, limit: int = 100) -> list[dict]:
         """Return archive summaries sorted newest-first."""
@@ -663,6 +698,7 @@ class HostedConversationRepo:
                 "slot": data.get("slot"),
                 "archived_at": data.get("archived_at", 0),
                 "session_id": data.get("session_id", ""),
+                "model_id": data.get("model_id", ""),
             })
             if len(result) >= limit:
                 break
@@ -695,7 +731,33 @@ class HostedConversationRepo:
         ``(None, 0, [])``.
         """
         data = self._read_restore_archive_payload(user_id, archive_id)
+        return self.restore_archive_payload(
+            user_id,
+            data,
+            target_slot=target_slot,
+            expected_session_id=expected_session_id,
+            sessions_dir=sessions_dir,
+            agent_id=agent_id,
+        )
+
+    def restore_archive_payload(
+        self,
+        user_id: str,
+        data: dict | None,
+        *,
+        target_slot: int | None = None,
+        expected_session_id: str | None = None,
+        sessions_dir: str | None = None,
+        agent_id: str = "trial-agent",
+    ) -> tuple[str | None, int, list[dict]]:
+        """Restore a validated locally-owned snapshot into a hosted session.
+
+        The source archive remains on the local machine. This method writes
+        only the active session file and authoritative hosted slot state.
+        """
         if data is None:
+            return None, 0, []
+        if not self.is_valid_archive_payload(data):
             return None, 0, []
         msgs = data["messages"]
         transcript = visible_transcript_from_payload(data)
