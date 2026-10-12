@@ -538,6 +538,15 @@ def _hosted_snapshot_extends(existing: object, incoming: dict) -> bool:
         or existing.get("session_id") != incoming.get("session_id")
     ):
         return False
+    try:
+        # Reject a rollback of the archive timestamp: an extension must not
+        # move the record's ordering time backwards.
+        if float(incoming.get("archived_at") or 0) < float(
+            existing.get("archived_at") or 0
+        ):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
     for key in ("messages", "transcript"):
         previous = existing.get(key)
         current = incoming.get(key)
@@ -563,11 +572,16 @@ def _hosted_archive_lock(archive_id: str):
         os.chmod(lock_dir, 0o700)
     except OSError:
         pass
-    lock_name = hashlib.sha256(archive_id.encode("utf-8")).hexdigest() + ".lock"
+    # Use a fixed set of lock stripes so the lock directory is bounded for the
+    # life of the device. Same-id operations always map to the same stripe;
+    # unrelated ids may briefly share one. Lock files are never unlinked:
+    # unlinking while another process waits can let it acquire a different
+    # inode and bypass the lock.
+    bucket = int(hashlib.sha256(archive_id.encode("utf-8")).hexdigest()[:8], 16) % 256
+    lock_name = f"{bucket:02x}.lock"
     lock_path = os.path.join(lock_dir, lock_name)
     # POSIX flock and Windows byte-range locking coordinate cooperating
-    # processes on local filesystems. Keep lock files: unlinking while another
-    # process waits can let it acquire a different inode and bypass the lock.
+    # processes on local filesystems.
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     locked = False
     try:
@@ -796,14 +810,14 @@ def _list_archives_page(
     start = 0
     if cursor:
         if cursor.startswith("v1:"):
-            version, separator, remainder = cursor.partition(":")
-            timestamp, separator, cursor_name = remainder.partition(":")
+            parts = cursor.split(":", 2)
+            if len(parts) != 3 or not parts[2].endswith(".json"):
+                return {"archives": [], "next_cursor": None}
             try:
-                if version != "v1" or not separator or not cursor_name.endswith(".json"):
-                    raise ValueError("invalid archive cursor")
-                cursor_mtime_ns = int(timestamp)
+                cursor_mtime_ns = int(parts[1])
             except (TypeError, ValueError):
                 return {"archives": [], "next_cursor": None}
+            cursor_name = parts[2]
             cursor_key = (cursor_mtime_ns, cursor_name)
             start = next(
                 (
