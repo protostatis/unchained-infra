@@ -909,6 +909,9 @@ def _delete_archive(archive_id: str, owner_key: str = "") -> bool:
         with _hosted_archive_lock(archive_id):
             with open(fpath, "r", encoding="utf-8") as f:
                 record = json.load(f)
+            # Hosted records are scoped to the authenticated account. Local CLI
+            # archives are device-owned and intentionally carry no owner_key, so
+            # they are deletable by the device regardless of the caller's key.
             if isinstance(record, dict) and record.get("source") == "hosted":
                 if (
                     not re.fullmatch(r"[a-f0-9]{64}", str(owner_key or ""))

@@ -826,9 +826,12 @@ print(Path(source).absolute())
         docker compose stop --timeout 30 web
 
         if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
+            # Accept either a content-addressed id or a tag reference. Reject
+            # only empty or whitespace-containing values that Docker cannot
+            # resolve as a single image reference.
             web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
-            if [[ ! "$web_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-                docker start "$web_container" >/dev/null || true
+            if [[ -z "$web_image" || "$web_image" =~ [[:space:]] ]]; then
+                docker compose start web >/dev/null || true
                 echo "ERROR: could not resolve the web container image for preservation" >&2
                 exit 1
             fi
@@ -848,7 +851,7 @@ print(Path(source).absolute())
                 /tmp/preserve_hosted_conversations.py \
                 --source-dir "$migration_dir" \
                 --destination-dir /data/hosted-conversations >/dev/null; then
-                docker start "$web_container" >/dev/null || true
+                docker compose start web >/dev/null || true
                 echo "ERROR: could not create the hosted-conversation preservation helper" >&2
                 exit 1
             fi
@@ -858,13 +861,13 @@ print(Path(source).absolute())
                     "$migration_name:$migration_dir"; then
                 if ! docker start -a "$migration_name"; then
                     docker rm -f "$migration_name" >/dev/null 2>&1 || true
-                    docker start "$web_container" >/dev/null || true
+                    docker compose start web >/dev/null || true
                     echo "ERROR: failed to preserve legacy hosted-conversation data" >&2
                     exit 1
                 fi
             elif [[ "$legacy_source_present" == "true" ]]; then
                 docker rm -f "$migration_name" >/dev/null 2>&1 || true
-                docker start "$web_container" >/dev/null || true
+                docker compose start web >/dev/null || true
                 echo "ERROR: could not stage legacy hosted-conversation data" >&2
                 exit 1
             fi

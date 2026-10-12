@@ -116,6 +116,9 @@ class RuntimeContextFilesTests(unittest.TestCase):
         self.assertIn('--network none', deploy)
         self.assertIn('--user "$web_user"', deploy)
         self.assertIn('--destination-dir /data/hosted-conversations', deploy)
+        # Recovery keeps compose's lifecycle bookkeeping coherent.
+        self.assertIn('docker compose start web', deploy)
+        self.assertNotIn('docker start "$web_container"', deploy)
         # Transcripts must never be staged on the host filesystem.
         self.assertNotIn('mktemp -d /tmp/hosted-conversation-migration', deploy)
         self.assertNotIn('chmod -R a+rX', deploy)
