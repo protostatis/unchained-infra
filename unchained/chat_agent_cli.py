@@ -553,6 +553,8 @@ def _hosted_archive_lock(archive_id: str):
         pass
     lock_name = hashlib.sha256(archive_id.encode("utf-8")).hexdigest() + ".lock"
     lock_path = os.path.join(lock_dir, lock_name)
+    # Keep these small lock files permanently: unlinking while another process
+    # waits can let it acquire a different inode and bypass serialization.
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     locked = False
     try:
@@ -697,7 +699,7 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
                         os.close(dir_fd)
                 except OSError:
                     pass
-            except OSError:
+            except Exception:
                 try:
                     os.remove(temp_path)
                 except OSError:

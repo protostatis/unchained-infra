@@ -783,7 +783,10 @@ for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-ter
         # Stop the writer first, then copy from the stopped container so no
         # archive or slot-state write can land after the preservation snapshot.
         web_container="$(docker compose ps -q web)"
-        [[ "$web_container" =~ ^[0-9a-f]{12,64}$ ]]
+        if [[ ! "$web_container" =~ ^[0-9a-f]{12,64}$ ]]; then
+            echo "ERROR: could not identify the running web container for data preservation" >&2
+            exit 1
+        fi
         preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"
         test -f "$preservation_tool"
         legacy_source="$(docker exec "$web_container" python3 -c '
@@ -795,6 +798,10 @@ if not source:
     source = str((Path(data_dir) if data_dir else Path.home() / ".unchained") / "hosted-conversations")
 print(Path(source).absolute())
 ')"
+        if [[ -z "$legacy_source" || "$legacy_source" != /* || "$legacy_source" == *$'\n'* ]]; then
+            echo "ERROR: legacy hosted-conversation source path is invalid" >&2
+            exit 1
+        fi
         legacy_source_present=false
         if docker exec "$web_container" test -d "$legacy_source"; then
             legacy_source_present=true
@@ -809,7 +816,8 @@ print(Path(source).absolute())
                 # snapshot readable to the same unprivileged UID as the web app.
                 chmod -R a+rX "$migration_tmp/legacy"
                 web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
-                if ! docker run --rm --network none \
+                if ! docker run --rm --network none --read-only \
+                    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
                     --user 10001:10001 \
                     --volumes-from "$web_container" \
                     --mount "type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly" \

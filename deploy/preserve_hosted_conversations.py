@@ -73,7 +73,12 @@ def preserve_json_files(source: Path, destination: Path) -> tuple[int, int]:
                     shutil.copyfileobj(source_file, target_file, length=1024 * 1024)
                     target_file.flush()
                     os.fsync(target_file.fileno())
-                os.utime(temp, ns=(src.stat().st_atime_ns, src.stat().st_mtime_ns))
+                try:
+                    os.utime(temp, ns=(src.stat().st_atime_ns, src.stat().st_mtime_ns))
+                except OSError:
+                    # Preserving timestamps is helpful but not required for a
+                    # valid data copy, especially on bind-mounted volumes.
+                    pass
                 os.replace(temp, dest)
                 copied += 1
             finally:

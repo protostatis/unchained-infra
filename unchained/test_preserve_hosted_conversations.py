@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "deploy" / "preserve_hosted_conversations.py"
@@ -57,6 +58,20 @@ class TestPreserveHostedConversations(unittest.TestCase):
             self.assertEqual(
                 preserver.preserve_json_files(root / "missing", root / "persistent"),
                 (0, 0),
+            )
+
+    def test_timestamp_preservation_is_best_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            (source / "slot-state.json").write_text('{"active_slot":1}')
+            with patch.object(preserver.os, "utime", side_effect=OSError("unsupported")):
+                self.assertEqual(preserver.preserve_json_files(source, destination), (1, 0))
+            self.assertEqual(
+                json.loads((destination / "slot-state.json").read_text()),
+                {"active_slot": 1},
             )
 
 
