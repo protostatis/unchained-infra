@@ -826,41 +826,49 @@ print(Path(source).absolute())
         docker compose stop --timeout 30 web
 
         if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
-            migration_tmp="$(mktemp -d /tmp/hosted-conversation-migration.XXXXXX)"
-            mkdir -p "$migration_tmp/legacy"
-            if docker cp -a "$web_container:$legacy_source/." "$migration_tmp/legacy/" 2>/dev/null; then
-                # Archive mode preserves source ownership and permissions so
-                # the helper's web UID can read files without broadening access
-                # to private transcripts under /tmp.
-                web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
-                legacy_mount="type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly"
-                helper_mount="type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly"
-                data_mount="type=volume,src=$data_volume,dst=/data"
-                # The image layer is read-only; /tmp is a bounded scratch tmpfs
-                # and the old container's /data volume remains writable for
-                # the intended preservation copy.
-                if ! docker run --rm --network none --read-only \
-                    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-                    --user "$web_user" \
-                    --mount "$data_mount" \
-                    --mount "$legacy_mount" \
-                    --mount "$helper_mount" \
-                    --entrypoint python3 "$web_image" \
-                    /tmp/preserve_hosted_conversations.py \
-                    --source-dir /tmp/legacy \
-                    --destination-dir /data/hosted-conversations; then
+            web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
+            if [[ ! "$web_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                docker start "$web_container" >/dev/null || true
+                echo "ERROR: could not resolve the web container image for preservation" >&2
+                exit 1
+            fi
+            data_mount="type=volume,src=$data_volume,dst=/data"
+            migration_name="hosted-preserve-$$"
+            migration_dir=/tmp/hosted-conversation-migration
+            docker rm -f "$migration_name" >/dev/null 2>&1 || true
+            # Stage inside Docker so full transcripts never touch the host
+            # filesystem: docker cp clones the stopped legacy tree and helper
+            # into a network-disabled, web-UID container that is removed after
+            # the run. Container-to-container copy preserves source ownership
+            # and modes, so the helper can read its own transcript files.
+            if ! docker create --name "$migration_name" --network none \
+                --user "$web_user" \
+                --mount "$data_mount" \
+                --entrypoint python3 "$web_image" \
+                /tmp/preserve_hosted_conversations.py \
+                --source-dir "$migration_dir" \
+                --destination-dir /data/hosted-conversations >/dev/null; then
+                docker start "$web_container" >/dev/null || true
+                echo "ERROR: could not create the hosted-conversation preservation helper" >&2
+                exit 1
+            fi
+            if docker cp "$preservation_tool" \
+                    "$migration_name:/tmp/preserve_hosted_conversations.py" \
+                && docker cp "$web_container:$legacy_source/." \
+                    "$migration_name:$migration_dir"; then
+                if ! docker start -a "$migration_name"; then
+                    docker rm -f "$migration_name" >/dev/null 2>&1 || true
                     docker start "$web_container" >/dev/null || true
-                    rm -rf -- "$migration_tmp"
                     echo "ERROR: failed to preserve legacy hosted-conversation data" >&2
                     exit 1
                 fi
             elif [[ "$legacy_source_present" == "true" ]]; then
+                docker rm -f "$migration_name" >/dev/null 2>&1 || true
                 docker start "$web_container" >/dev/null || true
-                rm -rf -- "$migration_tmp"
-                echo "ERROR: could not snapshot legacy hosted-conversation data" >&2
+                echo "ERROR: could not stage legacy hosted-conversation data" >&2
                 exit 1
             fi
-            rm -rf -- "$migration_tmp"
+            docker rm -f "$migration_name" >/dev/null 2>&1 || true
         fi
     fi
     echo "    Restarting $service..."

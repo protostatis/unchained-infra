@@ -86,7 +86,10 @@ def preserve_json_files(source: Path, destination: Path) -> tuple[int, int]:
                 continue
             try:
                 if dest.exists():
-                    if dest.is_symlink() or not dest.is_file() or _digest(src) != _digest(dest):
+                    if not dest.is_file():
+                        errors.append(f"conflicting destination file: {relative_file}")
+                        continue
+                    if _digest(src) != _digest(dest):
                         errors.append(f"conflicting destination file: {relative_file}")
                         continue
                     unchanged += 1

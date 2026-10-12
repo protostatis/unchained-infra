@@ -759,7 +759,13 @@ def _list_archives_page(
     cursor: str = "",
     owner_key: str = "",
 ) -> dict:
-    """Return a bounded page; the sort-key cursor survives deletion of its file."""
+    """Return a bounded page ordered by newest file mtime.
+
+    The cursor carries the last item's mtime and filename, so it still resumes
+    after that file is deleted. Pagination is consistent within a scan; a
+    concurrent in-place rewrite can move a record across a page boundary, so
+    callers should refresh from the first page when they see an unexpected gap.
+    """
     if not os.path.isdir(ARCHIVE_DIR):
         return {"archives": [], "next_cursor": None}
     limit = min(max(int(limit or _ARCHIVE_PAGE_SIZE), 1), 100)
