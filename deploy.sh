@@ -776,6 +776,107 @@ for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-ter
     if ! selected "$service"; then
         continue
     fi
+    if [[ "$service" == "web" ]]; then
+        # Older web containers stored hosted-conversation slot/archive JSON
+        # under $HOME, outside relay_data:/data. Preserve those records into
+        # the persistent volume before Compose removes the old writable layer.
+        # Stop the writer first, then copy from the stopped container so no
+        # archive or slot-state write can land after the preservation snapshot.
+        web_container="$(docker compose ps -q web)"
+        if [[ ! "$web_container" =~ ^[0-9a-f]{12,64}$ ]]; then
+            echo "ERROR: could not identify the running web container for data preservation" >&2
+            exit 1
+        fi
+        preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"
+        if [[ ! -f "$preservation_tool" ]]; then
+            echo "ERROR: missing hosted-conversation preservation helper" >&2
+            exit 1
+        fi
+        legacy_source="$(docker exec "$web_container" python3 -c '
+import os
+from pathlib import Path
+data_dir = os.environ.get("UNCHAINED_DATA_DIR")
+source = os.environ.get("UNCHAINED_HOSTED_DATA_DIR")
+if not source:
+    source = str((Path(data_dir) if data_dir else Path.home() / ".unchained") / "hosted-conversations")
+print(Path(source).absolute())
+')"
+        if [[ -z "$legacy_source" || "$legacy_source" != /* || "$legacy_source" == *$'\n'* ]]; then
+            echo "ERROR: legacy hosted-conversation source path is invalid" >&2
+            exit 1
+        fi
+        if [[ "$legacy_source" == *:* ]]; then
+            echo "ERROR: legacy hosted-conversation path must not contain ':'" >&2
+            exit 1
+        fi
+        web_user="$(docker exec "$web_container" python3 -c 'import os; print(f"{os.getuid()}:{os.getgid()}")')"
+        if [[ ! "$web_user" =~ ^[0-9]+:[0-9]+$ ]]; then
+            echo "ERROR: could not determine the web container runtime UID/GID" >&2
+            exit 1
+        fi
+        data_volume="$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/data") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' "$web_container")"
+        if [[ ! "$data_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "ERROR: could not identify the web container's /data volume" >&2
+            exit 1
+        fi
+        legacy_source_present=false
+        if docker exec "$web_container" test -d "$legacy_source"; then
+            legacy_source_present=true
+        fi
+        docker compose stop --timeout 30 web
+
+        if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
+            # `.Image` is the content-addressed image id, which `docker create`
+            # accepts directly. Reject only empty or whitespace-containing
+            # values that Docker cannot resolve as a single image reference.
+            web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
+            if [[ -z "$web_image" || "$web_image" =~ [[:space:]] ]]; then
+                docker compose start web >/dev/null || true
+                echo "ERROR: could not resolve the web container image for preservation" >&2
+                exit 1
+            fi
+            data_mount="type=volume,src=$data_volume,dst=/data"
+            migration_name="hosted-preserve-$$"
+            migration_dir=/tmp/hosted-conversation-migration
+            docker rm -f "$migration_name" >/dev/null 2>&1 || true
+            # Stage inside Docker so full transcripts never touch the host
+            # filesystem: docker cp clones the stopped legacy tree and helper
+            # into a network-disabled, web-UID container that is removed after
+            # the run. Container-to-container copy preserves source ownership
+            # and modes, so the helper can read its own transcript files.
+            if ! docker create --name "$migration_name" --network none \
+                --user "$web_user" \
+                --mount "$data_mount" \
+                --entrypoint python3 "$web_image" \
+                /tmp/preserve_hosted_conversations.py \
+                --source-dir "$migration_dir" \
+                --destination-dir /data/hosted-conversations >/dev/null; then
+                docker compose start web >/dev/null || true
+                echo "ERROR: could not create the hosted-conversation preservation helper" >&2
+                exit 1
+            fi
+            if docker cp "$preservation_tool" \
+                    "$migration_name:/tmp/preserve_hosted_conversations.py" \
+                && docker cp "$web_container:$legacy_source/." \
+                    "$migration_name:$migration_dir"; then
+                if ! docker start -a "$migration_name"; then
+                    docker rm -f "$migration_name" >/dev/null 2>&1 || true
+                    docker compose start web >/dev/null || true
+                    echo "ERROR: failed to preserve legacy hosted-conversation data" >&2
+                    exit 1
+                fi
+            elif [[ "$legacy_source_present" == "true" ]]; then
+                docker rm -f "$migration_name" >/dev/null 2>&1 || true
+                docker compose start web >/dev/null || true
+                echo "ERROR: could not stage legacy hosted-conversation data" >&2
+                exit 1
+            else
+                # No legacy directory existed, so there is nothing to stage.
+                echo "    No legacy hosted-conversation data to preserve."
+            fi
+            docker rm -f "$migration_name" >/dev/null 2>&1 || true
+        fi
+    fi
     echo "    Restarting $service..."
     docker compose up -d --no-deps --no-build --force-recreate "$service"
     wait_for_state "$service" "$(expected_state "$service")"

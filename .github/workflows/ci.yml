@@ -81,6 +81,9 @@ jobs:
             test_scheduler_agent_access \
             test_scheduled_tasks \
             test_unbrowser_mcp_router \
+            test_chat_archives \
+            test_legal_pages \
+            test_preserve_hosted_conversations \
             test_hosted_conversations \
             test_dev_script \
             test_fin_terminal \

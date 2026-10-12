@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -55,6 +56,221 @@ class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted(os.listdir(mod.ARCHIVE_DIR)),
             [f"{first_id}.json", f"{second_id}.json"],
+        )
+
+    def test_hosted_archive_save_is_local_atomic_and_idempotent(self):
+        mod = self._load_module()
+        owner_key = "a" * 64
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-1234567890abcdef1234567890abcdef",
+            "session_id": "s-trial-agent-source",
+            "slot": 2,
+            "model_id": "deepseek-flash",
+            "preview": "hosted prompt",
+            "message_count": 2,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "hosted prompt"}],
+            "transcript": [
+                {"role": "user", "content": "hosted prompt"},
+                {"role": "assistant", "content": "hosted reply"},
+            ],
+        }
+
+        first = mod._store_hosted_archive(payload, owner_key)
+        retry_payload = {**payload, "archived_at": 1001.0}
+        retry = mod._store_hosted_archive(retry_payload, owner_key)
+        updated_payload = {
+            **payload,
+            "archived_at": 1002.0,
+            "message_count": 3,
+            "messages": payload["messages"]
+            + [{"role": "assistant", "content": "newer reply"}],
+            "transcript": payload["transcript"]
+            + [{"role": "assistant", "content": "newer reply"}],
+        }
+        updated = mod._store_hosted_archive(updated_payload, owner_key)
+
+        self.assertTrue(first["ok"])
+        self.assertFalse(first["already_saved"])
+        self.assertTrue(retry["ok"])
+        self.assertTrue(retry["already_saved"])
+        self.assertTrue(updated["ok"])
+        self.assertFalse(updated["already_saved"])
+        stale_retry = mod._store_hosted_archive(payload, owner_key)
+        self.assertFalse(stale_retry["ok"])
+        self.assertEqual(stale_retry["error"], "archive_id_conflict")
+        self.assertEqual(os.listdir(mod.ARCHIVE_DIR), [payload["archive_id"] + ".json"])
+        self.assertEqual(
+            mod._read_hosted_archive(payload["archive_id"], owner_key)["transcript"],
+            updated_payload["transcript"],
+        )
+        archive_path = os.path.join(
+            mod.ARCHIVE_DIR, payload["archive_id"] + ".json"
+        )
+        with open(archive_path, "r", encoding="utf-8") as archive_file:
+            stored_record = json.load(archive_file)
+        stored_record["hosted_payload"]["transcript"][0]["content"] = "tampered"
+        with open(archive_path, "w", encoding="utf-8") as archive_file:
+            json.dump(stored_record, archive_file)
+        corrupt_retry = mod._store_hosted_archive(updated_payload, owner_key)
+        self.assertFalse(corrupt_retry["ok"])
+        self.assertEqual(corrupt_retry["error"], "archive_id_conflict")
+        self.assertIsNone(mod._read_hosted_archive(payload["archive_id"], owner_key))
+
+        listed = mod._list_archives_page(limit=1, owner_key=owner_key)
+        self.assertEqual(listed["archives"][0]["source"], "hosted")
+        self.assertEqual(listed["archives"][0]["model_id"], "deepseek-flash")
+
+        other_owner = "b" * 64
+        self.assertIsNone(mod._read_hosted_archive(payload["archive_id"], other_owner))
+        self.assertEqual(mod._list_archives_page(owner_key=other_owner)["archives"], [])
+        self.assertFalse(mod._delete_archive(payload["archive_id"], other_owner))
+        self.assertTrue(os.path.isfile(os.path.join(mod.ARCHIVE_DIR, payload["archive_id"] + ".json")))
+        self.assertTrue(mod._delete_archive(payload["archive_id"], owner_key))
+
+    def test_hosted_archive_writes_for_same_id_are_serialized(self):
+        mod = self._load_module()
+        archive_id = "hosted-lock-1234567890abcdef"
+        attempting = threading.Event()
+        acquired = threading.Event()
+
+        def second_writer():
+            attempting.set()
+            with mod._hosted_archive_lock(archive_id):
+                acquired.set()
+
+        thread = threading.Thread(target=second_writer)
+        with mod._hosted_archive_lock(archive_id):
+            thread.start()
+            self.assertTrue(attempting.wait(timeout=1))
+            self.assertFalse(acquired.wait(timeout=0.1))
+        self.assertTrue(acquired.wait(timeout=1))
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+
+    def test_hosted_archive_message_count_comes_from_transcript(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-count-1234567890abcdef",
+            "session_id": "s-trial-agent-count",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "count me",
+            "message_count": 999,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "count me"}],
+            "transcript": [{"role": "user", "content": "count me"}],
+        }
+
+        saved = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertTrue(saved["ok"])
+        stored = mod._read_hosted_archive(payload["archive_id"], "a" * 64)
+        self.assertEqual(stored["message_count"], len(stored["transcript"]))
+        listed = mod._list_archives_page(owner_key="a" * 64)
+        self.assertEqual(listed["archives"][0]["message_count"], 1)
+
+    def test_hosted_archive_rejects_millisecond_timestamp(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-time-1234567890abcdef",
+            "session_id": "s-trial-agent-time",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "timestamp",
+            "message_count": 1,
+            "archived_at": 1_700_000_000_000,
+            "messages": [{"role": "user", "content": "timestamp"}],
+            "transcript": [{"role": "user", "content": "timestamp"}],
+        }
+
+        result = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid_archive_metadata")
+        self.assertFalse(os.path.exists(mod.ARCHIVE_DIR))
+
+    def test_hosted_archive_byte_limit_uses_utf8_payload_size(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-unicode-1234567890",
+            "session_id": "s-trial-agent-unicode",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "你好",
+            "message_count": 1,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "你好"}],
+            "transcript": [{"role": "user", "content": "你好"}],
+        }
+        mod._MAX_HOSTED_ARCHIVE_BYTES = len(
+            json.dumps(
+                payload,
+                separators=(",", ":"),
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+
+        result = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertTrue(result["ok"])
+
+    def test_oversized_hosted_archive_is_rejected_without_a_partial_file(self):
+        mod = self._load_module()
+        mod._MAX_HOSTED_ARCHIVE_BYTES = 512
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-1234567890abcdef1234567890abcdef",
+            "session_id": "s-trial-agent-large",
+            "slot": 1,
+            "preview": "large",
+            "message_count": 1,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "x" * 1024}],
+            "transcript": [{"role": "user", "content": "x" * 1024}],
+        }
+
+        result = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertEqual(result["error"], "archive_too_large")
+        self.assertFalse(os.path.exists(mod.ARCHIVE_DIR))
+
+    def test_archive_pages_cover_more_than_fifty_local_records(self):
+        mod = self._load_module()
+        os.makedirs(mod.ARCHIVE_DIR, exist_ok=True)
+        for index in range(55):
+            archive_id = f"{1_700_000_000_000 + index:013d}_1_{index:08x}"
+            record = {
+                "source": "local",
+                "archived_at": 1_700_000_000 + index,
+                "slot": 1,
+                "preview": f"chat {index}",
+                "message_count": 1,
+                "slot_data": {"messages": []},
+            }
+            archive_path = os.path.join(mod.ARCHIVE_DIR, archive_id + ".json")
+            with open(archive_path, "w") as f:
+                json.dump(record, f)
+            os.utime(archive_path, (1_700_000_000 + index, 1_700_000_000 + index))
+
+        first = mod._list_archives_page(limit=50)
+        cursor_archive_id = first["archives"][-1]["id"]
+        os.remove(os.path.join(mod.ARCHIVE_DIR, cursor_archive_id + ".json"))
+        second = mod._list_archives_page(limit=50, cursor=first["next_cursor"])
+
+        self.assertEqual(len(first["archives"]), 50)
+        self.assertIsNotNone(first["next_cursor"])
+        self.assertEqual(len(second["archives"]), 5)
+        self.assertIsNone(second["next_cursor"])
+        self.assertTrue(
+            set(a["id"] for a in first["archives"]).isdisjoint(
+                a["id"] for a in second["archives"]
+            )
         )
 
     def test_restore_archive_into_slot_archives_current_chat_and_restores_session(self):
@@ -464,7 +680,10 @@ class TestLocalArchiveTemplate(unittest.TestCase):
 
     def test_local_template_sends_slot_for_history_new_and_restore(self):
         self.assertIn("slot: activeSlot,", web.CLAUDE_CHAT_HTML)
-        self.assertIn("archive_id: id, model: currentModel(), slot: activeSlot", web.CLAUDE_CHAT_HTML)
+        self.assertIn(
+            "archive_id: id, source: source || 'local', model: currentModel(), slot: activeSlot",
+            web.CLAUDE_CHAT_HTML,
+        )
 
     def test_local_template_recovers_slot_state_after_failed_switch(self):
         self.assertIn("const previousState = _loadSlotState();", web.CLAUDE_CHAT_HTML)

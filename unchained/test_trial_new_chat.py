@@ -872,6 +872,7 @@ class TestTrialNewChatRuntime(unittest.TestCase):
                 _js_function(html, "_newChatRecoveryBlocked"),
                 _js_function(html, "_syncNewChatRecoveryLock"),
                 _js_function(html, "acknowledgeNewChatTransition", async_function=True),
+                _js_function(html, "_takeNewChatFailureMessage"),
                 _js_function(html, "recoverExpiredNewChat", async_function=True),
                 _js_function(html, "recoverPendingNewChat", async_function=True),
                 _js_function(html, "updateSendAvailability"),
@@ -927,6 +928,7 @@ let sessionId = 's-trial-agent-old';
 let activeSlot = 2;
 let sending = false;
 let newChatPending = false;
+let _newChatFailureMessage = '';
 let lastLocalSetupReady = true;
 globalThis.hostedWorkspaceMode = false;
 globalThis.profileSelectionReady = true;
@@ -983,6 +985,10 @@ function restoreCurrentChat(sid) {{
       if (ackMode === 'expired-destination') return {{ok:false, status:409, json:async () => ({{
         error:'New-chat transition status unavailable', recovery_terminal:true,
         recovery_decision:'destination', recovery_session_id:body.session_id,
+      }})}};
+      if (ackMode === 'local-offline') return {{ok:false, status:503, json:async () => ({{
+        error:'Reconnect the local agent to archive this chat on this device. Your previous chat remains preserved, and the new chat is not finalized.',
+        code:'local_agent_offline',
       }})}};
       return {{ok:true, json:async () => ({{
         ok:true, acknowledged:true, request_id:body.request_id,
@@ -1147,6 +1153,19 @@ function restoreCurrentChat(sid) {{
   await doNewChat();
   assert.strictEqual(reserveRequestIds.at(-1), stalePending.request_id);
   assert.strictEqual(sessionId, reservedSession);
+
+  // Local-only archive ownership must surface the ACK failure and keep the
+  // pending transition locked instead of letting the new lane silently proceed.
+  localValues.clear();
+  reservedSession = '';
+  mode = 'normal';
+  ackMode = 'local-offline';
+  restoreCurrentChat('s-trial-agent-local-archive-required');
+  await doNewChat();
+  assert.match(elements['new-chat-feedback'].textContent, /Reconnect the local agent to archive this chat/i);
+  assert.ok(_loadPendingNewChat());
+  assert.strictEqual(elements.sendbtn.disabled, true);
+  assert.strictEqual(elements.msginput.disabled, true);
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
         result = subprocess.run(

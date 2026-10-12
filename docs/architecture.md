@@ -236,7 +236,23 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `CREDIT_STALE_RUN_TTL_SECONDS` | web | Optional crash-recovery sweep age (default: `7200`) |
 | `CREDIT_ADMIN_ALLOWLIST` | web | Optional comma-separated additional hosted model IDs; unknown models use the conservative default hold |
 | `CREDIT_DEFAULT_RESERVATION_MICRO_USD` | web | Optional per-attempt hold for explicitly allowlisted models not in the built-in catalog (default: `1000000`, or $1) |
+| `UNCHAINED_HOSTED_DATA_DIR` | web | Persistent hosted slot-state and legacy-archive migration area (default: `/data/hosted-conversations`); archived workspace transcripts are moved to the user's local agent after an atomic save acknowledgement |
 | `UNCHAINED_SESSIONS_DIR` | web, trial-agent | Shared active hosted-conversation directory (default: `/data/sessions`) |
+
+> **Hosted data rollback recovery:** If a rollback runs an older web release
+> that writes hosted JSON under its legacy `$HOME/.unchained` location, the
+> next deployment stops the writer and preserves that tree before replacement.
+> If a legacy file and its `/data/hosted-conversations` counterpart differ,
+> preservation fails closed rather than overwriting either copy. Keep backups
+> of both trees, compare each reported conflict, and reconcile it deliberately:
+> merge slot-state fields to retain the intended current assignments; if both
+> archive snapshots matter, keep both under distinct archive IDs and matching
+> filenames. Make each resolved source/destination pair identical before
+> rerunning deployment. Never delete one side or blindly copy over the volume.
+> The migration helper runs as the current web UID/GID and mounts only the
+> existing `/data` volume; that volume must be writable by the web identity.
+> If the ownership check fails, repair volume permissions before retrying rather
+> than elevating the migration helper.
 
 > **Migration:** A trial-agent deployment with neither context variable set now
 > uses the `400000` internal-context default. Set

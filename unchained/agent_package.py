@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.129"  # nonblocking provision launches and relay reconnect safety
+VERSION = "0.3.130"  # local archive ownership and hosted archive save acknowledgements
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

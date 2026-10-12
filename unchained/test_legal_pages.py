@@ -64,10 +64,10 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Google, Facebook, or GitHub sign-in", html)
         self.assertIn("GitHub access token", html)
         self.assertIn("random per-record salt", html)
-        self.assertIn("Hosted trial conversations", html)
-        self.assertIn("provider-agent histories default to container-local files", html)
-        self.assertIn("may disappear when the runtime container is recreated", html)
-        self.assertIn("Local CLI chat slots and archives are stored on the machine", html)
+        self.assertIn("Active hosted workspace sessions are stored", html)
+        self.assertIn("archive is transferred to the user's connected local agent", html)
+        self.assertIn("Other provider-agent histories may be container-local", html)
+        self.assertIn("Local CLI chat slots and archives are also stored on the machine", html)
         self.assertIn("scheduler job prompts", html)
         self.assertIn("run outputs", html)
         self.assertIn("Optional public results", html)
@@ -88,7 +88,7 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("does not automatically remove a pending or approved result", html)
         self.assertIn("There is no one-click full-account deletion endpoint", html)
         self.assertIn("pending or approved public-result records", html)
-        self.assertIn("A server-side deletion request cannot remove local CLI chats", html)
+        self.assertIn("A server-side deletion request cannot remove local CLI chats or hosted workspace archives", html)
         self.assertIn('mailto:hello@unchainedsky.com', html)
         self.assertNotIn("@gmail.com", html)
 
@@ -102,7 +102,7 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("send a request from your account email", html)
         self.assertIn("Subject line: <code>Data Deletion Request</code>.", html)
         self.assertIn("encrypted provider-credential records (including inactive records)", html)
-        self.assertIn("hosted conversation files", html)
+        self.assertIn("active hosted conversation files", html)
         self.assertIn("scheduler definitions/state/run history", html)
         self.assertIn("account-linked analytics records", html)
         self.assertIn("pending or approved public-result records", html)
@@ -113,7 +113,7 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Records that must be retained for security or legal reasons", html)
         self.assertIn("Approved public results have no self-service deletion control", html)
         self.assertIn("public-result copies already indexed, cached, copied, or redistributed", html)
-        self.assertIn("cannot delete local CLI chat slots or archives", html)
+        self.assertIn("cannot delete local CLI chat slots or hosted workspace archives", html)
         self.assertIn("contact third parties about data they control", html)
         self.assertIn('href="/privacy">/privacy</a>', html)
         self.assertIn('mailto:hello@unchainedsky.com', html)
@@ -156,6 +156,10 @@ class TestLegalPageDeploymentConfig(unittest.TestCase):
         )[0]
 
         self.assertIn("- relay_data:/data", web_service)
+        self.assertIn(
+            "- UNCHAINED_HOSTED_DATA_DIR=/data/hosted-conversations",
+            web_service,
+        )
         self.assertIn(
             "- UNCHAINED_SESSIONS_DIR=${UNCHAINED_SESSIONS_DIR:-/data/sessions}",
             web_service,

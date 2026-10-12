@@ -9107,6 +9107,8 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
 .archive-item .archive-actions .restore-btn:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
 .archive-item .archive-actions .delete-btn:hover{border-color:#e53e3e;color:#e53e3e}
 .archive-empty{text-align:center;color:var(--muted,#9da7b7);padding:40px 20px;font-size:14px}
+#archive-list .archive-load-more{display:block;margin:8px auto 16px;padding:8px 18px;border:1px solid var(--line,#2a3341);border-radius:7px;background:var(--surface-elev,#171d26);color:var(--text,#edf2f7);cursor:pointer}
+#archive-list .archive-load-more:hover{border-color:var(--accent,#ff6b4a)}
 
 /* === Login entry card === */
 #login{
@@ -9207,7 +9209,7 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
   <div id="archive-overlay" onclick="if(event.target===this)closeArchives()">
     <div id="archive-panel">
       <div class="archive-header">
-        <h3>Archived Chats</h3>
+        <h3>Archived Chats — This device</h3>
         <button class="archive-close" onclick="closeArchives()">&times;</button>
       </div>
       <div id="archive-list"></div>
@@ -9356,6 +9358,7 @@ let _creditState = null;
 let _creditRetryTimer = null;
 let selectedProfilePath = '';
 let profileSelectionReady = false;
+let _newChatFailureMessage = '';
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _hostedModelPolicy = null;
@@ -10244,6 +10247,7 @@ function _syncNewChatRecoveryLock() {
 }
 
 async function acknowledgeNewChatTransition(pending, recoveryChoice) {
+  _newChatFailureMessage = '';
   try {
     const commitRequestId = pending.commit_request_id || pending.request_id;
     const r = await fetch('/web/chat/new/ack', {
@@ -10276,6 +10280,7 @@ async function acknowledgeNewChatTransition(pending, recoveryChoice) {
           return {status:'expired', decision:decision, session_id:recoverySessionId, manual:data.recovery_manual_resolved === true};
         }
       }
+      _newChatFailureMessage = String(data.error || 'Could not finish saving this chat locally.');
       return 'retry';
     }
     if (!data.ok || !data.acknowledged) return 'retry';
@@ -10285,8 +10290,17 @@ async function acknowledgeNewChatTransition(pending, recoveryChoice) {
     _clearPendingNewChat(pending.request_id);
     return 'acknowledged';
   } catch(e) {
+    _newChatFailureMessage = e && e.message
+      ? String(e.message)
+      : 'Could not contact the local archive service. Your current chat is unchanged.';
     return 'retry';
   }
+}
+
+function _takeNewChatFailureMessage(fallback) {
+  const message = _newChatFailureMessage || fallback;
+  _newChatFailureMessage = '';
+  return message;
 }
 
 function offerManualNewChatRecovery(pending, choices) {
@@ -10318,7 +10332,10 @@ function offerManualNewChatRecovery(pending, choices) {
         offerManualNewChatRecovery(pending, outcome.choices);
         return;
       }
-      setNewChatFeedback('Recovery could not be resolved. Please try again.', 'error');
+      setNewChatFeedback(
+        _takeNewChatFailureMessage('Recovery could not be resolved. Please try again.'),
+        'error'
+      );
     } finally {
       newChatPending = false;
       _syncNewChatRecoveryLock();
@@ -10376,7 +10393,7 @@ async function recoverPendingNewChat() {
       setNewChatFeedback(
         acknowledged
           ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
-          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+          : _takeNewChatFailureMessage('The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.'),
         acknowledged ? 'success' : 'error'
       );
     } finally {
@@ -11041,7 +11058,7 @@ async function doNewChat() {
       setNewChatFeedback(
         acknowledged
           ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
-          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+          : _takeNewChatFailureMessage('The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.'),
         acknowledged ? 'success' : 'error'
       );
       return;
@@ -11121,7 +11138,7 @@ async function doNewChat() {
     setNewChatFeedback(
       acknowledged
         ? 'Fresh ' + _slotLabel(requestedSlot) + ' ready.'
-        : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+        : _takeNewChatFailureMessage('The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.'),
       acknowledged ? 'success' : 'error'
     );
   } finally {
@@ -11131,55 +11148,109 @@ async function doNewChat() {
   }
 }
 
-async function openArchives() {
-  const overlay = document.getElementById('archive-overlay');
-  overlay.classList.add('open');
+let _archiveNextCursor = '';
+let _archivePageLoading = false;
+
+async function _loadArchivePage(cursor, reset) {
   const list = document.getElementById('archive-list');
-  list.innerHTML = '<div class="archive-empty">Loading...</div>';
+  if (!list || _archivePageLoading) return;
+  _archivePageLoading = true;
+  if (reset) list.innerHTML = '<div class="archive-empty">Loading this device\'s archives...</div>';
+  else {
+    const oldMore = list.querySelector('.archive-load-more');
+    if (oldMore) oldMore.remove();
+  }
   try {
-    const r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
-    if (!r.ok) { list.innerHTML = '<div class="archive-empty">Failed to load archives</div>'; return; }
-    const data = await r.json();
-    const archives = data.archives || [];
-    if (archives.length === 0) {
-      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+    const params = new URLSearchParams({limit: '50'});
+    if (cursor) params.set('cursor', cursor);
+    const r = await fetch('/web/chat/archives?' + params.toString(), {cache: 'no-store'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      list.innerHTML = '<div class="archive-empty">' + esc(
+        data.error || 'Connect the local agent to view this device\'s archives.'
+      ) + '</div>';
       return;
     }
-    list.innerHTML = '';
+    if (reset) list.innerHTML = '';
+    if (data.migration_warning) {
+      const warning = document.createElement('div');
+      warning.className = 'archive-empty';
+      warning.textContent = data.migration_warning;
+      list.appendChild(warning);
+    }
+    const archives = Array.isArray(data.archives) ? data.archives : [];
+    if (reset && !archives.length) {
+      if (!data.migration_warning) {
+        list.innerHTML = '<div class="archive-empty">No archived chats on this device yet.</div>';
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'archive-empty';
+        empty.textContent = 'No local archives are available yet.';
+        list.appendChild(empty);
+      }
+      return;
+    }
     for (const arc of archives) {
       const d = new Date(arc.archived_at * 1000);
       const dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const source = arc.source === 'hosted' ? 'Hosted model' : 'Local CLI';
+      const openLocalFromWorkspace = arc.source === 'local' && location.pathname === '/workspace';
       const div = document.createElement('div');
       div.className = 'archive-item';
       div.innerHTML =
         '<div class="archive-info">' +
           '<div class="archive-preview">' + esc(arc.preview || '(empty)') + '</div>' +
-          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + '</div>' +
+          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + ' &middot; ' + source + '</div>' +
         '</div>' +
         '<div class="archive-actions">' +
-          '<button class="restore-btn" data-id="' + esc(arc.id) + '">Restore</button>' +
+          '<button class="restore-btn" data-id="' + esc(arc.id) + '">' +
+            (openLocalFromWorkspace ? 'Open Local' : 'Restore') +
+          '</button>' +
           '<button class="delete-btn" data-id="' + esc(arc.id) + '">Delete</button>' +
         '</div>';
-      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id);
-      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div);
+      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id, arc.source, arc.model_id);
+      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div, arc.source);
       list.appendChild(div);
     }
+    _archiveNextCursor = String(data.next_cursor || '');
+    if (_archiveNextCursor) {
+      const more = document.createElement('button');
+      more.className = 'archive-load-more';
+      more.textContent = 'Load more';
+      more.onclick = () => loadMoreArchives();
+      list.appendChild(more);
+    }
   } catch(e) {
-    list.innerHTML = '<div class="archive-empty">Error loading archives</div>';
+    list.innerHTML = '<div class="archive-empty">Error loading this device\'s archives. Retry or reconnect the local agent.</div>';
+  } finally {
+    _archivePageLoading = false;
   }
+}
+
+async function openArchives() {
+  const overlay = document.getElementById('archive-overlay');
+  overlay.classList.add('open');
+  _archiveNextCursor = '';
+  await _loadArchivePage('', true);
+}
+
+async function loadMoreArchives() {
+  if (!_archiveNextCursor) return;
+  const cursor = _archiveNextCursor;
+  await _loadArchivePage(cursor, false);
 }
 
 function closeArchives() {
   document.getElementById('archive-overlay').classList.remove('open');
 }
 
-async function restoreArchive(id) {
+async function restoreArchive(id, source, archiveModel) {
   if (!confirm('Restore this archived conversation? It will replace your current chat.')) return;
   try {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: activeSlot }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel(), slot: activeSlot }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -11189,6 +11260,35 @@ async function restoreArchive(id) {
         _setActiveSlotSession(sessionId);
       }
       closeArchives();
+      if ((data.source || source) === 'local') {
+        const localModel = archiveModel || data.model_id || '';
+        if (location.pathname !== '/local' || (localModel && currentModel() !== localModel)) {
+          const provider = String(localModel).startsWith('codex-cli:')
+            ? 'codex-cli'
+            : (String(localModel).startsWith('opencode-cli:') ? 'opencode-cli' : '');
+          const params = new URLSearchParams();
+          if (provider) params.set('provider', provider);
+          if (localModel) params.set('model', localModel);
+          location.href = '/local' + (params.toString() ? '?' + params.toString() : '');
+        } else {
+          location.reload();
+        }
+        return;
+      }
+      if ((data.source || source) === 'hosted' && location.pathname !== '/workspace') {
+        const hostedModel = String(data.model_id || archiveModel || '').trim();
+        if (hostedModel && typeof _persistTrialModel === 'function') {
+          _persistTrialModel(hostedModel);
+        }
+        location.href = '/workspace' + (hostedModel ? '?model=' + encodeURIComponent(hostedModel) : '');
+        return;
+      }
+      const restoredModel = String(data.model_id || archiveModel || '').trim();
+      const modelSelect = document.getElementById('modelsel');
+      if (restoredModel && modelSelect && Array.from(modelSelect.options).some(opt => opt.value === restoredModel)) {
+        modelSelect.value = restoredModel;
+        _persistTrialModel(restoredModel);
+      }
       location.reload();
     } else {
       const data = await r.json().catch(() => ({}));
@@ -11197,13 +11297,13 @@ async function restoreArchive(id) {
   } catch(e) { alert('Failed to restore archive'); }
 }
 
-async function deleteArchive(id, el) {
+async function deleteArchive(id, el, source) {
   if (!confirm('Delete this archived chat permanently?')) return;
   try {
     const r = await fetch('/web/chat/delete-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel() }),
     });
     if (r.ok) {
       el.remove();
@@ -16675,7 +16775,7 @@ body{
   <div id="archive-overlay" onclick="if(event.target===this)closeArchives()">
     <div id="archive-panel">
       <div class="archive-header">
-        <h3>Archived Chats</h3>
+        <h3>Archived Chats — This device</h3>
         <button class="archive-close" onclick="closeArchives()">&times;</button>
       </div>
       <div id="archive-list"></div>
@@ -17760,55 +17860,105 @@ async function doNewChat() {
   }
 }
 
-async function openArchives() {
-  const overlay = document.getElementById('archive-overlay');
-  overlay.classList.add('open');
+let _archiveNextCursor = '';
+let _archivePageLoading = false;
+
+async function _loadArchivePage(cursor, reset) {
   const list = document.getElementById('archive-list');
-  list.innerHTML = '<div class="archive-empty">Loading...</div>';
+  if (!list || _archivePageLoading) return;
+  _archivePageLoading = true;
+  if (reset) list.innerHTML = '<div class="archive-empty">Loading this device\'s archives...</div>';
+  else {
+    const oldMore = list.querySelector('.archive-load-more');
+    if (oldMore) oldMore.remove();
+  }
   try {
-    const r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
-    if (!r.ok) { list.innerHTML = '<div class="archive-empty">Failed to load archives</div>'; return; }
-    const data = await r.json();
-    const archives = data.archives || [];
-    if (archives.length === 0) {
-      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+    const params = new URLSearchParams({limit: '50'});
+    if (cursor) params.set('cursor', cursor);
+    const r = await fetch('/web/chat/archives?' + params.toString(), {cache: 'no-store'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      list.innerHTML = '<div class="archive-empty">' + esc(data.error || 'Connect the local agent to view this device\'s archives.') + '</div>';
       return;
     }
-    list.innerHTML = '';
+    if (reset) list.innerHTML = '';
+    if (data.migration_warning) {
+      const warning = document.createElement('div');
+      warning.className = 'archive-empty';
+      warning.textContent = data.migration_warning;
+      list.appendChild(warning);
+    }
+    const archives = Array.isArray(data.archives) ? data.archives : [];
+    if (reset && !archives.length) {
+      if (!data.migration_warning) {
+        list.innerHTML = '<div class="archive-empty">No archived chats on this device yet.</div>';
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'archive-empty';
+        empty.textContent = 'No local archives are available yet.';
+        list.appendChild(empty);
+      }
+      return;
+    }
     for (const arc of archives) {
       const d = new Date(arc.archived_at * 1000);
       const dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const source = arc.source === 'hosted' ? 'Hosted model' : 'Local CLI';
+      const openLocalFromWorkspace = arc.source === 'local' && location.pathname !== '/local';
       const div = document.createElement('div');
       div.className = 'archive-item';
       div.innerHTML =
         '<div class="archive-info">' +
           '<div class="archive-preview">' + esc(arc.preview || '(empty)') + '</div>' +
-          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + '</div>' +
+          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + ' &middot; ' + source + '</div>' +
         '</div>' +
         '<div class="archive-actions">' +
-          '<button class="restore-btn" data-id="' + esc(arc.id) + '">Restore</button>' +
+          '<button class="restore-btn" data-id="' + esc(arc.id) + '">' + (openLocalFromWorkspace ? 'Open Local' : 'Restore') + '</button>' +
           '<button class="delete-btn" data-id="' + esc(arc.id) + '">Delete</button>' +
         '</div>';
-      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id);
-      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div);
+      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id, arc.source, arc.model_id);
+      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div, arc.source);
       list.appendChild(div);
     }
+    _archiveNextCursor = String(data.next_cursor || '');
+    if (_archiveNextCursor) {
+      const more = document.createElement('button');
+      more.className = 'archive-load-more';
+      more.textContent = 'Load more';
+      more.onclick = () => loadMoreArchives();
+      list.appendChild(more);
+    }
   } catch(e) {
-    list.innerHTML = '<div class="archive-empty">Error loading archives</div>';
+    list.innerHTML = '<div class="archive-empty">Error loading this device\'s archives. Retry or reconnect the local agent.</div>';
+  } finally {
+    _archivePageLoading = false;
   }
+}
+
+async function openArchives() {
+  const overlay = document.getElementById('archive-overlay');
+  overlay.classList.add('open');
+  _archiveNextCursor = '';
+  await _loadArchivePage('', true);
+}
+
+async function loadMoreArchives() {
+  if (!_archiveNextCursor) return;
+  const cursor = _archiveNextCursor;
+  await _loadArchivePage(cursor, false);
 }
 
 function closeArchives() {
   document.getElementById('archive-overlay').classList.remove('open');
 }
 
-async function restoreArchive(id) {
+async function restoreArchive(id, source, archiveModel) {
   if (!confirm('Restore this archived conversation? It will replace your current chat.')) return;
   try {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: activeSlot }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel(), slot: activeSlot }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -17818,6 +17968,27 @@ async function restoreArchive(id) {
         _setActiveSlotSession(sessionId);
       }
       closeArchives();
+      if ((data.source || source) === 'local') {
+        const localModel = archiveModel || data.model_id || '';
+        if (location.pathname !== '/local' || (localModel && currentModel() !== localModel)) {
+          const provider = String(localModel).startsWith('codex-cli:')
+            ? 'codex-cli'
+            : (String(localModel).startsWith('opencode-cli:') ? 'opencode-cli' : '');
+          const params = new URLSearchParams();
+          if (provider) params.set('provider', provider);
+          if (localModel) params.set('model', localModel);
+          location.href = '/local' + (params.toString() ? '?' + params.toString() : '');
+        } else {
+          location.reload();
+        }
+        return;
+      }
+      if ((data.source || source) === 'hosted' && location.pathname !== '/workspace') {
+        const hostedModel = String(data.model_id || archiveModel || '').trim();
+        if (hostedModel && typeof _persistTrialModel === 'function') _persistTrialModel(hostedModel);
+        location.href = '/workspace' + (hostedModel ? '?model=' + encodeURIComponent(hostedModel) : '');
+        return;
+      }
       location.reload();
     } else {
       const data = await r.json().catch(() => ({}));
@@ -17826,13 +17997,13 @@ async function restoreArchive(id) {
   } catch(e) { alert('Failed to restore archive'); }
 }
 
-async function deleteArchive(id, el) {
+async function deleteArchive(id, el, source) {
   if (!confirm('Delete this archived chat permanently?')) return;
   try {
     const r = await fetch('/web/chat/delete-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel() }),
     });
     if (r.ok) {
       el.remove();
@@ -21407,7 +21578,7 @@ async function loadSidebarHistory() {
   if (!list) return;
   list.innerHTML = '<div class="sidebar-empty">Loading chats...</div>';
   try {
-    var r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
+    var r = await fetch('/web/chat/archives?limit=50', {cache: 'no-store'});
     if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load chats.<br><button type="button" onclick="loadSidebarHistory()">Try again</button></div>'; return; }
     var data = await r.json();
     var allArchives = data.archives || [];
@@ -21436,7 +21607,7 @@ async function loadSidebarHistory() {
       div.innerHTML =
         '<div class="sb-preview">' + esc(arc.preview || '(empty)') + '</div>' +
         '<div class="sb-meta"><span>' + arc.message_count + ' messages</span></div>';
-      div.onclick = (function(id) { return function() { toggleAgentShellHistory(false); restoreArchive(id); }; })(arc.id);
+      div.onclick = (function(id, source, modelId) { return function() { toggleAgentShellHistory(false); restoreArchive(id, source, modelId); }; })(arc.id, arc.source, arc.model_id);
       list.appendChild(div);
     }
     var filterEmpty = document.createElement('div');
@@ -21446,7 +21617,7 @@ async function loadSidebarHistory() {
     var link = document.createElement('a');
     link.className = 'sidebar-viewall';
     link.href = '#';
-    link.textContent = allArchives.length > 6 ? 'View all ' + allArchives.length + ' archives' : 'View all archives';
+    link.textContent = 'View all archives';
     link.onclick = function(e) { e.preventDefault(); openArchives(); };
     list.appendChild(link);
   } catch(e) {
@@ -23347,12 +23518,14 @@ _ARCHIVE_INJECT_STYLE = """<style id="archive-inject">
 .archive-item .archive-actions .restore-btn:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
 .archive-item .archive-actions .delete-btn:hover{border-color:#e53e3e;color:#e53e3e}
 .archive-empty{text-align:center;color:var(--muted,#9da7b7);padding:40px 20px;font-size:14px}
+#archive-list .archive-load-more{display:block;margin:8px auto 16px;padding:8px 18px;border:1px solid var(--line,#2a3341);border-radius:7px;background:var(--surface-elev,#171d26);color:var(--text,#edf2f7);cursor:pointer}
+#archive-list .archive-load-more:hover{border-color:var(--accent,#ff6b4a)}
 </style>"""
 
 _ARCHIVE_INJECT_HTML = """<div id="archive-overlay" onclick="if(event.target===this)closeArchives()">
   <div id="archive-panel">
     <div class="archive-header">
-      <h3>Archived Chats</h3>
+      <h3>Archived Chats — This device</h3>
       <button class="archive-close" onclick="closeArchives()">&times;</button>
     </div>
     <div id="archive-list"></div>
@@ -23360,55 +23533,106 @@ _ARCHIVE_INJECT_HTML = """<div id="archive-overlay" onclick="if(event.target===t
 </div>"""
 
 _ARCHIVE_INJECT_JS = """
-async function openArchives() {
+let _archiveNextCursor = '';
+let _archivePageLoading = false;
+
+async function _loadArchivePage(cursor, reset) {
   const overlay = document.getElementById('archive-overlay');
-  overlay.classList.add('open');
   const list = document.getElementById('archive-list');
-  list.innerHTML = '<div class="archive-empty">Loading...</div>';
+  if (!list || _archivePageLoading) return;
+  _archivePageLoading = true;
+  if (reset) list.innerHTML = '<div class="archive-empty">Loading this device\'s archives...</div>';
+  else {
+    const oldMore = list.querySelector('.archive-load-more');
+    if (oldMore) oldMore.remove();
+  }
   try {
-    const r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
-    if (!r.ok) { list.innerHTML = '<div class="archive-empty">Failed to load archives</div>'; return; }
-    const data = await r.json();
-    const archives = data.archives || [];
-    if (archives.length === 0) {
-      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+    const params = new URLSearchParams({limit: '50'});
+    if (cursor) params.set('cursor', cursor);
+    const r = await fetch('/web/chat/archives?' + params.toString(), {cache: 'no-store'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      list.innerHTML = '<div class="archive-empty">' + esc(data.error || 'Connect the local agent to view this device\'s archives.') + '</div>';
       return;
     }
-    list.innerHTML = '';
+    if (reset) list.innerHTML = '';
+    if (data.migration_warning) {
+      const warning = document.createElement('div');
+      warning.className = 'archive-empty';
+      warning.textContent = data.migration_warning;
+      list.appendChild(warning);
+    }
+    const archives = Array.isArray(data.archives) ? data.archives : [];
+    if (reset && !archives.length) {
+      if (!data.migration_warning) {
+        list.innerHTML = '<div class="archive-empty">No archived chats on this device yet.</div>';
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'archive-empty';
+        empty.textContent = 'No local archives are available yet.';
+        list.appendChild(empty);
+      }
+      return;
+    }
     for (const arc of archives) {
       const d = new Date(arc.archived_at * 1000);
       const dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const source = arc.source === 'hosted' ? 'Hosted model' : 'Local CLI';
+      const openLocalFromWorkspace = arc.source === 'local' && location.pathname === '/workspace';
       const div = document.createElement('div');
       div.className = 'archive-item';
       div.innerHTML =
         '<div class="archive-info">' +
           '<div class="archive-preview">' + esc(arc.preview || '(empty)') + '</div>' +
-          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + '</div>' +
+          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + ' &middot; ' + source + '</div>' +
         '</div>' +
         '<div class="archive-actions">' +
-          '<button class="restore-btn" data-id="' + esc(arc.id) + '">Restore</button>' +
+          '<button class="restore-btn" data-id="' + esc(arc.id) + '">' + (openLocalFromWorkspace ? 'Open Local' : 'Restore') + '</button>' +
           '<button class="delete-btn" data-id="' + esc(arc.id) + '">Delete</button>' +
         '</div>';
-      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id);
-      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div);
+      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id, arc.source, arc.model_id);
+      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div, arc.source);
       list.appendChild(div);
     }
+    _archiveNextCursor = String(data.next_cursor || '');
+    if (_archiveNextCursor) {
+      const more = document.createElement('button');
+      more.className = 'archive-load-more';
+      more.textContent = 'Load more';
+      more.onclick = () => loadMoreArchives();
+      list.appendChild(more);
+    }
   } catch(e) {
-    list.innerHTML = '<div class="archive-empty">Error loading archives</div>';
+    list.innerHTML = '<div class="archive-empty">Error loading this device\'s archives. Retry or reconnect the local agent.</div>';
+  } finally {
+    _archivePageLoading = false;
   }
+}
+
+async function openArchives() {
+  const overlay = document.getElementById('archive-overlay');
+  overlay.classList.add('open');
+  _archiveNextCursor = '';
+  await _loadArchivePage('', true);
+}
+
+async function loadMoreArchives() {
+  if (!_archiveNextCursor) return;
+  const cursor = _archiveNextCursor;
+  await _loadArchivePage(cursor, false);
 }
 
 function closeArchives() {
   document.getElementById('archive-overlay').classList.remove('open');
 }
 
-async function restoreArchive(id) {
+async function restoreArchive(id, source, archiveModel) {
   if (!confirm('Restore this archived conversation? It will replace your current chat.')) return;
   try {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: typeof activeSlot === 'number' ? activeSlot : undefined }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel(), slot: typeof activeSlot === 'number' ? activeSlot : undefined }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -23418,6 +23642,20 @@ async function restoreArchive(id) {
         if (typeof _setActiveSlotSession === 'function') _setActiveSlotSession(sessionId);
       }
       closeArchives();
+      if ((data.source || source) === 'local' && location.pathname !== '/local') {
+        const localModel = archiveModel || data.model_id || '';
+        const provider = String(localModel).startsWith('codex-cli:')
+          ? 'codex-cli'
+          : (String(localModel).startsWith('opencode-cli:') ? 'opencode-cli' : '');
+        location.href = provider ? '/local?provider=' + encodeURIComponent(provider) : '/local';
+        return;
+      }
+      if ((data.source || source) === 'hosted' && location.pathname !== '/workspace') {
+        const hostedModel = String(data.model_id || archiveModel || '').trim();
+        if (hostedModel && typeof _persistTrialModel === 'function') _persistTrialModel(hostedModel);
+        location.href = '/workspace';
+        return;
+      }
       location.reload();
     } else {
       const data = await r.json().catch(() => ({}));
@@ -23426,13 +23664,13 @@ async function restoreArchive(id) {
   } catch(e) { alert('Failed to restore archive'); }
 }
 
-async function deleteArchive(id, el) {
+async function deleteArchive(id, el, source) {
   if (!confirm('Delete this archived chat permanently?')) return;
   try {
     const r = await fetch('/web/chat/delete-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, source: source || 'local', model: currentModel() }),
     });
     if (!r.ok) { try { alert((await r.json()).error || 'Delete failed'); } catch(_) { alert('Delete failed'); } return; }
     el.remove();

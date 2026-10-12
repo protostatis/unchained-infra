@@ -10,6 +10,7 @@ from typing import Any, Iterator
 CHAT_WS_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_INLINE_SCREENSHOT_BASE64_BYTES = 8 * 1024 * 1024
 MAX_AGENT_EVENT_BYTES = 12 * 1024 * 1024
+MAX_LOCAL_ARCHIVE_TRANSFER_BYTES = 8 * 1024 * 1024
 # The in-memory reconnect journal has a much smaller per-event budget than
 # the WebSocket transport. Local CLI final responses are chunked to this
 # conservative target before they enter that journal.
