@@ -274,6 +274,7 @@ ARCHIVE_DIR = os.path.join(CHAT_DIR, "archive")
 META_FILE = os.path.join(CHAT_DIR, "meta.json")
 _ARCHIVE_PAGE_SIZE = 50
 _MAX_HOSTED_ARCHIVE_BYTES = MAX_LOCAL_ARCHIVE_TRANSFER_BYTES
+_MAX_HOSTED_ARCHIVE_TIMESTAMP = 4_102_444_800.0  # 2100-01-01 UTC
 
 
 def _slot_file(n: int) -> str:
@@ -616,7 +617,10 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
         payload_digest, payload_bytes = _hosted_archive_digest(payload)
         wire_size = len(
             json.dumps(
-                payload, separators=(",", ":"), sort_keys=True
+                payload,
+                separators=(",", ":"),
+                sort_keys=True,
+                ensure_ascii=False,
             ).encode("utf-8")
         )
     except (TypeError, ValueError, UnicodeError):
@@ -633,6 +637,7 @@ def _store_hosted_archive(payload: object, owner_key: str) -> dict:
         slot not in (1, 2, 3)
         or not math.isfinite(archived_at)
         or archived_at <= 0
+        or archived_at > _MAX_HOSTED_ARCHIVE_TIMESTAMP
         or message_count < 0
     ):
         return {"ok": False, "error": "invalid_archive_metadata"}
@@ -805,6 +810,8 @@ def _list_archives_page(
             start = cursor_index + 1
 
     entries = []
+    # One eligible-record lookahead determines whether a next page exists after
+    # filtering corrupt files and hosted records owned by other accounts.
     for modified_ns, filename, file_path in files[start:]:
         try:
             with open(file_path, "r", encoding="utf-8") as f:

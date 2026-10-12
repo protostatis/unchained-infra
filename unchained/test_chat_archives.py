@@ -172,6 +172,54 @@ class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
         listed = mod._list_archives_page(owner_key="a" * 64)
         self.assertEqual(listed["archives"][0]["message_count"], 1)
 
+    def test_hosted_archive_rejects_millisecond_timestamp(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-time-1234567890abcdef",
+            "session_id": "s-trial-agent-time",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "timestamp",
+            "message_count": 1,
+            "archived_at": 1_700_000_000_000,
+            "messages": [{"role": "user", "content": "timestamp"}],
+            "transcript": [{"role": "user", "content": "timestamp"}],
+        }
+
+        result = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid_archive_metadata")
+        self.assertFalse(os.path.exists(mod.ARCHIVE_DIR))
+
+    def test_hosted_archive_byte_limit_uses_utf8_payload_size(self):
+        mod = self._load_module()
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": "hosted-unicode-1234567890",
+            "session_id": "s-trial-agent-unicode",
+            "slot": 1,
+            "model_id": "deepseek-flash",
+            "preview": "你好",
+            "message_count": 1,
+            "archived_at": 1000.0,
+            "messages": [{"role": "user", "content": "你好"}],
+            "transcript": [{"role": "user", "content": "你好"}],
+        }
+        mod._MAX_HOSTED_ARCHIVE_BYTES = len(
+            json.dumps(
+                payload,
+                separators=(",", ":"),
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+
+        result = mod._store_hosted_archive(payload, "a" * 64)
+
+        self.assertTrue(result["ok"])
+
     def test_oversized_hosted_archive_is_rejected_without_a_partial_file(self):
         mod = self._load_module()
         mod._MAX_HOSTED_ARCHIVE_BYTES = 512

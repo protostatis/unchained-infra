@@ -814,6 +814,11 @@ print(Path(source).absolute())
             echo "ERROR: could not determine the web container runtime UID/GID" >&2
             exit 1
         fi
+        data_volume="$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/data") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' "$web_container")"
+        if [[ ! "$data_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "ERROR: could not identify the web container's /data volume" >&2
+            exit 1
+        fi
         legacy_source_present=false
         if docker exec "$web_container" test -d "$legacy_source"; then
             legacy_source_present=true
@@ -823,20 +828,21 @@ print(Path(source).absolute())
         if [[ "$legacy_source" != "/data/hosted-conversations" ]]; then
             migration_tmp="$(mktemp -d /tmp/hosted-conversation-migration.XXXXXX)"
             mkdir -p "$migration_tmp/legacy"
-            if docker cp "$web_container:$legacy_source/." "$migration_tmp/legacy/" 2>/dev/null; then
-                # docker cp stages files as the deploy user; make the temporary
-                # snapshot readable to the same unprivileged UID as the web app.
-                chmod -R a+rX "$migration_tmp/legacy"
+            if docker cp -a "$web_container:$legacy_source/." "$migration_tmp/legacy/" 2>/dev/null; then
+                # Archive mode preserves source ownership and permissions so
+                # the helper's web UID can read files without broadening access
+                # to private transcripts under /tmp.
                 web_image="$(docker inspect --format '{{.Image}}' "$web_container")"
                 legacy_mount="type=bind,src=$migration_tmp/legacy,dst=/tmp/legacy,readonly"
                 helper_mount="type=bind,src=$preservation_tool,dst=/tmp/preserve_hosted_conversations.py,readonly"
+                data_mount="type=volume,src=$data_volume,dst=/data"
                 # The image layer is read-only; /tmp is a bounded scratch tmpfs
                 # and the old container's /data volume remains writable for
                 # the intended preservation copy.
                 if ! docker run --rm --network none --read-only \
                     --tmpfs /tmp:rw,noexec,nosuid,size=16m \
                     --user "$web_user" \
-                    --volumes-from "$web_container" \
+                    --mount "$data_mount" \
                     --mount "$legacy_mount" \
                     --mount "$helper_mount" \
                     --entrypoint python3 "$web_image" \

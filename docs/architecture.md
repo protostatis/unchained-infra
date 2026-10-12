@@ -249,6 +249,10 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 > archive snapshots matter, keep both under distinct archive IDs and matching
 > filenames. Make each resolved source/destination pair identical before
 > rerunning deployment. Never delete one side or blindly copy over the volume.
+> The migration helper runs as the current web UID/GID and mounts only the
+> existing `/data` volume; that volume must be writable by the web identity.
+> If the ownership check fails, repair volume permissions before retrying rather
+> than elevating the migration helper.
 
 > **Migration:** A trial-agent deployment with neither context variable set now
 > uses the `400000` internal-context default. Set
