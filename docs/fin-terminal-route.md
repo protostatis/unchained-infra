@@ -38,6 +38,16 @@ operator makes a separate archive/deletion decision.
    proxy token before forwarding the request.
 5. The browser broker never receives `OPENROUTER_API_KEY` or an account cookie.
 
+Signed-out browser navigations are not answered with a bare error page. The auth
+endpoint returns a `302` to the primary-host sign-in page
+(`https://unchainedsky.com/local`) with the requested terminal path as its
+`next` return target, and the shared `.unchainedsky.com` session cookie admits
+the user to the terminal when they return. The path is recovered from
+`X-Forwarded-Uri`, re-attaching the public prefix Caddy strips before
+`forward_auth`. Non-navigation requests (API calls, assets, and non-`GET`
+probes) keep the explicit `401` so non-browser callers, including the
+activation smoke, are unaffected.
+
 The browser terminal has its own persistent data volume, MCP service, and
 network boundary. Its MCP broker uses the reviewed 120-second idle and
 900-second absolute session limits. It has no WebSocket path.
@@ -80,8 +90,12 @@ After deployment:
   `FIN_TERMINAL_BROWSER_ENABLED=false`.
 - `/fin-terminal-browser/discover/` returns the public discovery page when the
   route is enabled.
-- `/fin-terminal-browser/terminal/` remains auth-gated and returns `401` for a
-  logged-out request.
+- `/fin-terminal-browser/terminal/` remains auth-gated: a logged-out browser
+  navigation redirects (`302`) to `https://unchainedsky.com/local`, while a
+  logged-out non-navigation request (for example `curl`, which sends
+  `Accept: */*`) still returns `401`.
+- Apex `/fin-terminal-browser/...` requests redirect (`308`) to the canonical
+  Unbrowser host; the apex serves no terminal surface of its own.
 - The authenticated browser-terminal API under `/fin-terminal-browser/api/`
   remains behind the same auth gate and returns `401` for a logged-out request.
 - An approved signed-in account receives `200` through Caddy.
