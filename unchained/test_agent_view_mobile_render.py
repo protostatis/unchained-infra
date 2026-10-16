@@ -158,6 +158,9 @@ function appendText() {}
 function updateAgentStatusUI() {}
 let sessionId = 's-mobile-render-test';
 let sending = false;
+// The assembled template declares this in the page script that hosts the Agent
+// View runtime, so a standalone harness must mirror it too.
+let workbenchShellEnabled = false;
 </script>
 """
     boot = "<script>openAgentView();</script>"
@@ -180,6 +183,10 @@ class _Cdp:
     def __init__(self, socket_client):
         self.socket = socket_client
         self.next_id = 0
+        # Uncaught page exceptions, collected from the events that arrive between
+        # command responses. A standalone harness that fails to mirror a runtime
+        # global throws here instead of silently degrading the page.
+        self.exceptions: list[str] = []
 
     async def command(self, method: str, params: dict | None = None) -> dict:
         self.next_id += 1
@@ -192,6 +199,10 @@ class _Cdp:
         while True:
             response = json.loads(await self.socket.recv())
             if response.get("id") != message_id:
+                if response.get("method") == "Runtime.exceptionThrown":
+                    details = response.get("params", {}).get("exceptionDetails", {})
+                    text = (details.get("exception") or {}).get("description") or details.get("text")
+                    self.exceptions.append(str(text))
                 continue
             if "error" in response:
                 raise RuntimeError(f"CDP {method} failed: {response['error']}")
@@ -286,6 +297,7 @@ class TestAgentViewMobileRender(unittest.TestCase):
                     ) as socket_client:
                         cdp = _Cdp(socket_client)
                         await cdp.command("Page.enable")
+                        await cdp.command("Runtime.enable")
                         await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
                         await cdp.command("Emulation.setTouchEmulationEnabled", {
                             "enabled": True,
@@ -301,6 +313,13 @@ class TestAgentViewMobileRender(unittest.TestCase):
                             self.assertIsNone(
                                 process.poll(),
                                 f"desktop Chrome renderer exited during {stage}",
+                            )
+                            # The harness must run the Agent View runtime clean: an
+                            # undeclared global here would otherwise pass silently.
+                            self.assertEqual(
+                                cdp.exceptions,
+                                [],
+                                f"uncaught page exception during {stage}",
                             )
                             health = await cdp.evaluate("""({
                               readyState: document.readyState,

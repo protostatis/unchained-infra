@@ -468,14 +468,33 @@ class TestWebTemplateContracts(unittest.TestCase):
             pages_module._render_hosted_chat_page(bare, workspace=True),
         )
 
-        # Every workbench rule must be scoped to the body class, so the shipped
-        # shells are untouched whenever the presentation is off.
-        style = re.sub(r"/\*.*?\*/", "", templates._AGENT_VIEW_STYLE, flags=re.DOTALL)
+        # The workbench layer is a contiguous tail section of the Agent View
+        # stylesheet. Every rule inside that section must be scoped to the body
+        # class, so the shipped shells are untouched whenever the presentation is
+        # off. Checked per selector across the whole section, not by substring.
+        raw_style = templates._AGENT_VIEW_STYLE
+        marker = "/* Agent Workbench presentation"
         self.assertEqual(
-            style.count("agent-shell-workbench"),
-            style.count("body.agent-shell-workbench"),
-            "workbench styles must always be scoped to body.agent-shell-workbench",
+            raw_style.count(marker), 1, "workbench style section marker must be unique"
         )
+        region = re.sub(
+            r"/\*.*?\*/", "", raw_style[raw_style.index(marker):], flags=re.DOTALL
+        )
+        region_selectors, region_rules = [], 0
+        for block in region.split("}"):
+            selector, sep, _ = block.partition("{")
+            if not sep:
+                continue
+            region_rules += 1
+            region_selectors.extend(
+                part.strip() for part in selector.split(",") if part.strip()
+            )
+        self.assertGreater(region_rules, 0, "workbench styles are missing")
+        for selector in region_selectors:
+            self.assertTrue(
+                selector.startswith("body.agent-shell-workbench"),
+                f"unscoped workbench selector: {selector}",
+            )
 
     def test_hosted_credit_explainer_auto_dismisses_after_thirty_seconds(self):
         trial = web.TRIAL_CHAT_HTML

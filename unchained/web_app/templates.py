@@ -21550,10 +21550,11 @@ body.agent-shell-workbench .agent-view-browserbar .policy{margin-left:auto;color
 body.agent-shell-workbench .agent-view-location{max-width:min(62vw,900px)}
 /* 2. One progress instrument instead of stacked status rows. */
 body.agent-shell-workbench .agent-shell-trace{min-height:28px;padding:0 14px;gap:6px;border-bottom:1px solid var(--wb-hair);background:transparent}
-/* 3. One focal point per state. Idle: the conversation leads and chrome recedes. */
+/* 3. Light state emphasis over the existing data-agent-shell-phase signal. The
+   browserbar is already display:none in chat-only (task shell), so only the
+   head is receded there. */
 body.agent-shell-workbench[data-agent-shell-phase="ready"] .agent-view-browserbar{border-bottom-color:transparent}
-body.agent-shell-workbench.agent-shell-chat-only .agent-view-head,
-body.agent-shell-workbench.agent-shell-chat-only .agent-view-browserbar{border-bottom-color:transparent;background:transparent}
+body.agent-shell-workbench.agent-shell-chat-only .agent-view-head{border-bottom-color:transparent;background:transparent}
 /* Running: the stage leads and the rail reads as live instrumentation. */
 body.agent-shell-workbench[data-agent-shell-phase="planning"] .agent-shell-trace,
 body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-shell-trace,
