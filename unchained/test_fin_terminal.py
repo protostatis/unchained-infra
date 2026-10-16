@@ -171,6 +171,25 @@ class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 401)
         self.assertNotIn("Location", response.headers)
 
+    async def test_browser_navigation_with_control_bytes_falls_back_to_the_root(self):
+        # The forwarded URI is attacker-influenced past the stripped prefix;
+        # control bytes must never reach the recovered path used for `next`.
+        for hostile in (
+            "/terminal\r\n/x",
+            "/terminal\n/x",
+            "/terminal\t/x",
+            "/terminal\x7f/x",
+        ):
+            with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+                response = await fin_terminal.handle_fin_terminal_browser_auth(
+                    self._browser_navigation(uri=hostile)
+                )
+            self.assertEqual(response.status, 302)
+            self.assertEqual(
+                response.headers["Location"],
+                "https://unchainedsky.com/local?next=%2Ffin-terminal-browser%2F",
+            )
+
     async def test_browser_pending_navigation_is_not_sent_to_sign_in(self):
         pending = {"user_id": "u-pending", "email": "member@example.net", "status": "pending"}
         with patch.object(fin_terminal, "_core", return_value=self._core(pending)):

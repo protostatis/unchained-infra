@@ -46,7 +46,10 @@ the user to the terminal when they return. The path is recovered from
 `X-Forwarded-Uri`, re-attaching the public prefix Caddy strips before
 `forward_auth`. Non-navigation requests (API calls, assets, and non-`GET`
 probes) keep the explicit `401` so non-browser callers, including the
-activation smoke, are unaffected.
+activation smoke, are unaffected. Navigation intent is caller-declared
+(`Accept`/`Sec-Fetch-Mode`), so the `401` contract holds for any caller that
+does not present browser-navigation headers; this is safe because the terminal
+host re-authenticates on the redirected request.
 
 The browser terminal has its own persistent data volume, MCP service, and
 network boundary. Its MCP broker uses the reviewed 120-second idle and

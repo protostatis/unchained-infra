@@ -48,6 +48,18 @@ def _header(request, name: str) -> str:
         return ""
 
 
+def _has_control_char(value: str) -> bool:
+    """Return True if ``value`` contains an ASCII control byte.
+
+    Caddy strips only the public prefix, so the forwarded URI is otherwise
+    attacker-influenced. The value is always urlencoded before it is placed in
+    the ``Location`` header, but reject control bytes at this layer so an
+    unencoded reuse of the recovered path can never fold a header or smuggle a
+    delimiter.
+    """
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
 def _approved_user_id(auth_info) -> str:
     """Return the stable user ID for an approved account, else an empty string."""
     if not auth_info:
@@ -101,7 +113,12 @@ def _forwarded_terminal_path(request) -> str:
     terminal root) so the post-signin return lands on the requested path.
     """
     uri = _header(request, "X-Forwarded-Uri")
-    if not uri.startswith("/") or uri.startswith("//") or "\\" in uri:
+    if (
+        not uri.startswith("/")
+        or uri.startswith("//")
+        or "\\" in uri
+        or _has_control_char(uri)
+    ):
         return _TERMINAL_PUBLIC_BASE
     if not uri.startswith(_TERMINAL_PUBLIC_PREFIX):
         uri = _TERMINAL_PUBLIC_PREFIX + uri
@@ -114,6 +131,12 @@ def _is_html_navigation(request) -> bool:
     Only navigations are redirected to sign-in. API, asset, and non-GET probes
     keep their explicit ``401`` so non-browser callers (including the deployment
     smoke's ``curl`` probe, which sends ``Accept: */*``) are unaffected.
+
+    ``Accept`` and ``Sec-Fetch-Mode`` are caller-declared, so the ``401``
+    contract holds only for callers that do not present browser-navigation
+    headers: a ``GET`` that declares navigation gets the redirect. That is safe
+    because the terminal host re-authenticates on the redirected request, and a
+    caller that follows the redirect still has to sign in.
     """
     method = _header(request, "X-Forwarded-Method") or str(
         getattr(request, "method", "") or "GET"
