@@ -123,7 +123,7 @@ class RuntimeContextFilesTests(unittest.TestCase):
         # unsupported by Docker).
         self.assertIn('helper_mount="type=bind,src=$preservation_tool,', deploy)
         self.assertIn('--mount "$helper_mount"', deploy)
-        self.assertIn('tar -xf - -C /tmp/legacy', deploy)
+        self.assertIn('tar -xf - -C /tmp/legacy --no-same-owner', deploy)
         self.assertIn('--source-dir /tmp/legacy', deploy)
         self.assertNotIn("docker create --name", deploy)
         # Transcripts must never be staged on the host filesystem.

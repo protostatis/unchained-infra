@@ -845,6 +845,14 @@ print(Path(source).absolute())
             # extracts it as the web UID and merges it into the persistent
             # volume. A read-only root with a memory-backed /tmp keeps the
             # transcripts off host storage.
+            #
+            # `pipefail`, set at the top of this script, is what lets a failed
+            # `docker cp` on the left of the pipe fail the whole pipeline.
+            # `--no-same-owner` keeps extraction deterministic for the non-root
+            # web UID instead of warning on every ownership mismatch. The tmpfs
+            # size is a hard ceiling on the legacy tree: at today's ~340K it has
+            # ample headroom, and growth past it aborts the deploy rather than
+            # silently dropping transcripts, so raise it alongside large growth.
             if ! docker cp -a "$web_container:$legacy_source/." - |
                 docker run -i --rm --network none --read-only \
                     --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=512m \
@@ -854,7 +862,7 @@ print(Path(source).absolute())
                     --entrypoint /bin/sh "$web_image" -c '
 set -eu
 mkdir -p /tmp/legacy
-tar -xf - -C /tmp/legacy
+tar -xf - -C /tmp/legacy --no-same-owner
 exec python3 /tmp/preserve_hosted_conversations.py \
     --source-dir /tmp/legacy \
     --destination-dir /data/hosted-conversations
