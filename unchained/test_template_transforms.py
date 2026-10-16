@@ -441,6 +441,7 @@ globalThis.document = {
 globalThis.location = {search: ''};
 const AGENT_SHELL_DEFAULT = 'task';
 let agentShellTaskEnabled = false;
+let workbenchShellEnabled = false;
 function setAgentShellPhase() {}
 """
         checks = r"""
@@ -461,6 +462,22 @@ expect(!!group, 'chat navigation toolbar was not created');
 expect(group.children[0] === picker, 'thread picker is not first in the toolbar');
 expect(group.children[1] === newChat, 'New Chat is not second in the toolbar');
 expect(group.children[2] === history, 'History is not third in the toolbar');
+// Workbench presentation: opt-in density layer over the task shell, never a shell of its own.
+expect(!body.classList.contains('agent-shell-workbench'), 'workbench presentation enabled without the server flag');
+workbenchShellEnabled = true;
+location.search = '?provider=opencode-cli';
+initializeAgentShellExperiment();
+expect(body.classList.contains('agent-shell-workbench'), 'server flag did not enable the workbench presentation');
+expect(body.classList.contains('agent-shell-task'), 'workbench presentation dropped the task shell');
+location.search = '?provider=opencode-cli&workbench=0';
+initializeAgentShellExperiment();
+expect(!body.classList.contains('agent-shell-workbench'), '?workbench=0 rollback did not restore the task presentation');
+expect(body.classList.contains('agent-shell-task'), '?workbench=0 rollback dropped the task shell');
+location.search = '?provider=opencode-cli&shell=legacy&workbench=1';
+initializeAgentShellExperiment();
+expect(!body.classList.contains('agent-shell-workbench'), 'legacy shell must never carry the workbench presentation');
+expect(!body.classList.contains('agent-shell-task'), 'legacy override re-enabled the task shell');
+workbenchShellEnabled = false;
 """
         result = subprocess.run(
             [node],
@@ -630,6 +647,7 @@ globalThis._setActiveSlotSession = function() {};
 globalThis.addUserBubble = function() {};
 globalThis.appendText = function() {};
 let sending = false;
+let workbenchShellEnabled = false;
 """
         checks = r"""
 function expect(condition, message) { if (!condition) throw new Error(message); }

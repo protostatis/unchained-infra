@@ -9398,6 +9398,7 @@ const _TRIAL_ACTIVE_IDENTITY_KEY = 'unchained_trial_identity';
 const _LEGACY_MODEL_KEY = 'unchained_model';
 const _LEGACY_MODEL_OWNER_KEY = 'unchained_model_owner';
 const hostedWorkspaceMode = __HOSTED_WORKSPACE_MODE__;
+const workbenchShellEnabled = __WORKBENCH_SHELL_ENABLED__;
 
 function _trialModelKey(userId) {
   return userId ? _TRIAL_MODEL_STORAGE_PREFIX + encodeURIComponent(userId) : '';
@@ -21531,6 +21532,35 @@ body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-expanded #app-shell #main{inset:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important}
 }
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
+/* Agent Workbench presentation (opt-in, /workspace only).
+   A density layer over the shipped task shell, not a separate shell: it adds no
+   DOM, moves no element, and every rule is inert unless body.agent-shell-workbench
+   is present, so the flagged-off output is unchanged. */
+body.agent-shell-workbench.agent-view-open{--wb-hair:rgba(183,205,228,.10);--wb-band:rgba(6,9,13,.90)}
+/* 1. Quiet the page chrome: decorative marks that repeat a real label are noise. */
+body.agent-shell-workbench .agent-view-mark,
+body.agent-shell-workbench .agent-view-kicker,
+body.agent-shell-workbench .agent-view-browserbar .rail,
+body.agent-shell-workbench .agent-view-browserbar>span:first-child{display:none!important}
+body.agent-shell-workbench .agent-view-head{min-height:38px;padding:0 14px;gap:10px;border-bottom:1px solid var(--wb-hair);background:var(--wb-band)}
+body.agent-shell-workbench .agent-view-title strong{font-size:12px;letter-spacing:-.01em}
+body.agent-shell-workbench .agent-view-state{max-width:56%}
+body.agent-shell-workbench .agent-view-browserbar{min-height:28px;padding:0 14px;gap:0;border-bottom:1px solid var(--wb-hair);background:transparent}
+body.agent-shell-workbench .agent-view-browserbar .policy{margin-left:auto;color:#6f7d8d}
+body.agent-shell-workbench .agent-view-location{max-width:min(62vw,900px)}
+/* 2. One progress instrument instead of stacked status rows. */
+body.agent-shell-workbench .agent-shell-trace{min-height:28px;padding:0 14px;gap:6px;border-bottom:1px solid var(--wb-hair);background:transparent}
+/* 3. One focal point per state. Idle: the conversation leads and chrome recedes. */
+body.agent-shell-workbench[data-agent-shell-phase="ready"] .agent-view-browserbar{border-bottom-color:transparent}
+body.agent-shell-workbench.agent-shell-chat-only .agent-view-head,
+body.agent-shell-workbench.agent-shell-chat-only .agent-view-browserbar{border-bottom-color:transparent;background:transparent}
+/* Running: the stage leads and the rail reads as live instrumentation. */
+body.agent-shell-workbench[data-agent-shell-phase="planning"] .agent-shell-trace,
+body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-shell-trace,
+body.agent-shell-workbench[data-agent-shell-phase="writing"] .agent-shell-trace{background:rgba(110,231,161,.045)}
+body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-view-state{color:#bff3d0}
+/* The dock is secondary chrome while the stage is live. */
+body.agent-shell-workbench.agent-view-open #main #topbar{background:transparent!important;border-bottom-color:var(--wb-hair)!important}
 </style>"""
 
 _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1">
@@ -21767,6 +21797,7 @@ let agentViewFallbackPaintRaf = 0;
 let agentViewFallbackPaintGeneration = 0;
 const AGENT_SHELL_DEFAULT = 'task';
 let agentShellTaskEnabled = false;
+let agentShellWorkbenchEnabled = false;
 let agentShellBrowserReady = false;
 let agentShellChatReady = false;
 let agentShellTurnActive = false;
@@ -21779,6 +21810,16 @@ let agentViewReturnFocus = null;
 function agentShellModeFromLocation() {
   const value = new URLSearchParams(location.search || '').get('shell');
   return value === 'task' || value === 'legacy' ? value : AGENT_SHELL_DEFAULT;
+}
+
+function agentShellWorkbenchEnabledFromLocation() {
+  // The server flag decides whether the workbench presentation is enabled for
+  // this page at all; ?workbench=0 is the field rollback that restores the
+  // shipped task presentation for the session without a deploy. The URL cannot
+  // turn the workbench on, so /trial can never reach it.
+  const value = (new URLSearchParams(location.search || '').get('workbench') || '').toLowerCase();
+  if (value === '0' || value === 'false' || value === 'off') return false;
+  return workbenchShellEnabled;
 }
 
 function setAgentShellConnectionLayout(browserAvailable) {
@@ -21874,6 +21915,10 @@ function setAgentShellPhase(phase, label) {
 function initializeAgentShellExperiment() {
   agentShellTaskEnabled = agentShellModeFromLocation() === 'task';
   document.body.classList.toggle('agent-shell-task', agentShellTaskEnabled);
+  // The workbench is a presentation variant of the task shell, never a separate
+  // shell: it reuses every task-shell runtime, DOM id, and socket unchanged.
+  agentShellWorkbenchEnabled = agentShellTaskEnabled && agentShellWorkbenchEnabledFromLocation();
+  document.body.classList.toggle('agent-shell-workbench', agentShellWorkbenchEnabled);
   if (agentShellTaskEnabled) {
     arrangeAgentChatToolbar();
     setAgentShellPhase('ready', 'Ready for a task');

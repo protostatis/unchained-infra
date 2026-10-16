@@ -422,6 +422,61 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
         self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
 
+    def test_workbench_presentation_is_opt_in_and_workspace_only(self):
+        import types
+
+        from template_utils import inject_google_client_id
+        from web_app import templates
+        from web_app.handlers import pages as pages_module
+
+        self.assertIn(
+            "const workbenchShellEnabled = __WORKBENCH_SHELL_ENABLED__;",
+            web.TRIAL_CHAT_HTML,
+        )
+
+        def render(workspace, flag):
+            core = types.SimpleNamespace(
+                TRIAL_CHAT_HTML=web.TRIAL_CHAT_HTML,
+                WORKBENCH_SHELL_ENABLED=flag,
+                GOOGLE_CLIENT_ID="",
+                inject_google_client_id=inject_google_client_id,
+            )
+            return pages_module._render_hosted_chat_page(core, workspace=workspace)
+
+        self.assertIn("const workbenchShellEnabled = true;", render(True, True))
+        self.assertIn("const workbenchShellEnabled = false;", render(True, False))
+        # /workspace is the only surface that can switch the presentation on.
+        self.assertIn("const workbenchShellEnabled = false;", render(False, True))
+
+        for workspace in (False, True):
+            for flag in (False, True):
+                self.assertNotIn("__WORKBENCH_SHELL_ENABLED__", render(workspace, flag))
+
+        # Flipping the flag must change nothing but that one boolean.
+        enabled = render(True, True).replace("const workbenchShellEnabled = true;", "BOOL")
+        disabled = render(True, False).replace("const workbenchShellEnabled = false;", "BOOL")
+        self.assertEqual(enabled, disabled)
+
+        # Fail closed when the server does not export the flag at all.
+        bare = types.SimpleNamespace(
+            TRIAL_CHAT_HTML=web.TRIAL_CHAT_HTML,
+            GOOGLE_CLIENT_ID="",
+            inject_google_client_id=inject_google_client_id,
+        )
+        self.assertIn(
+            "const workbenchShellEnabled = false;",
+            pages_module._render_hosted_chat_page(bare, workspace=True),
+        )
+
+        # Every workbench rule must be scoped to the body class, so the shipped
+        # shells are untouched whenever the presentation is off.
+        style = re.sub(r"/\*.*?\*/", "", templates._AGENT_VIEW_STYLE, flags=re.DOTALL)
+        self.assertEqual(
+            style.count("agent-shell-workbench"),
+            style.count("body.agent-shell-workbench"),
+            "workbench styles must always be scoped to body.agent-shell-workbench",
+        )
+
     def test_hosted_credit_explainer_auto_dismisses_after_thirty_seconds(self):
         trial = web.TRIAL_CHAT_HTML
 
@@ -1590,7 +1645,9 @@ class TestWebTemplateContracts(unittest.TestCase):
             html = web.TRIAL_CHAT_HTML.replace(
                 "__HOSTED_PAGE_TITLE__",
                 "Unchained Workspace" if workspace else "Unchained Trial",
-            ).replace("__HOSTED_WORKSPACE_MODE__", str(workspace).lower())
+            ).replace("__HOSTED_WORKSPACE_MODE__", str(workspace).lower()).replace(
+                "__WORKBENCH_SHELL_ENABLED__", str(workspace).lower()
+            )
             scripts = [
                 body
                 for attrs, body in re.findall(
@@ -1686,7 +1743,9 @@ class TestWebTemplateContracts(unittest.TestCase):
 
 class TestTrialModelStorageIsolation(unittest.TestCase):
     def _run_storage_runtime(self, assertions: str) -> None:
-        trial_html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "false")
+        trial_html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "false").replace(
+            "__WORKBENCH_SHELL_ENABLED__", "false"
+        )
         match = re.search(
             r"const _TRIAL_MODEL_STORAGE_PREFIX = .*?(?=\nfunction _nextAfterLogin\()",
             trial_html,
