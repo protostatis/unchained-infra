@@ -16,6 +16,11 @@ from web_app.routes import ROUTE_SPECS
 
 class _Request:
     headers: dict[str, str] = {}
+    method = "GET"
+
+    def __init__(self, headers=None, method="GET"):
+        self.headers = dict(headers or {})
+        self.method = method
 
 
 class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
@@ -106,6 +111,94 @@ class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(fin_terminal, "_core", return_value=self._core(first)):
             pi_response = await fin_terminal.handle_fin_terminal_auth(_Request())
         self.assertEqual(pi_response.status, 403)
+
+    def _browser_navigation(self, *, uri="/terminal/", method="GET"):
+        """Build a forwarded top-level document navigation as Caddy sends it."""
+        return _Request(
+            headers={
+                "X-Forwarded-Uri": uri,
+                "X-Forwarded-Method": method,
+                "X-Forwarded-Host": "unbrowser.unchainedsky.com",
+                "X-Forwarded-Proto": "https",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            method=method,
+        )
+
+    async def test_browser_signed_out_navigation_redirects_to_sign_in(self):
+        with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+            response = await fin_terminal.handle_fin_terminal_browser_auth(
+                self._browser_navigation(uri="/terminal/")
+            )
+
+        self.assertEqual(response.status, 302)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(
+            response.headers["Location"],
+            "https://unchainedsky.com/local?next=%2Ffin-terminal-browser%2Fterminal%2F",
+        )
+
+    async def test_browser_signed_out_navigation_returns_to_the_requested_path(self):
+        with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+            response = await fin_terminal.handle_fin_terminal_browser_auth(
+                self._browser_navigation(uri="/fin-terminal-browser/terminal/?tab=watch")
+            )
+
+        location = response.headers["Location"]
+        self.assertTrue(location.startswith("https://unchainedsky.com/local?next="))
+        self.assertIn("%2Ffin-terminal-browser%2Fterminal%2F%3Ftab%3Dwatch", location)
+
+    async def test_browser_signed_out_non_navigation_keeps_the_401_contract(self):
+        for headers in (
+            {"X-Forwarded-Uri": "/terminal/", "Accept": "*/*"},
+            {"X-Forwarded-Uri": "/api/browser/v1/session", "Accept": "application/json"},
+            {},
+        ):
+            with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+                response = await fin_terminal.handle_fin_terminal_browser_auth(
+                    _Request(headers)
+                )
+            self.assertEqual(response.status, 401)
+            self.assertNotIn("Location", response.headers)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    async def test_browser_signed_out_non_get_navigation_keeps_the_401_contract(self):
+        with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+            response = await fin_terminal.handle_fin_terminal_browser_auth(
+                self._browser_navigation(uri="/terminal/", method="POST")
+            )
+
+        self.assertEqual(response.status, 401)
+        self.assertNotIn("Location", response.headers)
+
+    async def test_browser_navigation_with_control_bytes_falls_back_to_the_root(self):
+        # The forwarded URI is attacker-influenced past the stripped prefix;
+        # control bytes must never reach the recovered path used for `next`.
+        for hostile in (
+            "/terminal\r\n/x",
+            "/terminal\n/x",
+            "/terminal\t/x",
+            "/terminal\x7f/x",
+        ):
+            with patch.object(fin_terminal, "_core", return_value=self._core(None)):
+                response = await fin_terminal.handle_fin_terminal_browser_auth(
+                    self._browser_navigation(uri=hostile)
+                )
+            self.assertEqual(response.status, 302)
+            self.assertEqual(
+                response.headers["Location"],
+                "https://unchainedsky.com/local?next=%2Ffin-terminal-browser%2F",
+            )
+
+    async def test_browser_pending_navigation_is_not_sent_to_sign_in(self):
+        pending = {"user_id": "u-pending", "email": "member@example.net", "status": "pending"}
+        with patch.object(fin_terminal, "_core", return_value=self._core(pending)):
+            response = await fin_terminal.handle_fin_terminal_browser_auth(
+                self._browser_navigation(uri="/terminal/")
+            )
+
+        self.assertEqual(response.status, 403)
+        self.assertNotIn("Location", response.headers)
 
 
 class CaddyConfigPreflightTests(unittest.TestCase):
@@ -496,6 +589,35 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.assertIn(f"request_header -{header}", route)
         self.assertGreaterEqual(route.count("request_header -Cookie"), 3)
         self.assertNotIn("reverse_proxy fin-terminal-workspace-control", route)
+
+    def test_browser_signin_return_alias_pins_the_canonical_host(self):
+        # The signed-out sign-in return path is relative (`/fin-terminal-browser/...`),
+        # so the apex must hand it back to the canonical Unbrowser host instead of
+        # falling through to the marketing catch-all.
+        primary = self.caddy.split("unbrowser.unchainedsky.com {", 1)[0]
+        self.assertIn(
+            "@fin_terminal_browser_alias path /fin-terminal-browser /fin-terminal-browser/*",
+            primary,
+        )
+        self.assertIn(
+            "redir @fin_terminal_browser_alias https://unbrowser.unchainedsky.com{uri} 308",
+            primary,
+        )
+
+    def test_browser_signin_return_prefix_matches_the_stripped_prefix(self):
+        # The auth handler rebuilds the public path from the forwarded URI, so
+        # its prefix must match the Caddy strip_prefix exactly.
+        subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        self.assertIn(
+            f"uri strip_prefix {fin_terminal._TERMINAL_PUBLIC_PREFIX}",
+            subdomain,
+        )
+
+    def test_browser_activation_still_requires_a_401_for_non_browser_probes(self):
+        # Redirect only browser navigations; the deployment smoke curls the
+        # terminal with `Accept: */*` and requires an explicit 401.
+        self.assertIn("wait_for_unauthenticated_workspace_status", self.browser_activation)
+        self.assertIn('[[ "$status" == "401" ]]', self.browser_activation)
 
     def test_browser_activation_requires_both_auth_smoke_and_host_revision(self):
         self.assertIn("200)", self.browser_activation)

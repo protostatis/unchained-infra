@@ -79,6 +79,13 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	@legacy_unbrowser_page path /unbrowser /unbrowser/
 	redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308
 
+	# The browser-owned terminal lives only on the dedicated Unbrowser host. The
+	# apex keeps no terminal surface, but the signed-out sign-in return path is
+	# `/fin-terminal-browser/...`, so redirect it to the canonical host instead
+	# of falling through to the marketing catch-all.
+	@fin_terminal_browser_alias path /fin-terminal-browser /fin-terminal-browser/*
+	redir @fin_terminal_browser_alias https://unbrowser.unchainedsky.com{uri} 308
+
 	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server
 	@mcp_sse {
 		method GET
@@ -264,6 +271,9 @@ unbrowser.unchainedsky.com {
 		expression `{$FIN_TERMINAL_BROWSER_ENABLED:false}`
 	}
 	handle @fin_terminal_browser {
+		# The prefix is stripped before forward_auth runs, so the browser-auth
+		# endpoint recovers the public path from X-Forwarded-Uri to build its
+		# signed-out sign-in return target.
 		uri strip_prefix /fin-terminal-browser
 		route {
 			# Never trust identity or service-auth headers supplied by a client.
