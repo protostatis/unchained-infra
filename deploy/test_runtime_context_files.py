@@ -94,15 +94,13 @@ class RuntimeContextFilesTests(unittest.TestCase):
         deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
         preserve = deploy.index('preservation_tool="$remote_dir/deploy/preserve_hosted_conversations.py"')
         stop = deploy.index('docker compose stop --timeout 30 web', preserve)
-        create = deploy.index('docker create --name "$migration_name"', stop)
         snapshot = deploy.index(
-            'docker cp "$web_container:$legacy_source/."', create
+            'docker cp -a "$web_container:$legacy_source/." -', stop
         )
-        run = deploy.index('docker start -a "$migration_name"', snapshot)
+        run = deploy.index('docker run -i --rm --network none --read-only', snapshot)
         recreate = deploy.index('docker compose up -d --no-deps --no-build --force-recreate "$service"')
         self.assertLess(preserve, stop)
-        self.assertLess(stop, create)
-        self.assertLess(create, snapshot)
+        self.assertLess(stop, snapshot)
         self.assertLess(snapshot, run)
         self.assertLess(run, recreate)
         self.assertIn('if [[ ! "$web_container" =~ ^[0-9a-f]{12,64}$ ]]; then', deploy)
@@ -119,6 +117,15 @@ class RuntimeContextFilesTests(unittest.TestCase):
         # Recovery keeps compose's lifecycle bookkeeping coherent.
         self.assertIn('docker compose start web', deploy)
         self.assertNotIn('docker start "$web_container"', deploy)
+        # The stopped tree is streamed through a tar pipe: extraction runs as
+        # the web UID inside the helper, so there is no container-to-container
+        # copy and no ownership-preserving copy back into a container (both are
+        # unsupported by Docker).
+        self.assertIn('helper_mount="type=bind,src=$preservation_tool,', deploy)
+        self.assertIn('--mount "$helper_mount"', deploy)
+        self.assertIn('tar -xf - -C /tmp/legacy --no-same-owner', deploy)
+        self.assertIn('--source-dir /tmp/legacy', deploy)
+        self.assertNotIn("docker create --name", deploy)
         # Transcripts must never be staged on the host filesystem.
         self.assertNotIn('mktemp -d /tmp/hosted-conversation-migration', deploy)
         self.assertNotIn('chmod -R a+rX', deploy)
