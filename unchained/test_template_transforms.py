@@ -462,18 +462,42 @@ expect(!!group, 'chat navigation toolbar was not created');
 expect(group.children[0] === picker, 'thread picker is not first in the toolbar');
 expect(group.children[1] === newChat, 'New Chat is not second in the toolbar');
 expect(group.children[2] === history, 'History is not third in the toolbar');
-// Workbench presentation: opt-in density layer over the task shell, never a shell of its own.
+// Workbench presentation (DESKTOP_UI_SPEC.md §3/§3a): an opt-in presentation of
+// the task shell, never a shell of its own.
 expect(!body.classList.contains('agent-shell-workbench'), 'workbench presentation enabled without the server flag');
+location.search = '?provider=opencode-cli&shell=workbench';
+initializeAgentShellExperiment();
+expect(!body.classList.contains('agent-shell-workbench'), '?shell=workbench bypassed the server flag');
+expect(body.classList.contains('agent-shell-task'), 'flagged-off ?shell=workbench did not fall back to the task shell');
+
 workbenchShellEnabled = true;
+location.search = '?provider=opencode-cli&shell=workbench';
+initializeAgentShellExperiment();
+expect(body.classList.contains('agent-shell-workbench'), 'server flag + ?shell=workbench did not enable the workbench');
+// §3a: the workbench is a task-family mode. Every shared lifecycle gate reads
+// agentShellTaskEnabled, so it must stay true or the page renders and never connects.
+expect(agentShellTaskEnabled, 'workbench disabled agentShellTaskEnabled; every lifecycle gate would go dark');
+expect(body.classList.contains('agent-shell-task'), 'workbench dropped the base task shell class');
+expect(!!topbar.children.find(child => child.id === 'agent-chat-primary-tools'), 'workbench did not run the task-shell arrangement');
+
+// Dropping the param is the documented rollback (spec §9); there is no separate
+// ?workbench= knob any more.
 location.search = '?provider=opencode-cli';
 initializeAgentShellExperiment();
-expect(body.classList.contains('agent-shell-workbench'), 'server flag did not enable the workbench presentation');
-expect(body.classList.contains('agent-shell-task'), 'workbench presentation dropped the task shell');
-location.search = '?provider=opencode-cli&workbench=0';
+expect(!body.classList.contains('agent-shell-workbench'), 'dropping ?shell=workbench did not restore the task presentation');
+expect(body.classList.contains('agent-shell-task'), 'dropping ?shell=workbench dropped the task shell');
+location.search = '?provider=opencode-cli&shell=task';
 initializeAgentShellExperiment();
-expect(!body.classList.contains('agent-shell-workbench'), '?workbench=0 rollback did not restore the task presentation');
-expect(body.classList.contains('agent-shell-task'), '?workbench=0 rollback dropped the task shell');
-location.search = '?provider=opencode-cli&shell=legacy&workbench=1';
+expect(!body.classList.contains('agent-shell-workbench'), '?shell=task did not restore the task presentation');
+
+// An unknown shell value falls back to the default, never to the workbench.
+location.search = '?provider=opencode-cli&shell=workbenchX';
+initializeAgentShellExperiment();
+expect(!body.classList.contains('agent-shell-workbench'), 'unknown shell value enabled the workbench presentation');
+expect(body.classList.contains('agent-shell-task'), 'unknown shell value broke the default task shell');
+
+// legacy wins outright.
+location.search = '?provider=opencode-cli&shell=legacy';
 initializeAgentShellExperiment();
 expect(!body.classList.contains('agent-shell-workbench'), 'legacy shell must never carry the workbench presentation');
 expect(!body.classList.contains('agent-shell-task'), 'legacy override re-enabled the task shell');

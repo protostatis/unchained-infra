@@ -1629,6 +1629,7 @@ _WASMBROWSER_ALLOWED = {
     "engine.js", "dom.js", "bridge.js", "shims.js", "loader.js", "intel.js",
 }
 _SIGNED_CHAT_RECONNECT_ASSET = Path(__file__).with_name("web_app") / "static" / "signed-chat-reconnect.js"
+_WORKBENCH_ASSET = Path(__file__).with_name("web_app") / "static" / "workbench.css"
 
 
 async def handle_signed_chat_reconnect_asset(request: web.Request) -> web.Response:
@@ -1641,6 +1642,29 @@ async def handle_signed_chat_reconnect_asset(request: web.Request) -> web.Respon
     return web.Response(
         text=body,
         content_type="application/javascript",
+        headers={
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def handle_workbench_asset(request: web.Request) -> web.Response:
+    """Serve the Agent Workbench stylesheet.
+
+    Presentation only: the file is a static CSS asset with no server state and
+    no secrets. It is requested only by pages the server already decided should
+    wear the workbench presentation, but the route itself is deliberately
+    public and unauthenticated like the other static assets — conditional
+    inclusion is a presentation decision, not an authorization boundary.
+    Returns 404 when the feature has not been shipped to this host.
+    """
+    del request
+    if not _WORKBENCH_ASSET.is_file():
+        return web.Response(status=404)
+    return web.Response(
+        text=_WORKBENCH_ASSET.read_text(encoding="utf-8"),
+        content_type="text/css",
         headers={
             "Cache-Control": "public, max-age=0, must-revalidate",
             "X-Content-Type-Options": "nosniff",

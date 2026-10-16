@@ -59,6 +59,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/web/static/signed-chat-reconnect.js"),
+            ("GET", "/web/static/workbench.css"),
             ("GET", "/internal/health"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
@@ -160,6 +161,27 @@ class TestWebRouteContracts(unittest.TestCase):
         response = asyncio.run(web.handle_internal_health(None))
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.text), {"status": "ok"})
+
+    def test_workbench_asset_is_served_as_css_and_404s_when_absent(self):
+        response = asyncio.run(web.handle_workbench_asset(None))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, "text/css")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        # The served body is the shipped asset, not an inline copy.
+        served = response.text
+        self.assertIn("body.agent-shell-workbench", served)
+        self.assertEqual(
+            served,
+            (
+                Path(web.__file__).with_name("web_app")
+                / "static"
+                / "workbench.css"
+            ).read_text(encoding="utf-8"),
+        )
+
+        with patch.object(web, "_WORKBENCH_ASSET", Path("/nonexistent/workbench.css")):
+            missing = asyncio.run(web.handle_workbench_asset(None))
+        self.assertEqual(missing.status, 404)
 
 
 class TestHostedWorkspaceRouting(unittest.IsolatedAsyncioTestCase):
@@ -452,10 +474,14 @@ class TestWebTemplateContracts(unittest.TestCase):
             for flag in (False, True):
                 self.assertNotIn("__WORKBENCH_SHELL_ENABLED__", render(workspace, flag))
 
-        # Flipping the flag must change nothing but that one boolean.
+        # Flipping the flag must change nothing but that one boolean and the
+        # stylesheet reference (the workbench layer ships as a static asset).
         enabled = render(True, True).replace("const workbenchShellEnabled = true;", "BOOL")
         disabled = render(True, False).replace("const workbenchShellEnabled = false;", "BOOL")
-        self.assertEqual(enabled, disabled)
+        ref = '<link rel="stylesheet" href="/web/static/workbench.css">'
+        self.assertIn(ref, enabled)
+        self.assertNotIn(ref, disabled)
+        self.assertEqual(enabled.replace(ref + "\n", "", 1), disabled)
 
         # Fail closed when the server does not export the flag at all.
         bare = types.SimpleNamespace(
@@ -468,18 +494,24 @@ class TestWebTemplateContracts(unittest.TestCase):
             pages_module._render_hosted_chat_page(bare, workspace=True),
         )
 
-        # The workbench layer is a contiguous tail section of the Agent View
-        # stylesheet. Every rule inside that section must be scoped to the body
-        # class, so the shipped shells are untouched whenever the presentation is
-        # off. Checked per selector across the whole section, not by substring.
+        # The workbench layer ships as a static asset, never as an inline block in
+        # the shared Agent View stylesheet: every rule must be scoped to the body
+        # class so a stray request cannot restyle a shell that is not wearing it.
+        # Checked per selector, not by substring.
         raw_style = templates._AGENT_VIEW_STYLE
-        marker = "/* Agent Workbench presentation"
-        self.assertEqual(
-            raw_style.count(marker), 1, "workbench style section marker must be unique"
+        self.assertNotIn(
+            "body.agent-shell-workbench",
+            raw_style,
+            "the workbench layer is back inside the shared stylesheet",
         )
         region = re.sub(
-            r"/\*.*?\*/", "", raw_style[raw_style.index(marker):], flags=re.DOTALL
+            r"/\*.*?\*/", "", templates._WORKBENCH_ASSET_REFS, flags=re.DOTALL
         )
+        self.assertNotIn("{", region, "the asset reference must be markup, not CSS")
+        workbench_css = (
+            Path(templates.__file__).with_name("static") / "workbench.css"
+        ).read_text(encoding="utf-8")
+        region = re.sub(r"/\*.*?\*/", "", workbench_css, flags=re.DOTALL)
         region_selectors, region_rules = [], 0
         for block in region.split("}"):
             selector, sep, _ = block.partition("{")

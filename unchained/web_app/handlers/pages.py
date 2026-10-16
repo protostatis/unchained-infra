@@ -20,6 +20,8 @@ from web_app.templates import (
     CHROME_TAX_HTML,
     FIRST_LOOK_PREVIEW_HTML,
     UNBROWSER_PAGE_HTML,
+    _WORKBENCH_ASSET_REFS,
+    _WORKBENCH_ASSET_SLOT,
 )
 
 
@@ -486,6 +488,12 @@ def _render_hosted_chat_page(core, *, workspace: bool) -> str:
     )
     html = html.replace(
         "__WORKBENCH_SHELL_ENABLED__", "true" if workbench_enabled else "false"
+    )
+    # The workbench stylesheet is requested only when the presentation is on, so
+    # the shipped shells carry neither the asset reference nor the rules.
+    html = html.replace(
+        _WORKBENCH_ASSET_SLOT,
+        _WORKBENCH_ASSET_REFS if workbench_enabled else "",
     )
     return core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
 

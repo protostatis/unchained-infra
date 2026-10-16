@@ -21532,36 +21532,6 @@ body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-expanded #app-shell #main{inset:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important}
 }
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
-/* Agent Workbench presentation (opt-in, /workspace only).
-   A density layer over the shipped task shell, not a separate shell: it adds no
-   DOM, moves no element, and every rule is inert unless body.agent-shell-workbench
-   is present, so the flagged-off output is unchanged. */
-body.agent-shell-workbench.agent-view-open{--wb-hair:rgba(183,205,228,.10);--wb-band:rgba(6,9,13,.90)}
-/* 1. Quiet the page chrome: decorative marks that repeat a real label are noise. */
-body.agent-shell-workbench .agent-view-mark,
-body.agent-shell-workbench .agent-view-kicker,
-body.agent-shell-workbench .agent-view-browserbar .rail,
-body.agent-shell-workbench .agent-view-browserbar>span:first-child{display:none!important}
-body.agent-shell-workbench .agent-view-head{min-height:38px;padding:0 14px;gap:10px;border-bottom:1px solid var(--wb-hair);background:var(--wb-band)}
-body.agent-shell-workbench .agent-view-title strong{font-size:12px;letter-spacing:-.01em}
-body.agent-shell-workbench .agent-view-state{max-width:56%}
-body.agent-shell-workbench .agent-view-browserbar{min-height:28px;padding:0 14px;gap:0;border-bottom:1px solid var(--wb-hair);background:transparent}
-body.agent-shell-workbench .agent-view-browserbar .policy{margin-left:auto;color:#6f7d8d}
-body.agent-shell-workbench .agent-view-location{max-width:min(62vw,900px)}
-/* 2. One progress instrument instead of stacked status rows. */
-body.agent-shell-workbench .agent-shell-trace{min-height:28px;padding:0 14px;gap:6px;border-bottom:1px solid var(--wb-hair);background:transparent}
-/* 3. Light state emphasis over the existing data-agent-shell-phase signal. The
-   browserbar is already display:none in chat-only (task shell), so only the
-   head is receded there. */
-body.agent-shell-workbench[data-agent-shell-phase="ready"] .agent-view-browserbar{border-bottom-color:transparent}
-body.agent-shell-workbench.agent-shell-chat-only .agent-view-head{border-bottom-color:transparent;background:transparent}
-/* Running: the stage leads and the rail reads as live instrumentation. */
-body.agent-shell-workbench[data-agent-shell-phase="planning"] .agent-shell-trace,
-body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-shell-trace,
-body.agent-shell-workbench[data-agent-shell-phase="writing"] .agent-shell-trace{background:rgba(110,231,161,.045)}
-body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-view-state{color:#bff3d0}
-/* The dock is secondary chrome while the stage is live. */
-body.agent-shell-workbench.agent-view-open #main #topbar{background:transparent!important;border-bottom-color:var(--wb-hair)!important}
 </style>"""
 
 _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1">
@@ -21810,17 +21780,18 @@ let agentViewReturnFocus = null;
 
 function agentShellModeFromLocation() {
   const value = new URLSearchParams(location.search || '').get('shell');
-  return value === 'task' || value === 'legacy' ? value : AGENT_SHELL_DEFAULT;
+  return value === 'task' || value === 'legacy' || value === 'workbench'
+    ? value
+    : AGENT_SHELL_DEFAULT;
 }
 
 function agentShellWorkbenchEnabledFromLocation() {
-  // The server flag decides whether the workbench presentation is enabled for
-  // this page at all; ?workbench=0 is the field rollback that restores the
-  // shipped task presentation for the session without a deploy. The URL cannot
-  // turn the workbench on, so /trial can never reach it.
-  const value = (new URLSearchParams(location.search || '').get('workbench') || '').toLowerCase();
-  if (value === '0' || value === 'false' || value === 'off') return false;
-  return workbenchShellEnabled;
+  // The server flag is authoritative and decides whether this page may wear the
+  // workbench presentation at all, so /trial and any un-flagged deploy fall back
+  // to the shipped task presentation. `?shell=workbench` is the explicit opt-in
+  // and, like the other shell values, cannot enable anything the server has not
+  // already allowed.
+  return agentShellModeFromLocation() === 'workbench' && workbenchShellEnabled;
 }
 
 function setAgentShellConnectionLayout(browserAvailable) {
@@ -21914,10 +21885,14 @@ function setAgentShellPhase(phase, label) {
 }
 
 function initializeAgentShellExperiment() {
-  agentShellTaskEnabled = agentShellModeFromLocation() === 'task';
+  const mode = agentShellModeFromLocation();
+  // 'workbench' is a task-family mode, not a third shell. It reuses every
+  // task-shell runtime, DOM id and socket, and only layers the workbench
+  // presentation on top. Making it a mode of its own would leave every
+  // `agentShellTaskEnabled` gate below dark: the page would render and never
+  // connect. See DESKTOP_UI_SPEC.md §3a.
+  agentShellTaskEnabled = mode === 'task' || mode === 'workbench';
   document.body.classList.toggle('agent-shell-task', agentShellTaskEnabled);
-  // The workbench is a presentation variant of the task shell, never a separate
-  // shell: it reuses every task-shell runtime, DOM id, and socket unchanged.
   agentShellWorkbenchEnabled = agentShellTaskEnabled && agentShellWorkbenchEnabledFromLocation();
   document.body.classList.toggle('agent-shell-workbench', agentShellWorkbenchEnabled);
   if (agentShellTaskEnabled) {
@@ -24085,7 +24060,47 @@ def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
     )
 
 
+_WORKBENCH_ASSET_SLOT = "__WORKBENCH_ASSET_REFS__"
+
+# Only the stylesheet is split out. The activation seam stays inline in
+# `_AGENT_VIEW_JS` because it must be defined before the agent-view runtime
+# initialises at load: an external script would either have to block rendering
+# in <head> or arrive too late, and a failed request would break the whole
+# shell rather than just its styling. Workbench behaviour JS, once it exists,
+# can be added as a deferred script here safely.
+_WORKBENCH_ASSET_REFS = '<link rel="stylesheet" href="/web/static/workbench.css">\n'
+
+
+def _inject_workbench_asset_slot(html: str, *, template_name: str) -> str:
+    """Reserve the head position where the workbench stylesheet is referenced.
+
+    The workbench presentation ships as a static asset, but whether to request
+    it at all is a server decision: the enabled flag is resolved per request and
+    only ever true for the funded `/workspace` page. `_render_hosted_chat_page`
+    is the single funnel for this template, so the slot resolves to the empty
+    string for `/trial` and for every other shell — those pages never request
+    the asset and never see a workbench rule.
+
+    Keeping the slot (rather than the reference) in the template means the
+    shipped shells carry one inert token that is always substituted away.
+    """
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</head>",
+                _WORKBENCH_ASSET_SLOT + "</head>",
+                "workbench asset slot injection",
+            ),
+        ),
+        template_name=template_name,
+    )
+
+
 TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML, include_sidebar=False)
+TRIAL_CHAT_HTML = _inject_workbench_asset_slot(
+    TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML workbench asset slot"
+)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)

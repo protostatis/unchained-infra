@@ -1,0 +1,39 @@
+/* Agent Workbench presentation (opt-in; /workspace only).
+   Served only when the workbench is enabled server-side
+   (UNCHAINED_WORKBENCH_SHELL + ?shell=workbench), so this file is not even
+   requested by the shipped task/legacy shells.
+
+   A density layer over the shipped task shell, not a separate shell: it adds
+   no DOM, moves no element, and every rule is additionally scoped to
+   body.agent-shell-workbench, so a stray request cannot restyle a shell that
+   is not wearing that class. */
+/* Agent Workbench presentation (opt-in, /workspace only).
+   A density layer over the shipped task shell, not a separate shell: it adds no
+   DOM, moves no element, and every rule is inert unless body.agent-shell-workbench
+   is present, so the flagged-off output is unchanged. */
+body.agent-shell-workbench.agent-view-open{--wb-hair:rgba(183,205,228,.10);--wb-band:rgba(6,9,13,.90)}
+/* 1. Quiet the page chrome: decorative marks that repeat a real label are noise. */
+body.agent-shell-workbench .agent-view-mark,
+body.agent-shell-workbench .agent-view-kicker,
+body.agent-shell-workbench .agent-view-browserbar .rail,
+body.agent-shell-workbench .agent-view-browserbar>span:first-child{display:none!important}
+body.agent-shell-workbench .agent-view-head{min-height:38px;padding:0 14px;gap:10px;border-bottom:1px solid var(--wb-hair);background:var(--wb-band)}
+body.agent-shell-workbench .agent-view-title strong{font-size:12px;letter-spacing:-.01em}
+body.agent-shell-workbench .agent-view-state{max-width:56%}
+body.agent-shell-workbench .agent-view-browserbar{min-height:28px;padding:0 14px;gap:0;border-bottom:1px solid var(--wb-hair);background:transparent}
+body.agent-shell-workbench .agent-view-browserbar .policy{margin-left:auto;color:#6f7d8d}
+body.agent-shell-workbench .agent-view-location{max-width:min(62vw,900px)}
+/* 2. One progress instrument instead of stacked status rows. */
+body.agent-shell-workbench .agent-shell-trace{min-height:28px;padding:0 14px;gap:6px;border-bottom:1px solid var(--wb-hair);background:transparent}
+/* 3. Light state emphasis over the existing data-agent-shell-phase signal. The
+   browserbar is already display:none in chat-only (task shell), so only the
+   head is receded there. */
+body.agent-shell-workbench[data-agent-shell-phase="ready"] .agent-view-browserbar{border-bottom-color:transparent}
+body.agent-shell-workbench.agent-shell-chat-only .agent-view-head{border-bottom-color:transparent;background:transparent}
+/* Running: the stage leads and the rail reads as live instrumentation. */
+body.agent-shell-workbench[data-agent-shell-phase="planning"] .agent-shell-trace,
+body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-shell-trace,
+body.agent-shell-workbench[data-agent-shell-phase="writing"] .agent-shell-trace{background:rgba(110,231,161,.045)}
+body.agent-shell-workbench[data-agent-shell-phase="browsing"] .agent-view-state{color:#bff3d0}
+/* The dock is secondary chrome while the stage is live. */
+body.agent-shell-workbench.agent-view-open #main #topbar{background:transparent!important;border-bottom-color:var(--wb-hair)!important}
