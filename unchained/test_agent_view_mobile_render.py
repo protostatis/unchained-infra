@@ -39,6 +39,14 @@ _IPHONE_16_PRO_MAX = {
     "screenHeight": 956,
 }
 _CDP_ORIGIN = "http://127.0.0.1"
+_DESKTOP = {
+    "width": 1512,
+    "height": 945,
+    "deviceScaleFactor": 1,
+    "mobile": False,
+    "screenWidth": 1512,
+    "screenHeight": 945,
+}
 
 
 def _chrome_binary() -> str | None:
@@ -64,7 +72,7 @@ def _chrome_stderr_tail(path: Path, *, max_chars: int = 8_000) -> str:
         return ""
 
 
-def _render_harness_html() -> str:
+def _render_harness_html(*, workbench_enabled: bool = False) -> str:
     from web_app.templates import _AGENT_VIEW_JS, _AGENT_VIEW_PANEL, _AGENT_VIEW_STYLE
 
     runtime = r"""
@@ -158,6 +166,9 @@ function appendText() {}
 function updateAgentStatusUI() {}
 let sessionId = 's-mobile-render-test';
 let sending = false;
+// The assembled template declares this in the page script that hosts the Agent
+// View runtime, so a standalone harness must mirror it too.
+let workbenchShellEnabled = __WORKBENCH_SHELL_ENABLED__;
 </script>
 """
     boot = "<script>openAgentView();</script>"
@@ -166,7 +177,9 @@ let sending = false;
         "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
         + _AGENT_VIEW_STYLE
         + "</head><body>"
-        + runtime
+        + runtime.replace(
+            "__WORKBENCH_SHELL_ENABLED__", "true" if workbench_enabled else "false"
+        )
         + _AGENT_VIEW_PANEL
         + "<script>"
         + _AGENT_VIEW_JS
@@ -180,6 +193,10 @@ class _Cdp:
     def __init__(self, socket_client):
         self.socket = socket_client
         self.next_id = 0
+        # Uncaught page exceptions, collected from the events that arrive between
+        # command responses. A standalone harness that fails to mirror a runtime
+        # global throws here instead of silently degrading the page.
+        self.exceptions: list[str] = []
 
     async def command(self, method: str, params: dict | None = None) -> dict:
         self.next_id += 1
@@ -192,6 +209,10 @@ class _Cdp:
         while True:
             response = json.loads(await self.socket.recv())
             if response.get("id") != message_id:
+                if response.get("method") == "Runtime.exceptionThrown":
+                    details = response.get("params", {}).get("exceptionDetails", {})
+                    text = (details.get("exception") or {}).get("description") or details.get("text")
+                    self.exceptions.append(str(text))
                 continue
             if "error" in response:
                 raise RuntimeError(f"CDP {method} failed: {response['error']}")
@@ -286,6 +307,7 @@ class TestAgentViewMobileRender(unittest.TestCase):
                     ) as socket_client:
                         cdp = _Cdp(socket_client)
                         await cdp.command("Page.enable")
+                        await cdp.command("Runtime.enable")
                         await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
                         await cdp.command("Emulation.setTouchEmulationEnabled", {
                             "enabled": True,
@@ -301,6 +323,13 @@ class TestAgentViewMobileRender(unittest.TestCase):
                             self.assertIsNone(
                                 process.poll(),
                                 f"desktop Chrome renderer exited during {stage}",
+                            )
+                            # The harness must run the Agent View runtime clean: an
+                            # undeclared global here would otherwise pass silently.
+                            self.assertEqual(
+                                cdp.exceptions,
+                                [],
+                                f"uncaught page exception during {stage}",
                             )
                             health = await cdp.evaluate("""({
                               readyState: document.readyState,
@@ -350,6 +379,169 @@ class TestAgentViewMobileRender(unittest.TestCase):
                         screenshot = await cdp.command("Page.captureScreenshot", {"format": "png"})
                         self.assertGreater(len(str(screenshot.get("data", ""))), 1_000)
                         self.assertIsNone(process.poll(), "desktop Chrome renderer exited during the stress run")
+                except Exception as exc:
+                    chrome_stderr.flush()
+                    diagnostics = _chrome_stderr_tail(stderr_path)
+                    if diagnostics:
+                        raise AssertionError(
+                            f"{exc}\n\nChrome stderr tail:\n{diagnostics}"
+                        ) from exc
+                    raise
+                finally:
+                    if process is not None and process.poll() is None:
+                        process.terminate()
+                        try:
+                            await asyncio.to_thread(process.wait, 5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            await asyncio.to_thread(process.wait, 5)
+                    with contextlib.suppress(Exception):
+                        await runner.cleanup()
+
+
+class TestWorkbenchShellLifecycle(unittest.TestCase):
+    """DESKTOP_UI_SPEC.md §10: the workbench must be live, not just rendered.
+
+    Marker assertions cannot catch the failure this feature is most exposed to
+    (§3a): a shell that renders and never connects. These checks run the real
+    Agent View runtime in desktop Chrome and exercise lifecycle *behaviour* —
+    the activation classes, the phase signal, the socket, and connection
+    tracking driven by a bridge/chat status payload.
+    """
+
+    def test_workbench_stays_live_across_activation_and_connection_states(self):
+        asyncio.run(self._run_lifecycle())
+
+    async def _run_lifecycle(self) -> None:
+        chrome = _chrome_binary()
+        assert chrome is not None
+        app = web.Application()
+        enabled_html = _render_harness_html(workbench_enabled=True)
+        disabled_html = _render_harness_html(workbench_enabled=False)
+
+        async def page(request: web.Request) -> web.Response:
+            html = disabled_html if request.query.get("flag") == "off" else enabled_html
+            return web.Response(text=html, content_type="text/html")
+
+        app.router.add_get("/{tail:.*}", page)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        addresses = runner.addresses
+        assert addresses
+        page_port = int(addresses[0][1])
+
+        debug_port = _free_port()
+        with tempfile.TemporaryDirectory(prefix="unchained-workbench-lifecycle-") as profile_dir:
+            stderr_path = Path(profile_dir) / "chrome.stderr.log"
+            with stderr_path.open("w", encoding="utf-8") as chrome_stderr:
+                process: subprocess.Popen | None = None
+                try:
+                    process = subprocess.Popen(
+                        [
+                            chrome,
+                            "--headless=new",
+                            "--remote-debugging-address=127.0.0.1",
+                            f"--remote-debugging-port={debug_port}",
+                            f"--remote-allow-origins={_CDP_ORIGIN}",
+                            f"--user-data-dir={profile_dir}",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=chrome_stderr,
+                    )
+                    ws_url = await _chrome_ws_url(debug_port)
+                    async with websockets.connect(
+                        ws_url,
+                        origin=_CDP_ORIGIN,
+                        max_size=8 * 1024 * 1024,
+                    ) as socket_client:
+                        cdp = _Cdp(socket_client)
+                        await cdp.command("Page.enable")
+                        await cdp.command("Runtime.enable")
+                        await cdp.command(
+                            "Emulation.setDeviceMetricsOverride", _DESKTOP
+                        )
+
+                        # Scenario 1: flag on + ?shell=workbench -> the workbench
+                        # presentation, still riding the task shell.
+                        await cdp.command(
+                            "Page.navigate",
+                            {"url": f"http://127.0.0.1:{page_port}/?shell=workbench"},
+                        )
+                        await _wait_for(cdp, "window.__previewSocketCount === 1")
+                        state = await cdp.evaluate("""({
+                          isTask: document.body.classList.contains('agent-shell-task'),
+                          isWorkbench: document.body.classList.contains('agent-shell-workbench'),
+                          phase: document.body.dataset.agentShellPhase,
+                          phaseLabel: (document.getElementById('agent-shell-phase-label') || {}).textContent,
+                          socketCount: window.__previewSocketCount,
+                        })""")
+                        self.assertTrue(state["isTask"], "workbench dropped the task shell")
+                        self.assertTrue(state["isWorkbench"], "workbench class missing")
+                        self.assertEqual(
+                            state["phase"],
+                            "ready",
+                            "the phase signal never advanced past activation",
+                        )
+                        self.assertEqual(state["phaseLabel"], "Ready for a task")
+                        self.assertEqual(state["socketCount"], 1)
+
+                        # Connection tracking still drives the layout gate: the
+                        # shared lifecycle path must be reachable under workbench.
+                        disconnected = await cdp.evaluate("""(() => {
+                          maybeInitializeAgentShell({bridge_connected: false, chat_connected: true});
+                          return document.body.classList.contains('agent-shell-chat-only');
+                        })()""")
+                        self.assertTrue(
+                            disconnected,
+                            "bridge loss did not converge on the chat-only layout",
+                        )
+                        connected = await cdp.evaluate("""(() => {
+                          maybeInitializeAgentShell({bridge_connected: true, chat_connected: true});
+                          return document.body.classList.contains('agent-shell-chat-only');
+                        })()""")
+                        self.assertFalse(
+                            connected,
+                            "bridge recovery did not restore the two-region layout",
+                        )
+                        self.assertEqual(cdp.exceptions, [], "uncaught page exception under workbench")
+
+                        # Scenario 2: ?shell=workbench with the server flag off must
+                        # degrade to the shipped task shell, not to a dead shell.
+                        await cdp.command(
+                            "Page.navigate",
+                            {"url": f"http://127.0.0.1:{page_port}/?shell=workbench&flag=off"},
+                        )
+                        await _wait_for(cdp, "window.__previewSocketCount >= 1")
+                        fallback = await cdp.evaluate("""({
+                          isTask: document.body.classList.contains('agent-shell-task'),
+                          isWorkbench: document.body.classList.contains('agent-shell-workbench'),
+                          phase: document.body.dataset.agentShellPhase,
+                        })""")
+                        self.assertTrue(
+                            fallback["isTask"],
+                            "flagged-off ?shell=workbench did not fall back to the task shell",
+                        )
+                        self.assertFalse(fallback["isWorkbench"])
+                        self.assertEqual(fallback["phase"], "ready")
+
+                        # Scenario 3: legacy stays out of the workbench entirely.
+                        await cdp.command(
+                            "Page.navigate",
+                            {"url": f"http://127.0.0.1:{page_port}/?shell=legacy"},
+                        )
+                        await asyncio.sleep(0.3)
+                        legacy = await cdp.evaluate("""({
+                          isTask: document.body.classList.contains('agent-shell-task'),
+                          isWorkbench: document.body.classList.contains('agent-shell-workbench'),
+                        })""")
+                        self.assertFalse(legacy["isTask"], "legacy shell enabled the task shell")
+                        self.assertFalse(legacy["isWorkbench"])
+
+                        self.assertIsNone(process.poll(), "Chrome renderer exited")
                 except Exception as exc:
                     chrome_stderr.flush()
                     diagnostics = _chrome_stderr_tail(stderr_path)

@@ -92,7 +92,8 @@ jobs:
             test_fin_workspace_integration \
             test_web_routes \
             test_trial_new_chat \
-            test_web_contracts
+            test_web_contracts \
+            test_workbench_shell_regression
 
       - name: Run JS chat recovery test
         run: |
