@@ -525,6 +525,10 @@ HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS: dict[str, tuple[int, i
     "deepseek-flash": (440_000, 1_320_000),      # peak miss $0.44 / output $1.32
     "deepseek-v4-flash": (440_000, 1_320_000),   # legacy alias → same timeline
     "deepseek-v4-pro": (1_320_000, 3_960_000),   # peak miss $1.32 / output $3.96
+    # The same model through OpenRouter (the MVP default): published $0.15/M in,
+    # $0.60/M out, so the certified envelope needs ≈$0.083 — comfortably inside
+    # the $0.30 catalog hold.
+    "deepseek/deepseek-v4.1-flash-1017": (150_000, 600_000),
 }
 
 
@@ -561,6 +565,10 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "google/gemini-3-flash-preview": 300_000,
     "qwen/qwen3.6-plus": 750_000,
     "qwen/qwen3.5-flash-02-23": 250_000,
+    # DeepSeek Flash through OpenRouter — the MVP default. Same model and cache
+    # behaviour as the direct API at $0.15/M in, $0.60/M out, so a $0.30 hold
+    # covers the full certified context budget with margin.
+    "deepseek/deepseek-v4.1-flash-1017": 300_000,
     # DeepSeek direct API — paid hosted models. Conservative per-attempt holds
     # (the worker settles actual cost estimated from cache-aware token usage).
     "deepseek-flash": 250_000,      # $0.25 hold (V4.1-Flash, canonical)
@@ -624,13 +632,13 @@ HOSTED_FREE_MODEL_DEFAULTS: tuple[str, ...] = (
     "poolside/laguna-xs-2.1:free",
 )
 HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
-    "deepseek-flash",
-    "google/gemini-3.1-flash-lite",
-    "qwen/qwen3.6-plus",
-    "qwen/qwen3.5-flash-02-23",
-    "google/gemini-3-flash-preview",
-    "deepseek-v4-pro",
-    *HOSTED_FREE_MODEL_DEFAULTS,
+    # MVP: one model, no choices. DeepSeek Flash through OpenRouter — the same
+    # model the direct API serves, reached with the key the hosted worker already
+    # has, so a fresh install does not need a second provider credential to get
+    # its first answer. `~deepseek/deepseek-flash-latest` resolves to this same
+    # snapshot today; the dated ID is pinned so price and behaviour cannot drift
+    # under a running deployment.
+    "deepseek/deepseek-v4.1-flash-1017",
 )
 _MODEL_ID_EXTRA_CHARS = frozenset("._-/:+@")
 _NON_OPENROUTER_MODEL_PREFIXES = (
