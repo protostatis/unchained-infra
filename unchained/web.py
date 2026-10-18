@@ -209,9 +209,9 @@ _SIGNED_INT_RE = re.compile(r"^[0-9]{1,4}$")
 _SIGNED_GUEST_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 # Agent Workbench presentation (opt-in, /workspace only). Off by default so the
-# shipped task shell renders unchanged until the flag is enabled. The client also
-# accepts ?workbench=0 for a per-session rollback without a deploy; the URL can
-# only disable the presentation, never enable it.
+# shipped task shell renders unchanged until the flag is enabled. The client
+# still requires ?shell=workbench to opt in, and ?shell=task (or dropping the
+# parameter) restores the task presentation for that session.
 WORKBENCH_SHELL_ENABLED = os.environ.get("UNCHAINED_WORKBENCH_SHELL", "").strip().lower() in {
     "1",
     "true",

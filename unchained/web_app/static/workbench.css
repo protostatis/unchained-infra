@@ -7,10 +7,6 @@
    no DOM, moves no element, and every rule is additionally scoped to
    body.agent-shell-workbench, so a stray request cannot restyle a shell that
    is not wearing that class. */
-/* Agent Workbench presentation (opt-in, /workspace only).
-   A density layer over the shipped task shell, not a separate shell: it adds no
-   DOM, moves no element, and every rule is inert unless body.agent-shell-workbench
-   is present, so the flagged-off output is unchanged. */
 body.agent-shell-workbench.agent-view-open{--wb-hair:rgba(183,205,228,.10);--wb-band:rgba(6,9,13,.90)}
 /* 1. Quiet the page chrome: decorative marks that repeat a real label are noise. */
 body.agent-shell-workbench .agent-view-mark,
