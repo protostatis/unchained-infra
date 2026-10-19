@@ -484,7 +484,7 @@ class TestCreditLedger(unittest.TestCase):
             "arcee-ai/trinity-large-preview:free",
             "stepfun/step-3.5-flash:free",
             "openai/gpt-5.2",
-            "deepseek-flash",  # required as the authenticated default
+            "deepseek/deepseek-v4.1-flash-1017",  # required as the authenticated default
         ]
         auth.set_app_setting(
             HOSTED_MODEL_POLICY_SETTING_KEY,
@@ -656,6 +656,9 @@ class TestCreditLedger(unittest.TestCase):
                 "deepseek-flash": 240_509,
                 "deepseek-v4-flash": 240_509,
                 "deepseek-v4-pro": 721_526,
+                # The MVP default: the same Flash product through OpenRouter, at
+                # the published $0.15/M in, $0.60/M out.
+                "deepseek/deepseek-v4.1-flash-1017": 82_760,
             },
         )
         self.assertEqual(HOSTED_MODEL_CATALOG["google/gemini-2.5-pro"], 1_500_000)
@@ -1829,9 +1832,15 @@ class TestDeepSeekProvider(unittest.TestCase):
         self.assertIn("deepseek-v4-pro", HOSTED_MODEL_CATALOG)
         self.assertGreater(HOSTED_MODEL_CATALOG["deepseek-v4-pro"],
                            HOSTED_MODEL_CATALOG["deepseek-flash"])
-        self.assertIn("deepseek-flash", HOSTED_USER_MODEL_DEFAULTS)
+        # The direct-API ids stay in the catalog (billing, and admin reach), but the
+        # user-facing policy is one model: the OpenRouter snapshot the authenticated
+        # default resolves to. What must not drift is that it is the same *product*
+        # the direct ids bill as, which the reservations below pin.
+        self.assertEqual(
+            HOSTED_USER_MODEL_DEFAULTS, ("deepseek/deepseek-v4.1-flash-1017",)
+        )
         self.assertNotIn("deepseek-v4-flash", HOSTED_USER_MODEL_DEFAULTS)
-        self.assertIn("deepseek-v4-pro", HOSTED_USER_MODEL_DEFAULTS)
+        self.assertNotIn("deepseek-v4-pro", HOSTED_USER_MODEL_DEFAULTS)
         self.assertNotEqual(_default_reservation("deepseek-flash"), 0)
         # The legacy alias resolves to the canonical product for billing.
         self.assertNotEqual(_default_reservation("deepseek-v4-flash"), 0)
@@ -1848,20 +1857,18 @@ class TestDeepSeekProvider(unittest.TestCase):
             ),
         )
         policy = effective_hosted_model_policy(core)
-        self.assertIn("deepseek-flash", policy["models"])
-        self.assertIn("deepseek-v4-pro", policy["models"])
+        # The authenticated default is the OpenRouter snapshot, and it is user-visible.
+        self.assertIn("deepseek/deepseek-v4.1-flash-1017", policy["models"])
         self.assertTrue(
             is_hosted_model_allowed_for_identity(
-                core, "deepseek-flash", email="person@example.com"
+                core, "deepseek/deepseek-v4.1-flash-1017", email="person@example.com"
             )
         )
-        # The legacy alias is authorized through its canonical model.
-        self.assertTrue(
-            is_hosted_model_allowed_for_identity(
-                core, "deepseek-v4-flash", email="person@example.com"
-            )
-        )
-        # Slash-free deepseek IDs must pass the policy validator.
+        # The direct-API ids are no longer user-facing, but they remain valid catalog
+        # ids: a slash-free id must still pass the policy validator, which the dropdown
+        # and the billing path share.
+        self.assertNotIn("deepseek-flash", policy["models"])
+        self.assertIn("deepseek-flash", HOSTED_MODEL_CATALOG)
         normalize_hosted_model_ids(
             ["google/gemini-3.1-flash-lite", "deepseek-flash"]
         )
