@@ -573,6 +573,89 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(list(Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json"))), 1)
 
     @patch("web_app.handlers.chat_flow._core")
+    async def test_terminal_failure_gives_the_reservation_back(self, mock_core):
+        """A refusal a retry cannot rescue must not spend the account's limit for a day."""
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        core = self._core()
+        mock_core.return_value = core
+        with patch.object(chat_flow, "_TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT", 1):
+            first = await handle_chat_new(
+                self._new_request("request-0000000000000070", "s-trial-agent-cap-one")
+            )
+            data = json.loads(first.body.decode())
+            self.assertEqual(first.status, 200)
+
+            async def terminal(_core, record, *, user_id=""):
+                # An archive already on the device in a shape this attempt cannot
+                # extend: retrying changes nothing, so the reservation goes back.
+                record["local_archive_failure"] = "archive_id_conflict"
+                return False
+
+            with patch.object(
+                chat_flow, "_commit_trial_new_chat_transition", side_effect=terminal
+            ):
+                failed = await handle_chat_new_ack(
+                    self._ack_request(
+                        "request-0000000000000070",
+                        "s-trial-agent-cap-one",
+                        data["session_id"],
+                        data["commit_token"],
+                    )
+                )
+            self.assertEqual(failed.status, 503)
+            self.assertEqual(
+                json.loads(failed.body.decode())["code"], "archive_id_conflict"
+            )
+
+            # The reservation is gone, so a new chat is admitted straight away.
+            second = await handle_chat_new(
+                self._new_request("request-0000000000000071", "s-trial-agent-cap-two")
+            )
+        self.assertEqual(second.status, 200)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_retryable_failure_keeps_the_reservation(self, mock_core):
+        """`local_agent_offline` is worth retrying, so its record survives and counts."""
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        core = self._core()
+        mock_core.return_value = core
+        with patch.object(chat_flow, "_TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT", 1):
+            first = await handle_chat_new(
+                self._new_request("request-0000000000000080", "s-trial-agent-offline-one")
+            )
+            data = json.loads(first.body.decode())
+            self.assertEqual(first.status, 200)
+
+            async def offline(_core, record, *, user_id=""):
+                record["local_archive_failure"] = "local_agent_offline"
+                return False
+
+            with patch.object(
+                chat_flow, "_commit_trial_new_chat_transition", side_effect=offline
+            ):
+                failed = await handle_chat_new_ack(
+                    self._ack_request(
+                        "request-0000000000000080",
+                        "s-trial-agent-offline-one",
+                        data["session_id"],
+                        data["commit_token"],
+                    )
+                )
+            self.assertEqual(failed.status, 503)
+            self.assertEqual(
+                json.loads(failed.body.decode())["code"], "local_agent_offline"
+            )
+
+            blocked = await handle_chat_new(
+                self._new_request("request-0000000000000081", "s-trial-agent-offline-two")
+            )
+        self.assertEqual(blocked.status, 429)
+
+    @patch("web_app.handlers.chat_flow._core")
     async def test_corrupt_or_mismatched_status_is_retryable_and_non_destructive(self, mock_core):
         from web_app.handlers import chat_flow
         from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack

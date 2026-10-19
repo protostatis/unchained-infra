@@ -143,6 +143,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/chat/new", "web_app.handlers.chat_flow:handle_chat_new"),
     ("POST", "/web/chat/new/ack", "web_app.handlers.chat_flow:handle_chat_new_ack"),
     ("GET", "/web/chat/slots", "web_app.handlers.chat_flow:handle_chat_slots"),
+    ("POST", "/web/chat/slots/release", "web_app.handlers.chat_flow:handle_chat_slots_release"),
     ("POST", "/web/chat/switch", "web_app.handlers.chat_flow:handle_chat_switch"),
     ("GET", "/web/chat/archives", "web_app.handlers.chat_flow:handle_chat_archives"),
     ("POST", "/web/chat/restore-archive", "web_app.handlers.chat_flow:handle_chat_restore_archive"),

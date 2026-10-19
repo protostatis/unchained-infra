@@ -177,6 +177,23 @@ class TestHostedConversationRepo(unittest.TestCase):
         self.assertEqual(state["slots"]["2"], "")
         self.assertEqual(state["slots"]["3"], "")
 
+    def test_release_slot_frees_only_the_named_session(self):
+        """Releasing is a compare-and-set: it may free the caller's chat, nothing else.
+
+        Binding only ever fills an *empty* slot and nothing else unbinds one, so this
+        is the only way back for a client that abandons a chat without a committed
+        transition — and it must never free a slot some other session is sitting in.
+        """
+        self.repo.bind_initial_session("u-release", "s-agent-holding", slot=1)
+        self.assertFalse(self.repo.release_slot_session("u-release", 1, "s-agent-other"))
+        self.assertEqual(self.repo.get_slot_state("u-release")["slots"]["1"], "s-agent-holding")
+        self.assertTrue(self.repo.release_slot_session("u-release", 1, "s-agent-holding"))
+        self.assertEqual(self.repo.get_slot_state("u-release")["slots"]["1"], "")
+        # Already free: nothing to release, and no error either.
+        self.assertFalse(self.repo.release_slot_session("u-release", 1, "s-agent-holding"))
+        with self.assertRaises(ValueError):
+            self.repo.release_slot_session("u-release", 4, "s-agent-holding")
+
     def test_slot_state_persistence(self):
         state = self.repo.get_slot_state("u-test-2")
         state["active_slot"] = 2
@@ -1925,6 +1942,44 @@ class TestTrialSlotsServerAuthority(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(slots_by_id[1]["empty"])
         self.assertFalse(slots_by_id[2]["empty"])
         self.assertTrue(slots_by_id[3]["empty"])
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_slot_release_is_a_compare_and_set(self, mock_core):
+        """The release endpoint frees the caller's chat, and refuses anybody else's."""
+        from web_app.handlers.chat_flow import handle_chat_slots_release
+
+        user_id = "u-test-slot-release"
+        mine = self.repo.new_session_id(user_id, "trial-agent")
+        other = self.repo.new_session_id(user_id, "trial-agent")
+        self._write_session(mine, [{"role": "user", "content": "Mine"}])
+        self._write_session(other, [{"role": "user", "content": "Theirs"}])
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = mine
+        state["slots"]["2"] = other
+        self.repo.set_slot_state(user_id, state)
+        mock_core.return_value = self._core(user_id)
+
+        def release_request(slot, session_id):
+            return SimpleNamespace(json=AsyncMock(return_value={
+                "model": "google/gemini-3.1-flash-lite",
+                "slot": slot,
+                "session_id": session_id,
+            }))
+
+        # The session in that slot is somebody else's chat: refuse, change nothing.
+        refused = await handle_chat_slots_release(release_request(1, other))
+        self.assertEqual(refused.status, 409)
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], mine)
+
+        released = await handle_chat_slots_release(release_request(1, mine))
+        body = json.loads(released.body.decode())
+        self.assertEqual(released.status, 200)
+        self.assertTrue(body["released"])
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], "")
+
+        # Idempotence is not claimed: an already-free slot is not the caller's to free.
+        again = await handle_chat_slots_release(release_request(1, mine))
+        self.assertEqual(again.status, 409)
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_switch_persists_to_server(self, mock_core):

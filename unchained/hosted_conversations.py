@@ -470,6 +470,33 @@ class HostedConversationRepo:
             state["active_slot"] = slot
             self._write_slot_state_unlocked(user_id, state)
 
+    def release_slot_session(
+        self, user_id: str, slot: int, expected_session_id: str
+    ) -> bool:
+        """Unbind a slot that still points at the session the caller named.
+
+        Binding only ever fills an *empty* slot, and nothing else unbinds one, so a
+        client that abandons a chat without a committed transition would spend one of
+        the account's three slots for good — and, after three, could not start an
+        archivable chat at all. This is the missing release. It is a compare-and-set
+        for the same reason the transition is: it must only ever free the exact
+        session named, never whichever session happens to be there.
+        """
+        if slot not in (1, 2, 3):
+            raise ValueError(f"slot must be 1-3, got {slot}")
+        self.validate_session_id(expected_session_id)
+        self._safe_user_key(user_id)
+        with self._slot_state_lock(user_id):
+            state = self.get_slot_state(user_id)
+            slot_key = str(slot)
+            if state["slots"].get(slot_key, "") != expected_session_id:
+                # Occupied by a different session (or already empty): leave it alone.
+                return False
+            state["slots"][slot_key] = ""
+            state["previews"][slot_key] = ""
+            self._write_slot_state_unlocked(user_id, state)
+            return True
+
     def replace_slot_session(
         self,
         user_id: str,
