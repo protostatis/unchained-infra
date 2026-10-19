@@ -319,7 +319,14 @@ class TestChatEventTransport(unittest.TestCase):
         )
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
-        self.assertEqual(agent_package.VERSION, "0.3.130")
+        # A floor, not an exact pin: the point is that the release still ships
+        # the transport and has moved past the release that could not start.
+        # 0.3.130 shipped a package without conversation_transcript.py, so the
+        # version must be strictly newer; the package test owns startability.
+        self.assertGreater(
+            tuple(int(part) for part in agent_package.VERSION.split(".")),
+            (0, 3, 130),
+        )
         self.assertEqual(
             agent_package._PACKAGE_FILES["unchained/chat_event_transport.py"],
             "chat_event_transport.py",
