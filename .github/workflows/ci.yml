@@ -82,6 +82,7 @@ jobs:
             test_scheduled_tasks \
             test_unbrowser_mcp_router \
             test_chat_archives \
+            test_agent_package_completeness \
             test_legal_pages \
             test_preserve_hosted_conversations \
             test_hosted_conversations \

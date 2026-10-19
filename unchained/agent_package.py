@@ -18,13 +18,16 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.130"  # local archive ownership and hosted archive save acknowledgements
+VERSION = "0.3.131"  # ship the transcript modules 0.3.130 imports
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
 # one-click Research Desk install capability to the hosted page.
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
+# 0.3.130 owns local archives and acknowledges hosted archive saves, but its
+# package omitted conversation_transcript.py and tool_payloads.py, so it could
+# not import at all and supervisors rolled it back; 0.3.131 ships them.
 MIN_VERSION = "0.3.46"
 RESEARCH_DESK_VERSION = "0.1.0"
 _RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md", "setup.py")
@@ -53,6 +56,10 @@ _PACKAGE_FILES = {
     # dest path in ZIP → source filename
     "unchained/chrome_bridge.py": "chrome_bridge.py",
     "unchained/chat_agent_cli.py": "chat_agent_cli.py",
+    # Imported by chat_agent_cli.py. Omitting them made 0.3.130 unstartable, so
+    # the downloader needs them; test_agent_package_completeness.py guards this.
+    "unchained/conversation_transcript.py": "conversation_transcript.py",
+    "unchained/tool_payloads.py": "tool_payloads.py",
     "unchained/chat_event_transport.py": "chat_event_transport.py",
     "unchained/scheduled_tasks.py": "scheduled_tasks.py",
     "unchained/scheduler_tool.py": "scheduler_tool.py",
