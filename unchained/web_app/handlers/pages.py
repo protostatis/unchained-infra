@@ -20,6 +20,8 @@ from web_app.templates import (
     CHROME_TAX_HTML,
     FIRST_LOOK_PREVIEW_HTML,
     UNBROWSER_PAGE_HTML,
+    _WORKBENCH_ASSET_REFS,
+    _WORKBENCH_ASSET_SLOT,
 )
 
 
@@ -479,6 +481,20 @@ def _render_hosted_chat_page(core, *, workspace: bool) -> str:
     title = "Unchained Workspace" if workspace else "Unchained Trial"
     html = core.TRIAL_CHAT_HTML.replace("__HOSTED_PAGE_TITLE__", title)
     html = html.replace("__HOSTED_WORKSPACE_MODE__", "true" if workspace else "false")
+    # The workbench presentation is gated server-side and only ever enabled for
+    # the funded workspace page; /trial always renders the shipped task shell.
+    workbench_enabled = bool(
+        workspace and getattr(core, "WORKBENCH_SHELL_ENABLED", False)
+    )
+    html = html.replace(
+        "__WORKBENCH_SHELL_ENABLED__", "true" if workbench_enabled else "false"
+    )
+    # The workbench stylesheet is requested only when the presentation is on, so
+    # the shipped shells carry neither the asset reference nor the rules.
+    html = html.replace(
+        _WORKBENCH_ASSET_SLOT,
+        _WORKBENCH_ASSET_REFS if workbench_enabled else "",
+    )
     return core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
 
 

@@ -9398,6 +9398,7 @@ const _TRIAL_ACTIVE_IDENTITY_KEY = 'unchained_trial_identity';
 const _LEGACY_MODEL_KEY = 'unchained_model';
 const _LEGACY_MODEL_OWNER_KEY = 'unchained_model_owner';
 const hostedWorkspaceMode = __HOSTED_WORKSPACE_MODE__;
+const workbenchShellEnabled = __WORKBENCH_SHELL_ENABLED__;
 
 function _trialModelKey(userId) {
   return userId ? _TRIAL_MODEL_STORAGE_PREFIX + encodeURIComponent(userId) : '';
@@ -21767,6 +21768,7 @@ let agentViewFallbackPaintRaf = 0;
 let agentViewFallbackPaintGeneration = 0;
 const AGENT_SHELL_DEFAULT = 'task';
 let agentShellTaskEnabled = false;
+let agentShellWorkbenchEnabled = false;
 let agentShellBrowserReady = false;
 let agentShellChatReady = false;
 let agentShellTurnActive = false;
@@ -21778,7 +21780,18 @@ let agentViewReturnFocus = null;
 
 function agentShellModeFromLocation() {
   const value = new URLSearchParams(location.search || '').get('shell');
-  return value === 'task' || value === 'legacy' ? value : AGENT_SHELL_DEFAULT;
+  return value === 'task' || value === 'legacy' || value === 'workbench'
+    ? value
+    : AGENT_SHELL_DEFAULT;
+}
+
+function agentShellWorkbenchEnabledFromLocation() {
+  // The server flag is authoritative and decides whether this page may wear the
+  // workbench presentation at all, so /trial and any un-flagged deploy fall back
+  // to the shipped task presentation. `?shell=workbench` is the explicit opt-in
+  // and, like the other shell values, cannot enable anything the server has not
+  // already allowed.
+  return agentShellModeFromLocation() === 'workbench' && workbenchShellEnabled;
 }
 
 function setAgentShellConnectionLayout(browserAvailable) {
@@ -21872,8 +21885,16 @@ function setAgentShellPhase(phase, label) {
 }
 
 function initializeAgentShellExperiment() {
-  agentShellTaskEnabled = agentShellModeFromLocation() === 'task';
+  const mode = agentShellModeFromLocation();
+  // 'workbench' is a task-family mode, not a third shell. It reuses every
+  // task-shell runtime, DOM id and socket, and only layers the workbench
+  // presentation on top. Making it a mode of its own would leave every
+  // `agentShellTaskEnabled` gate below dark: the page would render and never
+  // connect. See DESKTOP_UI_SPEC.md §3a.
+  agentShellTaskEnabled = mode === 'task' || mode === 'workbench';
   document.body.classList.toggle('agent-shell-task', agentShellTaskEnabled);
+  agentShellWorkbenchEnabled = agentShellTaskEnabled && agentShellWorkbenchEnabledFromLocation();
+  document.body.classList.toggle('agent-shell-workbench', agentShellWorkbenchEnabled);
   if (agentShellTaskEnabled) {
     arrangeAgentChatToolbar();
     setAgentShellPhase('ready', 'Ready for a task');
@@ -24039,7 +24060,47 @@ def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
     )
 
 
+_WORKBENCH_ASSET_SLOT = "__WORKBENCH_ASSET_REFS__"
+
+# Only the stylesheet is split out. The activation seam stays inline in
+# `_AGENT_VIEW_JS` because it must be defined before the agent-view runtime
+# initialises at load: an external script would either have to block rendering
+# in <head> or arrive too late, and a failed request would break the whole
+# shell rather than just its styling. Workbench behaviour JS, once it exists,
+# can be added as a deferred script here safely.
+_WORKBENCH_ASSET_REFS = '<link rel="stylesheet" href="/web/static/workbench.css">\n'
+
+
+def _inject_workbench_asset_slot(html: str, *, template_name: str) -> str:
+    """Reserve the head position where the workbench stylesheet is referenced.
+
+    The workbench presentation ships as a static asset, but whether to request
+    it at all is a server decision: the enabled flag is resolved per request and
+    only ever true for the funded `/workspace` page. `_render_hosted_chat_page`
+    is the single funnel for this template, so the slot resolves to the empty
+    string for `/trial` and for every other shell — those pages never request
+    the asset and never see a workbench rule.
+
+    Keeping the slot (rather than the reference) in the template means the
+    shipped shells carry one inert token that is always substituted away.
+    """
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</head>",
+                _WORKBENCH_ASSET_SLOT + "</head>",
+                "workbench asset slot injection",
+            ),
+        ),
+        template_name=template_name,
+    )
+
+
 TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML, include_sidebar=False)
+TRIAL_CHAT_HTML = _inject_workbench_asset_slot(
+    TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML workbench asset slot"
+)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)

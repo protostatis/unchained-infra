@@ -59,6 +59,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/web/static/signed-chat-reconnect.js"),
+            ("GET", "/web/static/workbench.css"),
             ("GET", "/internal/health"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
@@ -160,6 +161,27 @@ class TestWebRouteContracts(unittest.TestCase):
         response = asyncio.run(web.handle_internal_health(None))
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.text), {"status": "ok"})
+
+    def test_workbench_asset_is_served_as_css_and_404s_when_absent(self):
+        response = asyncio.run(web.handle_workbench_asset(None))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, "text/css")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        # The served body is the shipped asset, not an inline copy.
+        served = response.text
+        self.assertIn("body.agent-shell-workbench", served)
+        self.assertEqual(
+            served,
+            (
+                Path(web.__file__).with_name("web_app")
+                / "static"
+                / "workbench.css"
+            ).read_text(encoding="utf-8"),
+        )
+
+        with patch.object(web, "_WORKBENCH_ASSET", Path("/nonexistent/workbench.css")):
+            missing = asyncio.run(web.handle_workbench_asset(None))
+        self.assertEqual(missing.status, 404)
 
 
 class TestHostedWorkspaceRouting(unittest.IsolatedAsyncioTestCase):
@@ -421,6 +443,90 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("Configure provider / API key", web.TRIAL_CHAT_HTML)
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
         self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
+
+    def test_workbench_presentation_is_opt_in_and_workspace_only(self):
+        import types
+
+        from template_utils import inject_google_client_id
+        from web_app import templates
+        from web_app.handlers import pages as pages_module
+
+        self.assertIn(
+            "const workbenchShellEnabled = __WORKBENCH_SHELL_ENABLED__;",
+            web.TRIAL_CHAT_HTML,
+        )
+
+        def render(workspace, flag):
+            core = types.SimpleNamespace(
+                TRIAL_CHAT_HTML=web.TRIAL_CHAT_HTML,
+                WORKBENCH_SHELL_ENABLED=flag,
+                GOOGLE_CLIENT_ID="",
+                inject_google_client_id=inject_google_client_id,
+            )
+            return pages_module._render_hosted_chat_page(core, workspace=workspace)
+
+        self.assertIn("const workbenchShellEnabled = true;", render(True, True))
+        self.assertIn("const workbenchShellEnabled = false;", render(True, False))
+        # /workspace is the only surface that can switch the presentation on.
+        self.assertIn("const workbenchShellEnabled = false;", render(False, True))
+
+        for workspace in (False, True):
+            for flag in (False, True):
+                self.assertNotIn("__WORKBENCH_SHELL_ENABLED__", render(workspace, flag))
+
+        # Flipping the flag must change nothing but that one boolean and the
+        # stylesheet reference (the workbench layer ships as a static asset).
+        enabled = render(True, True).replace("const workbenchShellEnabled = true;", "BOOL")
+        disabled = render(True, False).replace("const workbenchShellEnabled = false;", "BOOL")
+        ref = '<link rel="stylesheet" href="/web/static/workbench.css">'
+        self.assertIn(ref, enabled)
+        self.assertNotIn(ref, disabled)
+        self.assertEqual(enabled.replace(ref + "\n", "", 1), disabled)
+
+        # Fail closed when the server does not export the flag at all.
+        bare = types.SimpleNamespace(
+            TRIAL_CHAT_HTML=web.TRIAL_CHAT_HTML,
+            GOOGLE_CLIENT_ID="",
+            inject_google_client_id=inject_google_client_id,
+        )
+        self.assertIn(
+            "const workbenchShellEnabled = false;",
+            pages_module._render_hosted_chat_page(bare, workspace=True),
+        )
+
+        # The workbench layer ships as a static asset, never as an inline block in
+        # the shared Agent View stylesheet: every rule must be scoped to the body
+        # class so a stray request cannot restyle a shell that is not wearing it.
+        # Checked per selector, not by substring.
+        raw_style = templates._AGENT_VIEW_STYLE
+        self.assertNotIn(
+            "body.agent-shell-workbench",
+            raw_style,
+            "the workbench layer is back inside the shared stylesheet",
+        )
+        region = re.sub(
+            r"/\*.*?\*/", "", templates._WORKBENCH_ASSET_REFS, flags=re.DOTALL
+        )
+        self.assertNotIn("{", region, "the asset reference must be markup, not CSS")
+        workbench_css = (
+            Path(templates.__file__).with_name("static") / "workbench.css"
+        ).read_text(encoding="utf-8")
+        region = re.sub(r"/\*.*?\*/", "", workbench_css, flags=re.DOTALL)
+        region_selectors, region_rules = [], 0
+        for block in region.split("}"):
+            selector, sep, _ = block.partition("{")
+            if not sep:
+                continue
+            region_rules += 1
+            region_selectors.extend(
+                part.strip() for part in selector.split(",") if part.strip()
+            )
+        self.assertGreater(region_rules, 0, "workbench styles are missing")
+        for selector in region_selectors:
+            self.assertTrue(
+                selector.startswith("body.agent-shell-workbench"),
+                f"unscoped workbench selector: {selector}",
+            )
 
     def test_hosted_credit_explainer_auto_dismisses_after_thirty_seconds(self):
         trial = web.TRIAL_CHAT_HTML
@@ -1590,7 +1696,9 @@ class TestWebTemplateContracts(unittest.TestCase):
             html = web.TRIAL_CHAT_HTML.replace(
                 "__HOSTED_PAGE_TITLE__",
                 "Unchained Workspace" if workspace else "Unchained Trial",
-            ).replace("__HOSTED_WORKSPACE_MODE__", str(workspace).lower())
+            ).replace("__HOSTED_WORKSPACE_MODE__", str(workspace).lower()).replace(
+                "__WORKBENCH_SHELL_ENABLED__", str(workspace).lower()
+            )
             scripts = [
                 body
                 for attrs, body in re.findall(
@@ -1686,7 +1794,9 @@ class TestWebTemplateContracts(unittest.TestCase):
 
 class TestTrialModelStorageIsolation(unittest.TestCase):
     def _run_storage_runtime(self, assertions: str) -> None:
-        trial_html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "false")
+        trial_html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "false").replace(
+            "__WORKBENCH_SHELL_ENABLED__", "false"
+        )
         match = re.search(
             r"const _TRIAL_MODEL_STORAGE_PREFIX = .*?(?=\nfunction _nextAfterLogin\()",
             trial_html,
