@@ -39,6 +39,7 @@ from web_state import (
     begin_hosted_session_transition,
     clear_profile_tab_monitor_handoff,
     finish_hosted_session_transition,
+    hosted_session_phase,
     profile_session_guard,
     profile_tab_handoff_blocks_observed_tab,
     profile_tab_monitor_observed_tabs,
@@ -304,6 +305,11 @@ async def _commit_trial_new_chat_transition(
     session_id = record["session_id"]
     lifecycle = await begin_hosted_session_transition(core, previous_session_id)
     if lifecycle is None:
+        log.warning(
+            "[chat] new-chat transition refused for %s: lifecycle is %s, not open",
+            previous_session_id,
+            hosted_session_phase(core, previous_session_id),
+        )
         return False
     retired = False
     try:
@@ -315,6 +321,12 @@ async def _commit_trial_new_chat_transition(
         )
 
         if not await quiesce_hosted_session(core, previous_session_id):
+            log.warning(
+                "[chat] new-chat transition refused for %s: hosted worker did not "
+                "acknowledge retire_session within %.0fs",
+                previous_session_id,
+                _HOSTED_SESSION_QUIESCE_TIMEOUT_S,
+            )
             return False
         # Archive before moving any state. A malformed or unreadable source must
         # leave the live chat untouched so the client can retry safely.
@@ -372,10 +384,10 @@ async def _commit_trial_new_chat_transition(
                 )
                 return False
             if not updated:
-                log.info(
-                    "[chat] slot changed before new-chat commit for user %s slot %s",
-                    user_id,
-                    slot,
+                log.warning(
+                    "[chat] new-chat transition refused for %s: the slot moved to "
+                    "another session before the commit",
+                    previous_session_id,
                 )
                 return False
         session_tabs = getattr(core, "_session_tabs", {})
@@ -408,6 +420,15 @@ async def _commit_trial_new_chat_transition(
 
 def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
     reason = str(record.get("local_archive_failure", "") or "")
+    # A refusal the caller sees must be visible to whoever reads the log: the
+    # reason is the difference between "retry" and "reconnect the agent", and it
+    # was previously only inferable by correlating a 503 with the client's code.
+    log.warning(
+        "[chat] new-chat transition refused for %s -> %s: %s",
+        record.get("previous_session_id") or "?",
+        record.get("session_id") or "?",
+        reason or "unrecorded",
+    )
     if reason == "local_agent_offline":
         return (
             "Reconnect the local agent to archive this chat on this device. Your previous chat remains preserved, and the new chat is not finalized.",
@@ -469,18 +490,22 @@ def _make_trial_new_chat_capacity(agent_id: str) -> bool:
     )
 
 
-def _reserve_trial_new_chat_status(record: dict, now: float) -> bool:
-    """Atomically check durable limits and persist a pending reservation."""
+def _reserve_trial_new_chat_status(record: dict, now: float) -> str:
+    """Atomically check durable limits and persist a pending reservation.
+
+    Returns "" once the reservation is durable, otherwise the limit that refused
+    it, so a refusal can be reported instead of only inferred from the total.
+    """
     with _trial_new_chat_status_lock:
         retained_count, active_by_agent = _prune_trial_new_chat_statuses(now)
         if retained_count >= _TRIAL_NEW_CHAT_STATUS_MAX_RECORDS:
-            return False
+            return "durable_records"
         if active_by_agent.get(record["agent_id"], 0) >= _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT:
-            return False
+            return "durable_pending"
         if not _make_trial_new_chat_capacity(record["agent_id"]):
-            return False
+            return "pending_records"
         _write_trial_new_chat_status(record, "pending", now)
-        return True
+        return ""
 
 
 def _drop_guest_new_chat_record(record: dict) -> None:
@@ -3043,8 +3068,14 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     user_id = auth_info.get("user_id", "")
     model = request.query.get("model", "")
-    if (guest_mode or core._is_pending_user(auth_info)) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not be routed to a different lane than its turns use.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if (guest_mode or core._is_pending_user(auth_info))
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
@@ -3116,6 +3147,16 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
+    # A client that names no model is not asking for a different lane — it is
+    # asking this server to choose, exactly as /web/chat does for a turn. Without
+    # this, a new chat from a client that sends no model falls past the trial
+    # transition and looks for a local agent that may not exist.
+    if not model:
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
@@ -3275,13 +3316,18 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         }
         record["commit_token"] = _trial_new_chat_commit_token(core, record)
         try:
-            admitted = _reserve_trial_new_chat_status(record, now)
+            refused = _reserve_trial_new_chat_status(record, now)
         except OSError:
             log.exception("[chat] failed to persist new-chat transition status")
             return web.json_response(
                 {"error": "Failed to reserve new-chat transition"}, status=500
             )
-        if not admitted:
+        if refused:
+            log.info(
+                "[chat] new-chat transition refused for agent %s: %s at limit",
+                agent_id,
+                refused,
+            )
             return web.json_response(
                 {"error": "Too many pending new-chat transitions", "retry_after": 60},
                 status=429,
@@ -3326,8 +3372,13 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    # Same rule as /web/chat/new: no model named means the server's default.
+    if not model:
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if not core._is_openrouter_model(model):
@@ -3502,8 +3553,14 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
     user_id = auth_info.get("user_id", "")
 
     model = request.query.get("model", "")
-    if (guest_mode or core._is_pending_user(auth_info)) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not be routed to a different lane than its turns use.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if (guest_mode or core._is_pending_user(auth_info))
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
