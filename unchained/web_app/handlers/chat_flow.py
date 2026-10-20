@@ -3820,6 +3820,11 @@ async def handle_chat_slots_release(request: web.Request) -> web.Response:
     not start an archivable chat at all. This is the missing release, and it is a
     compare-and-set on the session the caller names, for the same reason the transition
     is: a stale or racing client must only ever free the chat it is actually in.
+
+    The call is deliberately not idempotent, and a client must not replay it: a retry
+    after a timeout cannot be told apart from a stale client freeing a slot that a
+    competing client has since taken, so the second call answers 409. A client that
+    loses the response re-reads slot state instead of repeating the request.
     """
     core = _core()
     auth_info = core._authenticate(request)
