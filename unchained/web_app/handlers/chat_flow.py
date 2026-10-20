@@ -3324,8 +3324,6 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             if core._is_pending_user(auth_info)
             else core._HOSTED_DEFAULT_MODEL
         )
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
