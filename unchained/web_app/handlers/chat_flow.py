@@ -3834,8 +3834,16 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     user_id = auth_info.get("user_id", "")
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not switch lanes. A hosted client's slot state lives
+        # server-side; the local-agent lane would answer 503 on a machine with no
+        # agent and would leave the hosted slot unpersisted.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)

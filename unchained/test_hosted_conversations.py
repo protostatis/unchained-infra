@@ -2006,6 +2006,38 @@ class TestTrialSlotsServerAuthority(unittest.IsolatedAsyncioTestCase):
         state = self.repo.get_slot_state(user_id)
         self.assertEqual(state["active_slot"], 3)
 
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_switch_without_a_model_stays_on_the_hosted_lane(self, mock_core):
+        """Same rule as a turn: an authenticated client that names no model is hosted.
+
+        A model-less client that read slot state from /web/chat/slots must not be
+        routed to the local-agent lane, which answers 503 when no agent is
+        connected and never persists the hosted slot.
+        """
+        from web_app.handlers.chat_flow import handle_chat_switch
+
+        user_id = "u-test-switch-default"
+        core = self._core(user_id)
+        core._HOSTED_DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+        core._agent_request = AsyncMock()
+        # Mirror the real predicate: slash-form and `deepseek-*` IDs are hosted,
+        # an empty model is not. The shared helper accepts anything, which would
+        # hide exactly the routing bug this test exists to pin.
+        core._is_openrouter_model = lambda model: bool(model) and (
+            "/" in model or model.startswith("deepseek-")
+        )
+        mock_core.return_value = core
+        request = SimpleNamespace(json=AsyncMock(return_value={"slot": 2}))
+
+        response = await handle_chat_switch(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["trial"])
+        self.assertEqual(data["active_slot"], 2)
+        self.assertEqual(self.repo.get_slot_state(user_id)["active_slot"], 2)
+        core._agent_request.assert_not_awaited()
+
 
 class TestTrialDualReadCompat(unittest.TestCase):
     """Verify dual-read compatibility between server slot state and localStorage."""
