@@ -32,6 +32,7 @@ from aiohttp import web
 
 from analytics import AnalyticsStore, _safe_event_name
 from auth import Auth
+import credit
 from conversation_transcript import (
     looks_like_internal_tool_payload,
     strip_internal_tool_payload,
@@ -230,6 +231,17 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
     os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3.1-flash-lite").strip()
     or "google/gemini-3.1-flash-lite"
+)
+
+# The authenticated hosted default — what an /workspace client gets when it names
+# no model at all. The MVP UI has no model picker, so the server owns this rather
+# than every client having to know a model id. Kept in step with the hosted model
+# policy (credit.py) so the one model a user can reach is also the one this
+# resolves to; HOSTED_DEFAULT_MODEL remains the deployment override.
+_HOSTED_DEFAULT_MODEL = (
+    os.environ.get("HOSTED_DEFAULT_MODEL", "").strip()
+    or (credit.HOSTED_USER_MODEL_DEFAULTS[0] if getattr(credit, "HOSTED_USER_MODEL_DEFAULTS", ()) else "")
+    or "deepseek/deepseek-v4.1-flash-1017"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()

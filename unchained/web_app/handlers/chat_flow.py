@@ -39,6 +39,7 @@ from web_state import (
     begin_hosted_session_transition,
     clear_profile_tab_monitor_handoff,
     finish_hosted_session_transition,
+    hosted_session_phase,
     profile_session_guard,
     profile_tab_handoff_blocks_observed_tab,
     profile_tab_monitor_observed_tabs,
@@ -211,7 +212,27 @@ def _prune_trial_new_chat_statuses(now: float) -> tuple[int, dict[str, int]]:
 
 def _write_trial_new_chat_status(record: dict, status: str, now: float) -> dict:
     with _trial_new_chat_status_lock:
+        try:
+            existing = _read_trial_new_chat_status(record)
+        except (OSError, ValueError):
+            existing = None
+        if (
+            existing is not None
+            and existing.get("status") == "acknowledged"
+            and status != "acknowledged"
+        ):
+            # A committed transition is final: the slot already points at the new
+            # session and the old one is retired. A late duplicate ACK, or a
+            # stale release racing it, must not rewrite that as rolled_back and
+            # make the durable state contradict the committed chat.
+            log.warning(
+                "[chat] refusing to rewrite acknowledged new-chat transition %s as %s",
+                existing.get("commit_request_id") or "?",
+                status,
+            )
+            return existing
         os.makedirs(_TRIAL_NEW_CHAT_STATUS_DIR, exist_ok=True)
+
         payload = {
             "agent_id": record["agent_id"],
             "commit_request_id": record["commit_request_id"],
@@ -297,6 +318,16 @@ async def trial_new_chat_status_cleanup_context(app: web.Application):
             pass
 
 
+def _slot_holds_session(user_id: str, slot: int, session_id: str) -> bool | None:
+    """Return whether the slot is bound to ``session_id``, or None if unreadable."""
+    try:
+        state = _hosted_repo().get_slot_state(user_id)
+    except Exception:
+        log.exception("[chat] failed to read slot %s for user %s", slot, user_id)
+        return None
+    return str((state.get("slots") or {}).get(str(slot)) or "") == session_id
+
+
 async def _commit_trial_new_chat_transition(
     core, record: dict, *, user_id: str = ""
 ) -> bool:
@@ -304,17 +335,74 @@ async def _commit_trial_new_chat_transition(
     session_id = record["session_id"]
     lifecycle = await begin_hosted_session_transition(core, previous_session_id)
     if lifecycle is None:
+        phase = hosted_session_phase(core, previous_session_id)
+        if phase == "transitioning":
+            # A duplicate ACK is not a preservation failure. Another attempt for
+            # this transition owns the outcome, so leave both the reservation and
+            # the durable `committing` status alone; releasing here marked a
+            # retryable attempt rolled_back while it was still running.
+            record["local_archive_failure"] = "transition_in_progress"
+            log.warning(
+                "[chat] new-chat transition for %s is already in flight",
+                previous_session_id,
+            )
+            return False
+        if phase == "retired":
+            # The source was retired by a commit of *this* session only if that
+            # commit is ours (a crash between retire and ack lost the durable
+            # write) or if a competing transition from another window took the
+            # slot. Confirm the destination before acknowledging.
+            if user_id:
+                holds = _slot_holds_session(user_id, record.get("slot", 1), session_id)
+                if holds is None:
+                    # Cannot prove which transition won; keep the reservation and
+                    # let the client retry instead of acknowledging the wrong one.
+                    record["local_archive_failure"] = "transition_in_progress"
+                    return False
+                if not holds:
+                    # Another window's transition retired this source and claimed
+                    # the slot. This token never committed, so it must not be acked
+                    # as if it had.
+                    record["local_archive_failure"] = "transition_superseded"
+                    log.warning(
+                        "[chat] new-chat transition for %s was superseded by another window",
+                        previous_session_id,
+                    )
+                    return False
+            record.pop("local_archive_failure", None)
+            log.info(
+                "[chat] new-chat transition for %s had already committed",
+                previous_session_id,
+            )
+            return True
+        log.warning(
+            "[chat] new-chat transition refused for %s: lifecycle is %s, not open",
+            previous_session_id,
+            phase,
+        )
         return False
     retired = False
     try:
         # Imported lazily because chat_stream imports this module's repository
         # helper. The worker ACK follows its cancellation-time final save.
         from web_app.handlers.chat_stream import (
+            _HOSTED_SESSION_QUIESCE_TIMEOUT_S,
             quiesce_hosted_session,
             retire_hosted_session,
         )
 
         if not await quiesce_hosted_session(core, previous_session_id):
+            # Its own reason, not a generic archive failure: nothing was saved or
+            # moved yet. The reservation still goes back (a worker that never
+            # answers is what turned refusals into twenty-hour lockouts), but the
+            # client is told what actually happened.
+            record["local_archive_failure"] = "worker_unresponsive"
+            log.warning(
+                "[chat] new-chat transition refused for %s: hosted worker did not "
+                "acknowledge retire_session within %.0fs",
+                previous_session_id,
+                _HOSTED_SESSION_QUIESCE_TIMEOUT_S,
+            )
             return False
         # Archive before moving any state. A malformed or unreadable source must
         # leave the live chat untouched so the client can retry safely.
@@ -365,17 +453,46 @@ async def _commit_trial_new_chat_transition(
                     allow_empty=True,
                 )
             except Exception:
-                log.exception(
-                    "[chat] failed to claim slot for new-chat commit for user %s slot %s",
-                    user_id,
-                    slot,
-                )
-                return False
+                # The claim is a read-modify-write, so an exception can land after
+                # the slot already moved. Ask the authoritative state before
+                # calling the claim a failure; rolling back a chat whose slot
+                # moved is the contradiction this transition exists to avoid.
+                moved = _slot_holds_session(user_id, slot, session_id)
+                if moved:
+                    updated = True
+                    log.warning(
+                        "[chat] slot claim for user %s slot %s raised after moving "
+                        "the slot; continuing with the commit",
+                        user_id,
+                        slot,
+                    )
+                elif moved is False:
+                    record["local_archive_failure"] = "slot_claim_failed"
+                    log.exception(
+                        "[chat] failed to claim slot for new-chat commit for user %s slot %s",
+                        user_id,
+                        slot,
+                    )
+                    return False
+                else:
+                    # Neither outcome is proven; keep the reservation so a retry
+                    # can settle it instead of giving away a committed chat.
+                    record["local_archive_failure"] = "transition_in_progress"
+                    log.exception(
+                        "[chat] slot claim for user %s slot %s raised and the slot "
+                        "state is unreadable",
+                        user_id,
+                        slot,
+                    )
+                    return False
             if not updated:
-                log.info(
-                    "[chat] slot changed before new-chat commit for user %s slot %s",
-                    user_id,
-                    slot,
+                # Specific, not generic: a slot conflict is *retryable* (the owner may
+                # move on), and the client is told which one happened.
+                record["local_archive_failure"] = "slot_conflict"
+                log.warning(
+                    "[chat] new-chat transition refused for %s: the slot moved to "
+                    "another session before the commit",
+                    previous_session_id,
                 )
                 return False
         session_tabs = getattr(core, "_session_tabs", {})
@@ -406,8 +523,53 @@ async def _commit_trial_new_chat_transition(
         await finish_hosted_session_transition(lifecycle, retired=retired)
 
 
+# Reasons a retry cannot change: the archive is already on the device in a shape this
+# attempt cannot extend, the source cannot be read, or the transfer is too large. A
+# reservation is for a transition *in flight*, so those give it back — measured, four
+# such refusals used to lock the account out of new chats for about twenty hours,
+# because the durable status stayed `committing` and only a commit or expiry dropped it.
+# Reasons that are deliberately retryable, and the product says so:
+#   `local_agent_offline`  ("reconnect the agent and retry")
+#   `slot_conflict`        (the session holding the slot may move on, and a retry then
+#                           commits — a test pins exactly that)
+#   `transition_in_progress` (a duplicate ACK while another attempt is committing; the
+#                           in-flight attempt owns the outcome, so this one must not
+#                           give the reservation back)
+# The quiesce timeout and the slot-claim failure deliberately stay out of this set: a
+# worker that never answers would otherwise hold the reservation until the token
+# expires. They report their own reason instead of `archive_save_failed`.
+_TRIAL_NEW_CHAT_RETRYABLE_REASONS = frozenset(
+    {"local_agent_offline", "slot_conflict", "transition_in_progress"}
+)
+
+
+def _release_trial_new_chat_commit(record: dict, code: str, now: float) -> None:
+    """Give back the reservation of a transition a retry cannot rescue."""
+    if code in _TRIAL_NEW_CHAT_RETRYABLE_REASONS:
+        return
+    log.info(
+        "[chat] releasing the failed new-chat reservation for %s (%s)",
+        record.get("commit_request_id") or "?",
+        code or "unknown",
+    )
+    try:
+        _write_trial_new_chat_status(record, "rolled_back", now)
+    except OSError:
+        log.exception("[chat] failed to record the rolled-back new-chat transition")
+    _drop_trial_new_chat_commit(record)
+
+
 def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
     reason = str(record.get("local_archive_failure", "") or "")
+    # A refusal the caller sees must be visible to whoever reads the log: the
+    # reason is the difference between "retry" and "reconnect the agent", and it
+    # was previously only inferable by correlating a 503 with the client's code.
+    log.warning(
+        "[chat] new-chat transition refused for %s -> %s: %s",
+        record.get("previous_session_id") or "?",
+        record.get("session_id") or "?",
+        reason or "unrecorded",
+    )
     if reason == "local_agent_offline":
         return (
             "Reconnect the local agent to archive this chat on this device. Your previous chat remains preserved, and the new chat is not finalized.",
@@ -416,6 +578,31 @@ def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
     if reason == "archive_too_large":
         return (
             "This chat is too large to transfer to local archive storage. Your current chat was not replaced.",
+            reason,
+        )
+    if reason == "slot_conflict":
+        return (
+            "Another window is using this conversation slot, so this chat was kept and the new one was not started.",
+            "slot_conflict",
+        )
+    if reason == "transition_in_progress":
+        return (
+            "This chat is already being finalized. Nothing was lost; retry in a moment.",
+            "transition_in_progress",
+        )
+    if reason == "transition_superseded":
+        return (
+            "This chat was finalized from another window, so this one was not started.",
+            reason,
+        )
+    if reason == "worker_unresponsive":
+        return (
+            "The browser did not respond in time, so this chat was not replaced. Retry the new chat.",
+            reason,
+        )
+    if reason == "slot_claim_failed":
+        return (
+            "This conversation slot could not be claimed, so the current chat was not replaced. Retry the new chat.",
             reason,
         )
     if reason:
@@ -469,18 +656,22 @@ def _make_trial_new_chat_capacity(agent_id: str) -> bool:
     )
 
 
-def _reserve_trial_new_chat_status(record: dict, now: float) -> bool:
-    """Atomically check durable limits and persist a pending reservation."""
+def _reserve_trial_new_chat_status(record: dict, now: float) -> str:
+    """Atomically check durable limits and persist a pending reservation.
+
+    Returns "" once the reservation is durable, otherwise the limit that refused
+    it, so a refusal can be reported instead of only inferred from the total.
+    """
     with _trial_new_chat_status_lock:
         retained_count, active_by_agent = _prune_trial_new_chat_statuses(now)
         if retained_count >= _TRIAL_NEW_CHAT_STATUS_MAX_RECORDS:
-            return False
+            return "durable_records"
         if active_by_agent.get(record["agent_id"], 0) >= _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT:
-            return False
+            return "durable_pending"
         if not _make_trial_new_chat_capacity(record["agent_id"]):
-            return False
+            return "pending_records"
         _write_trial_new_chat_status(record, "pending", now)
-        return True
+        return ""
 
 
 def _drop_guest_new_chat_record(record: dict) -> None:
@@ -573,6 +764,7 @@ async def _trial_new_chat_unavailable_response(
         if recovery_choice == "destination":
             if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
                 error, code = _new_chat_preservation_error(record)
+                _release_trial_new_chat_commit(record, code, now)
                 return web.json_response(
                     {"error": error, "code": code},
                     status=503,
@@ -3043,8 +3235,14 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     user_id = auth_info.get("user_id", "")
     model = request.query.get("model", "")
-    if (guest_mode or core._is_pending_user(auth_info)) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not be routed to a different lane than its turns use.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if (guest_mode or core._is_pending_user(auth_info))
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
@@ -3116,8 +3314,16 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    # A client that names no model is not asking for a different lane — it is
+    # asking this server to choose, exactly as /web/chat does for a turn. Without
+    # this, a new chat from a client that sends no model falls past the trial
+    # transition and looks for a local agent that may not exist.
+    if not model:
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
@@ -3275,13 +3481,18 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         }
         record["commit_token"] = _trial_new_chat_commit_token(core, record)
         try:
-            admitted = _reserve_trial_new_chat_status(record, now)
+            refused = _reserve_trial_new_chat_status(record, now)
         except OSError:
             log.exception("[chat] failed to persist new-chat transition status")
             return web.json_response(
                 {"error": "Failed to reserve new-chat transition"}, status=500
             )
-        if not admitted:
+        if refused:
+            log.info(
+                "[chat] new-chat transition refused for agent %s: %s at limit",
+                agent_id,
+                refused,
+            )
             return web.json_response(
                 {"error": "Too many pending new-chat transitions", "retry_after": 60},
                 status=429,
@@ -3326,8 +3537,13 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    # Same rule as /web/chat/new: no model named means the server's default.
+    if not model:
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if not core._is_openrouter_model(model):
@@ -3434,6 +3650,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         elif status == "committing":
             if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
                 error, code = _new_chat_preservation_error(record)
+                _release_trial_new_chat_commit(record, code, now)
                 return web.json_response(
                     {"error": error, "code": code},
                     status=503,
@@ -3466,6 +3683,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
             _write_trial_new_chat_status(record, "committing", now)
         if not await _commit_trial_new_chat_transition(core, record, user_id=user_id):
             error, code = _new_chat_preservation_error(record)
+            _release_trial_new_chat_commit(record, code, now)
             return web.json_response(
                 {"error": error, "code": code},
                 status=503,
@@ -3502,8 +3720,14 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
     user_id = auth_info.get("user_id", "")
 
     model = request.query.get("model", "")
-    if (guest_mode or core._is_pending_user(auth_info)) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not be routed to a different lane than its turns use.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if (guest_mode or core._is_pending_user(auth_info))
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     if guest_mode and not core._is_openrouter_model(model):
@@ -3587,6 +3811,72 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
     )
 
 
+async def handle_chat_slots_release(request: web.Request) -> web.Response:
+    """POST /web/chat/slots/release — give back a conversation slot this client owns.
+
+    Binding a session to a slot only ever fills an *empty* slot, and nothing else
+    unbinds one, so a client that abandons a chat without a committed transition used
+    to spend one of the account's three slots for good — three of those and it could
+    not start an archivable chat at all. This is the missing release, and it is a
+    compare-and-set on the session the caller names, for the same reason the transition
+    is: a stale or racing client must only ever free the chat it is actually in.
+
+    The call is deliberately not idempotent, and a client must not replay it: a retry
+    after a timeout cannot be told apart from a stale client freeing a slot that a
+    competing client has since taken, so the second call answers 409. A client that
+    loses the response re-reads slot state instead of repeating the request.
+    """
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    slot = _normalize_chat_slot(body.get("slot"))
+    session_id = str(body.get("session_id", "") or "").strip()
+    if slot is None:
+        return web.json_response({"error": "slot must be an integer from 1 to 3"}, status=400)
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    model = str(body.get("model", "") or "")
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that names
+        # none must not be answered from a different lane than its turns use.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
+    if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
+        return core._pending_limited_response()
+    user_id = auth_info.get("user_id", "")
+    agent_id = auth_info.get("agent_id", "")
+    if not user_id or not _is_trial_transition_session(agent_id, session_id):
+        return web.json_response({"error": "Invalid session for this account"}, status=400)
+    if not core._is_openrouter_model(model):
+        # A local agent keeps its own slot state, and this endpoint does not reach it.
+        return web.json_response(
+            {"error": "Slot release is not supported on this lane"}, status=501
+        )
+    try:
+        released = _hosted_repo().release_slot_session(user_id, slot, session_id)
+    except (OSError, ValueError):
+        log.exception("[chat] failed to release slot %s for user %s", slot, user_id)
+        return web.json_response(
+            {"error": "Hosted conversation state is temporarily unavailable"}, status=503
+        )
+    if not released:
+        return web.json_response(
+            {"error": "That session does not hold this slot"}, status=409
+        )
+    log.info("[chat] released slot %s from %s", slot, session_id)
+    return web.json_response(
+        {"ok": True, "released": True, "slot": slot, "session_id": session_id}
+    )
+
+
 async def handle_chat_switch(request: web.Request) -> web.Response:
     """POST /web/chat/switch — switch active slot."""
     core = _core()
@@ -3601,8 +3891,16 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     user_id = auth_info.get("user_id", "")
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Same rule as a turn: the deployment owns the model, so a client that
+        # names none must not switch lanes. A hosted client's slot state lives
+        # server-side; the local-agent lane would answer 503 on a machine with no
+        # agent and would leave the hosted slot unpersisted.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if core._is_pending_user(auth_info)
+            else core._HOSTED_DEFAULT_MODEL
+        )
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)

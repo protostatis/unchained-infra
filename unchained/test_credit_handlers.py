@@ -107,7 +107,13 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.grant("u-target", 1_000_000, idempotency_key="seed")
         run = self.ledger.create_run("u-target", idempotency_key="turn")
 
-        with patch.object(credit_internal, "_core", return_value=self.core):
+        # The MVP hosted policy offers users one model; these tests are about
+        # DeepSeek settle pricing, so the model is allowed explicitly.
+        with (
+            patch.object(credit_internal, "_core", return_value=self.core),
+            patch.object(credit_internal, "is_hosted_model_allowed_for_identity",
+                         return_value=True),
+        ):
             reserved_response = await credit_internal.handle_credit_reserve(
                 _Request(
                     {
@@ -154,6 +160,9 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(credit_internal, "_core", return_value=self.core),
+            # Same reason as above: DeepSeek settle pricing, not the user policy.
+            patch.object(credit_internal, "is_hosted_model_allowed_for_identity",
+                         return_value=True),
             patch("credit.time.time", return_value=peak_ts),
         ):
             reserved_response = await credit_internal.handle_credit_reserve(
@@ -263,6 +272,9 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(credit_internal, "_core", return_value=self.core),
+            # Same reason as above: DeepSeek settle pricing, not the user policy.
+            patch.object(credit_internal, "is_hosted_model_allowed_for_identity",
+                         return_value=True),
             patch("credit.time.time", return_value=offpeak_ts),
         ):
             reserved_response = await credit_internal.handle_credit_reserve(
@@ -307,7 +319,13 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.grant("u-target", 1_000_000, idempotency_key="seed-token-cap")
         run = self.ledger.create_run("u-target", idempotency_key="turn-token-cap")
 
-        with patch.object(credit_internal, "_core", return_value=self.core):
+        # The MVP hosted policy offers users one model; these tests are about
+        # DeepSeek settle pricing, so the model is allowed explicitly.
+        with (
+            patch.object(credit_internal, "_core", return_value=self.core),
+            patch.object(credit_internal, "is_hosted_model_allowed_for_identity",
+                         return_value=True),
+        ):
             reserved_response = await credit_internal.handle_credit_reserve(
                 _Request(
                     {

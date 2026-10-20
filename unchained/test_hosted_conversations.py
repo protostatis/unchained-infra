@@ -177,6 +177,23 @@ class TestHostedConversationRepo(unittest.TestCase):
         self.assertEqual(state["slots"]["2"], "")
         self.assertEqual(state["slots"]["3"], "")
 
+    def test_release_slot_frees_only_the_named_session(self):
+        """Releasing is a compare-and-set: it may free the caller's chat, nothing else.
+
+        Binding only ever fills an *empty* slot and nothing else unbinds one, so this
+        is the only way back for a client that abandons a chat without a committed
+        transition — and it must never free a slot some other session is sitting in.
+        """
+        self.repo.bind_initial_session("u-release", "s-agent-holding", slot=1)
+        self.assertFalse(self.repo.release_slot_session("u-release", 1, "s-agent-other"))
+        self.assertEqual(self.repo.get_slot_state("u-release")["slots"]["1"], "s-agent-holding")
+        self.assertTrue(self.repo.release_slot_session("u-release", 1, "s-agent-holding"))
+        self.assertEqual(self.repo.get_slot_state("u-release")["slots"]["1"], "")
+        # Already free: nothing to release, and no error either.
+        self.assertFalse(self.repo.release_slot_session("u-release", 1, "s-agent-holding"))
+        with self.assertRaises(ValueError):
+            self.repo.release_slot_session("u-release", 4, "s-agent-holding")
+
     def test_slot_state_persistence(self):
         state = self.repo.get_slot_state("u-test-2")
         state["active_slot"] = 2
@@ -1927,6 +1944,44 @@ class TestTrialSlotsServerAuthority(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(slots_by_id[3]["empty"])
 
     @patch("web_app.handlers.chat_flow._core")
+    async def test_slot_release_is_a_compare_and_set(self, mock_core):
+        """The release endpoint frees the caller's chat, and refuses anybody else's."""
+        from web_app.handlers.chat_flow import handle_chat_slots_release
+
+        user_id = "u-test-slot-release"
+        mine = self.repo.new_session_id(user_id, "trial-agent")
+        other = self.repo.new_session_id(user_id, "trial-agent")
+        self._write_session(mine, [{"role": "user", "content": "Mine"}])
+        self._write_session(other, [{"role": "user", "content": "Theirs"}])
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = mine
+        state["slots"]["2"] = other
+        self.repo.set_slot_state(user_id, state)
+        mock_core.return_value = self._core(user_id)
+
+        def release_request(slot, session_id):
+            return SimpleNamespace(json=AsyncMock(return_value={
+                "model": "google/gemini-3.1-flash-lite",
+                "slot": slot,
+                "session_id": session_id,
+            }))
+
+        # The session in that slot is somebody else's chat: refuse, change nothing.
+        refused = await handle_chat_slots_release(release_request(1, other))
+        self.assertEqual(refused.status, 409)
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], mine)
+
+        released = await handle_chat_slots_release(release_request(1, mine))
+        body = json.loads(released.body.decode())
+        self.assertEqual(released.status, 200)
+        self.assertTrue(body["released"])
+        self.assertEqual(self.repo.get_slot_state(user_id)["slots"]["1"], "")
+
+        # Idempotence is not claimed: an already-free slot is not the caller's to free.
+        again = await handle_chat_slots_release(release_request(1, mine))
+        self.assertEqual(again.status, 409)
+
+    @patch("web_app.handlers.chat_flow._core")
     async def test_switch_persists_to_server(self, mock_core):
         from web_app.handlers.chat_flow import handle_chat_switch
 
@@ -1950,6 +2005,38 @@ class TestTrialSlotsServerAuthority(unittest.IsolatedAsyncioTestCase):
 
         state = self.repo.get_slot_state(user_id)
         self.assertEqual(state["active_slot"], 3)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_switch_without_a_model_stays_on_the_hosted_lane(self, mock_core):
+        """Same rule as a turn: an authenticated client that names no model is hosted.
+
+        A model-less client that read slot state from /web/chat/slots must not be
+        routed to the local-agent lane, which answers 503 when no agent is
+        connected and never persists the hosted slot.
+        """
+        from web_app.handlers.chat_flow import handle_chat_switch
+
+        user_id = "u-test-switch-default"
+        core = self._core(user_id)
+        core._HOSTED_DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+        core._agent_request = AsyncMock()
+        # Mirror the real predicate: slash-form and `deepseek-*` IDs are hosted,
+        # an empty model is not. The shared helper accepts anything, which would
+        # hide exactly the routing bug this test exists to pin.
+        core._is_openrouter_model = lambda model: bool(model) and (
+            "/" in model or model.startswith("deepseek-")
+        )
+        mock_core.return_value = core
+        request = SimpleNamespace(json=AsyncMock(return_value={"slot": 2}))
+
+        response = await handle_chat_switch(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["trial"])
+        self.assertEqual(data["active_slot"], 2)
+        self.assertEqual(self.repo.get_slot_state(user_id)["active_slot"], 2)
+        core._agent_request.assert_not_awaited()
 
 
 class TestTrialDualReadCompat(unittest.TestCase):

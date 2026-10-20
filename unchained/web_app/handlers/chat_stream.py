@@ -1561,8 +1561,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     session_id = body.get("session_id", "")
     model = body.get("model", "")
     slot = body.get("slot")
-    if (guest_mode or core._is_pending_user(auth_info)) and not model:
-        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    if not model:
+        # Guest/pending traffic gets the free trial lane; an authenticated client
+        # that names no model gets the hosted default. Both are the server's call:
+        # the MVP UI has no model picker, so nothing should have to send one.
+        model = (
+            core._OPENROUTER_TRIAL_DEFAULT_MODEL
+            if (guest_mode or core._is_pending_user(auth_info))
+            else core._HOSTED_DEFAULT_MODEL
+        )
     guest_requested_model = ""
     if guest_mode:
         guest_requested_model = str(model or "").strip()
