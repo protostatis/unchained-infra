@@ -656,6 +656,130 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.status, 429)
 
     @patch("web_app.handlers.chat_flow._core")
+    async def test_duplicate_ack_keeps_the_reservation_of_an_inflight_commit(self, mock_core):
+        """A second ACK while the first is committing must not roll it back.
+
+        Overlapping ACKs are normal on a flaky connection. The in-flight attempt
+        owns the outcome, so the duplicate has to report `transition_in_progress`
+        and leave both the reservation and the durable `committing` status alone.
+        """
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        core = self._core()
+        mock_core.return_value = core
+        with patch.object(chat_flow, "_TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT", 1):
+            first = await handle_chat_new(
+                self._new_request("request-0000000000000090", "s-trial-agent-dup-one")
+            )
+            data = json.loads(first.body.decode())
+            self.assertEqual(first.status, 200)
+
+            async def in_flight(_core, record, *, user_id=""):
+                record["local_archive_failure"] = "transition_in_progress"
+                return False
+
+            with patch.object(
+                chat_flow, "_commit_trial_new_chat_transition", side_effect=in_flight
+            ):
+                duplicate = await handle_chat_new_ack(
+                    self._ack_request(
+                        "request-0000000000000090",
+                        "s-trial-agent-dup-one",
+                        data["session_id"],
+                        data["commit_token"],
+                    )
+                )
+            self.assertEqual(duplicate.status, 503)
+            self.assertEqual(
+                json.loads(duplicate.body.decode())["code"], "transition_in_progress"
+            )
+
+            statuses = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json")
+            ]
+            self.assertEqual([status["status"] for status in statuses], ["committing"])
+
+            # The reservation is intact, so the attempt can still be retried.
+            blocked = await handle_chat_new(
+                self._new_request("request-0000000000000091", "s-trial-agent-dup-two")
+            )
+        self.assertEqual(blocked.status, 429)
+
+    async def test_commit_reports_a_duplicate_ack_as_in_progress(self):
+        import web_state
+        from web_app.handlers.chat_flow import _commit_trial_new_chat_transition
+
+        core = self._core()
+        record = {"previous_session_id": "s-dup-prev", "session_id": "s-dup-new", "slot": 1}
+        web_state.hosted_session_lifecycles(core)["s-dup-prev"] = (
+            web_state.HostedSessionLifecycle(phase="transitioning")
+        )
+
+        committed = await _commit_trial_new_chat_transition(core, record)
+
+        self.assertFalse(committed)
+        self.assertEqual(record["local_archive_failure"], "transition_in_progress")
+
+    async def test_commit_finishes_idempotently_when_already_committed(self):
+        """A crash between retire and ack must not strand or roll back the commit."""
+        import web_state
+        from web_app.handlers.chat_flow import _commit_trial_new_chat_transition
+
+        core = self._core()
+        record = {"previous_session_id": "s-retired-prev", "session_id": "s-retired-new", "slot": 1}
+        web_state.hosted_session_lifecycles(core)["s-retired-prev"] = (
+            web_state.HostedSessionLifecycle(phase="retired")
+        )
+
+        committed = await _commit_trial_new_chat_transition(core, record)
+
+        self.assertTrue(committed)
+        self.assertNotIn("local_archive_failure", record)
+
+    async def test_quiesce_timeout_reports_its_own_reason_and_reopens(self):
+        """Not an archive failure: nothing was saved or moved yet."""
+        import web_state
+        from web_app.handlers.chat_flow import _commit_trial_new_chat_transition
+
+        core = self._core()
+        record = {"previous_session_id": "s-quiet-prev", "session_id": "s-quiet-new", "slot": 1}
+        with patch(
+            "web_app.handlers.chat_stream.quiesce_hosted_session",
+            AsyncMock(return_value=False),
+        ):
+            committed = await _commit_trial_new_chat_transition(core, record)
+
+        self.assertFalse(committed)
+        self.assertEqual(record["local_archive_failure"], "worker_unresponsive")
+        # A retry can still commit because the lifecycle was reopened.
+        self.assertEqual(web_state.hosted_session_phase(core, "s-quiet-prev"), "open")
+
+    def test_an_acknowledged_transition_never_downgrades(self):
+        """A late duplicate must not rewrite a committed transition as rolled_back."""
+        from web_app.handlers import chat_flow
+
+        record = {
+            "agent_id": "trial-agent",
+            "commit_request_id": "request-0000000000000099",
+            "commit_token": "tok-downgrade-test",
+            "previous_session_id": "s-downgrade-prev",
+            "session_id": "s-downgrade-new",
+            "slot": 1,
+            "issued_at": 1000,
+            "expires_at": 2000,
+        }
+        chat_flow._write_trial_new_chat_status(record, "acknowledged", 1000.0)
+
+        written = chat_flow._write_trial_new_chat_status(record, "rolled_back", 1001.0)
+
+        self.assertEqual(written["status"], "acknowledged")
+        self.assertEqual(
+            chat_flow._read_trial_new_chat_status(record)["status"], "acknowledged"
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
     async def test_corrupt_or_mismatched_status_is_retryable_and_non_destructive(self, mock_core):
         from web_app.handlers import chat_flow
         from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack

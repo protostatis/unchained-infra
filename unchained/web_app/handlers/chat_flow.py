@@ -212,7 +212,27 @@ def _prune_trial_new_chat_statuses(now: float) -> tuple[int, dict[str, int]]:
 
 def _write_trial_new_chat_status(record: dict, status: str, now: float) -> dict:
     with _trial_new_chat_status_lock:
+        try:
+            existing = _read_trial_new_chat_status(record)
+        except (OSError, ValueError):
+            existing = None
+        if (
+            existing is not None
+            and existing.get("status") == "acknowledged"
+            and status != "acknowledged"
+        ):
+            # A committed transition is final: the slot already points at the new
+            # session and the old one is retired. A late duplicate ACK, or a
+            # stale release racing it, must not rewrite that as rolled_back and
+            # make the durable state contradict the committed chat.
+            log.warning(
+                "[chat] refusing to rewrite acknowledged new-chat transition %s as %s",
+                existing.get("commit_request_id") or "?",
+                status,
+            )
+            return existing
         os.makedirs(_TRIAL_NEW_CHAT_STATUS_DIR, exist_ok=True)
+
         payload = {
             "agent_id": record["agent_id"],
             "commit_request_id": record["commit_request_id"],
@@ -305,10 +325,33 @@ async def _commit_trial_new_chat_transition(
     session_id = record["session_id"]
     lifecycle = await begin_hosted_session_transition(core, previous_session_id)
     if lifecycle is None:
+        phase = hosted_session_phase(core, previous_session_id)
+        if phase == "transitioning":
+            # A duplicate ACK is not a preservation failure. Another attempt for
+            # this transition owns the outcome, so leave both the reservation and
+            # the durable `committing` status alone; releasing here marked a
+            # retryable attempt rolled_back while it was still running.
+            record["local_archive_failure"] = "transition_in_progress"
+            log.warning(
+                "[chat] new-chat transition for %s is already in flight",
+                previous_session_id,
+            )
+            return False
+        if phase == "retired":
+            # The transition already committed under this token and only the
+            # durable status write was lost (a crash between retire and ack, for
+            # example). Report success so the caller finalizes idempotently
+            # instead of releasing the reservation of a committed chat.
+            record.pop("local_archive_failure", None)
+            log.info(
+                "[chat] new-chat transition for %s had already committed",
+                previous_session_id,
+            )
+            return True
         log.warning(
             "[chat] new-chat transition refused for %s: lifecycle is %s, not open",
             previous_session_id,
-            hosted_session_phase(core, previous_session_id),
+            phase,
         )
         return False
     retired = False
@@ -316,11 +359,17 @@ async def _commit_trial_new_chat_transition(
         # Imported lazily because chat_stream imports this module's repository
         # helper. The worker ACK follows its cancellation-time final save.
         from web_app.handlers.chat_stream import (
+            _HOSTED_SESSION_QUIESCE_TIMEOUT_S,
             quiesce_hosted_session,
             retire_hosted_session,
         )
 
         if not await quiesce_hosted_session(core, previous_session_id):
+            # Its own reason, not a generic archive failure: nothing was saved or
+            # moved yet. The reservation still goes back (a worker that never
+            # answers is what turned refusals into twenty-hour lockouts), but the
+            # client is told what actually happened.
+            record["local_archive_failure"] = "worker_unresponsive"
             log.warning(
                 "[chat] new-chat transition refused for %s: hosted worker did not "
                 "acknowledge retire_session within %.0fs",
@@ -377,6 +426,10 @@ async def _commit_trial_new_chat_transition(
                     allow_empty=True,
                 )
             except Exception:
+                # Same rule as the quiesce timeout: the reservation goes back,
+                # but the client must not be told the archive failed when the
+                # slot claim is what raised.
+                record["local_archive_failure"] = "slot_claim_failed"
                 log.exception(
                     "[chat] failed to claim slot for new-chat commit for user %s slot %s",
                     user_id,
@@ -426,10 +479,19 @@ async def _commit_trial_new_chat_transition(
 # reservation is for a transition *in flight*, so those give it back — measured, four
 # such refusals used to lock the account out of new chats for about twenty hours,
 # because the durable status stayed `committing` and only a commit or expiry dropped it.
-# Two reasons are deliberately retryable, and the product says so: `local_agent_offline`
-# ("reconnect the agent and retry") and `slot_conflict` (the session holding the slot
-# may move on, and a retry then commits — a test pins exactly that).
-_TRIAL_NEW_CHAT_RETRYABLE_REASONS = frozenset({"local_agent_offline", "slot_conflict"})
+# Reasons that are deliberately retryable, and the product says so:
+#   `local_agent_offline`  ("reconnect the agent and retry")
+#   `slot_conflict`        (the session holding the slot may move on, and a retry then
+#                           commits — a test pins exactly that)
+#   `transition_in_progress` (a duplicate ACK while another attempt is committing; the
+#                           in-flight attempt owns the outcome, so this one must not
+#                           give the reservation back)
+# The quiesce timeout and the slot-claim failure deliberately stay out of this set: a
+# worker that never answers would otherwise hold the reservation until the token
+# expires. They report their own reason instead of `archive_save_failed`.
+_TRIAL_NEW_CHAT_RETRYABLE_REASONS = frozenset(
+    {"local_agent_offline", "slot_conflict", "transition_in_progress"}
+)
 
 
 def _release_trial_new_chat_commit(record: dict, code: str, now: float) -> None:
@@ -473,6 +535,21 @@ def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
         return (
             "Another window is using this conversation slot, so this chat was kept and the new one was not started.",
             "slot_conflict",
+        )
+    if reason == "transition_in_progress":
+        return (
+            "This chat is already being finalized. Nothing was lost; retry in a moment.",
+            "transition_in_progress",
+        )
+    if reason == "worker_unresponsive":
+        return (
+            "The browser did not respond in time, so this chat was not replaced. Retry the new chat.",
+            reason,
+        )
+    if reason == "slot_claim_failed":
+        return (
+            "This conversation slot could not be claimed, so the current chat was not replaced. Retry the new chat.",
+            reason,
         )
     if reason:
         return (
