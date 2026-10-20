@@ -70,6 +70,38 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         chat_flow._TRIAL_NEW_CHAT_STATUS_DIR = self.original_status_dir
         self.temp_dir.cleanup()
 
+    def _slot_repo(
+        self,
+        slots: dict | None = None,
+        *,
+        claim_error: Exception | None = None,
+        move_before_error: bool = False,
+        unreadable: bool = False,
+    ):
+        """Fake hosted repo: the slot reads/claims a new-chat commit needs."""
+        state = {"slots": dict(slots or {})}
+
+        def get_slot_state(user_id: str) -> dict:
+            if unreadable:
+                raise OSError("slot state unavailable")
+            return {"slots": dict(state["slots"]), "active_slot": 1}
+
+        def replace_slot_session(
+            user_id, slot, expected_session_id, new_session_id, *, preview="", allow_empty=False
+        ) -> bool:
+            if claim_error is not None:
+                if move_before_error:
+                    # Emulate a write that landed before the error surfaced.
+                    state["slots"][str(slot)] = new_session_id
+                raise claim_error
+            state["slots"][str(slot)] = new_session_id
+            return True
+
+        return SimpleNamespace(
+            get_slot_state=get_slot_state,
+            replace_slot_session=replace_slot_session,
+        )
+
     def _core(self):
         return SimpleNamespace(
             _authenticate=lambda request: {"agent_id": "trial-agent"},
@@ -725,18 +757,107 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
     async def test_commit_finishes_idempotently_when_already_committed(self):
         """A crash between retire and ack must not strand or roll back the commit."""
         import web_state
-        from web_app.handlers.chat_flow import _commit_trial_new_chat_transition
+        from web_app.handlers import chat_flow
 
         core = self._core()
         record = {"previous_session_id": "s-retired-prev", "session_id": "s-retired-new", "slot": 1}
         web_state.hosted_session_lifecycles(core)["s-retired-prev"] = (
             web_state.HostedSessionLifecycle(phase="retired")
         )
+        repo = self._slot_repo({"1": "s-retired-new"})
 
-        committed = await _commit_trial_new_chat_transition(core, record)
+        with patch.object(chat_flow, "_hosted_repo", return_value=repo):
+            committed = await chat_flow._commit_trial_new_chat_transition(
+                core, record, user_id="u-retired"
+            )
 
         self.assertTrue(committed)
         self.assertNotIn("local_archive_failure", record)
+
+    async def test_commit_does_not_ack_a_transition_superseded_by_another_window(self):
+        """Another window's transition retired the source and took the slot.
+
+        A retired source only proves *a* commit for that session happened. With
+        several pending transitions per agent, that commit may belong to a
+        different destination, and acknowledging this token would tell the client
+        its chat was finalized when the slot points somewhere else.
+        """
+        import web_state
+        from web_app.handlers import chat_flow
+
+        core = self._core()
+        record = {"previous_session_id": "s-super-prev", "session_id": "s-super-loser", "slot": 1}
+        web_state.hosted_session_lifecycles(core)["s-super-prev"] = (
+            web_state.HostedSessionLifecycle(phase="retired")
+        )
+        repo = self._slot_repo({"1": "s-super-winner"})
+
+        with patch.object(chat_flow, "_hosted_repo", return_value=repo):
+            committed = await chat_flow._commit_trial_new_chat_transition(
+                core, record, user_id="u-super"
+            )
+
+        self.assertFalse(committed)
+        self.assertEqual(record["local_archive_failure"], "transition_superseded")
+
+    async def test_commit_keeps_the_reservation_when_the_slot_is_unreadable(self):
+        import web_state
+        from web_app.handlers import chat_flow
+
+        core = self._core()
+        record = {"previous_session_id": "s-blind-prev", "session_id": "s-blind-new", "slot": 1}
+        web_state.hosted_session_lifecycles(core)["s-blind-prev"] = (
+            web_state.HostedSessionLifecycle(phase="retired")
+        )
+        repo = self._slot_repo({"1": "s-blind-new"}, unreadable=True)
+
+        with patch.object(chat_flow, "_hosted_repo", return_value=repo):
+            committed = await chat_flow._commit_trial_new_chat_transition(
+                core, record, user_id="u-blind"
+            )
+
+        self.assertFalse(committed)
+        self.assertEqual(record["local_archive_failure"], "transition_in_progress")
+
+    async def test_slot_claim_exception_after_the_slot_moved_still_commits(self):
+        """The claim is a read-modify-write; a raise can land after the write."""
+        from web_app.handlers import chat_flow
+
+        core = self._core()
+        record = {"previous_session_id": "s-claim-prev", "session_id": "s-claim-new", "slot": 1}
+        repo = self._slot_repo(
+            {"1": "s-claim-prev"}, claim_error=OSError("disk"), move_before_error=True
+        )
+
+        with patch.object(chat_flow, "_hosted_repo", return_value=repo), patch.object(
+            chat_flow,
+            "_archive_hosted_session_locally",
+            AsyncMock(return_value=(True, "")),
+        ):
+            committed = await chat_flow._commit_trial_new_chat_transition(
+                core, record, user_id="u-claim"
+            )
+
+        self.assertTrue(committed)
+
+    async def test_slot_claim_exception_without_a_move_reports_slot_claim_failed(self):
+        from web_app.handlers import chat_flow
+
+        core = self._core()
+        record = {"previous_session_id": "s-claim2-prev", "session_id": "s-claim2-new", "slot": 1}
+        repo = self._slot_repo({"1": "s-claim2-prev"}, claim_error=OSError("disk"))
+
+        with patch.object(chat_flow, "_hosted_repo", return_value=repo), patch.object(
+            chat_flow,
+            "_archive_hosted_session_locally",
+            AsyncMock(return_value=(True, "")),
+        ):
+            committed = await chat_flow._commit_trial_new_chat_transition(
+                core, record, user_id="u-claim2"
+            )
+
+        self.assertFalse(committed)
+        self.assertEqual(record["local_archive_failure"], "slot_claim_failed")
 
     async def test_quiesce_timeout_reports_its_own_reason_and_reopens(self):
         """Not an archive failure: nothing was saved or moved yet."""

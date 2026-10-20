@@ -318,6 +318,16 @@ async def trial_new_chat_status_cleanup_context(app: web.Application):
             pass
 
 
+def _slot_holds_session(user_id: str, slot: int, session_id: str) -> bool | None:
+    """Return whether the slot is bound to ``session_id``, or None if unreadable."""
+    try:
+        state = _hosted_repo().get_slot_state(user_id)
+    except Exception:
+        log.exception("[chat] failed to read slot %s for user %s", slot, user_id)
+        return None
+    return str((state.get("slots") or {}).get(str(slot)) or "") == session_id
+
+
 async def _commit_trial_new_chat_transition(
     core, record: dict, *, user_id: str = ""
 ) -> bool:
@@ -338,10 +348,27 @@ async def _commit_trial_new_chat_transition(
             )
             return False
         if phase == "retired":
-            # The transition already committed under this token and only the
-            # durable status write was lost (a crash between retire and ack, for
-            # example). Report success so the caller finalizes idempotently
-            # instead of releasing the reservation of a committed chat.
+            # The source was retired by a commit of *this* session only if that
+            # commit is ours (a crash between retire and ack lost the durable
+            # write) or if a competing transition from another window took the
+            # slot. Confirm the destination before acknowledging.
+            if user_id:
+                holds = _slot_holds_session(user_id, record.get("slot", 1), session_id)
+                if holds is None:
+                    # Cannot prove which transition won; keep the reservation and
+                    # let the client retry instead of acknowledging the wrong one.
+                    record["local_archive_failure"] = "transition_in_progress"
+                    return False
+                if not holds:
+                    # Another window's transition retired this source and claimed
+                    # the slot. This token never committed, so it must not be acked
+                    # as if it had.
+                    record["local_archive_failure"] = "transition_superseded"
+                    log.warning(
+                        "[chat] new-chat transition for %s was superseded by another window",
+                        previous_session_id,
+                    )
+                    return False
             record.pop("local_archive_failure", None)
             log.info(
                 "[chat] new-chat transition for %s had already committed",
@@ -426,16 +453,38 @@ async def _commit_trial_new_chat_transition(
                     allow_empty=True,
                 )
             except Exception:
-                # Same rule as the quiesce timeout: the reservation goes back,
-                # but the client must not be told the archive failed when the
-                # slot claim is what raised.
-                record["local_archive_failure"] = "slot_claim_failed"
-                log.exception(
-                    "[chat] failed to claim slot for new-chat commit for user %s slot %s",
-                    user_id,
-                    slot,
-                )
-                return False
+                # The claim is a read-modify-write, so an exception can land after
+                # the slot already moved. Ask the authoritative state before
+                # calling the claim a failure; rolling back a chat whose slot
+                # moved is the contradiction this transition exists to avoid.
+                moved = _slot_holds_session(user_id, slot, session_id)
+                if moved:
+                    updated = True
+                    log.warning(
+                        "[chat] slot claim for user %s slot %s raised after moving "
+                        "the slot; continuing with the commit",
+                        user_id,
+                        slot,
+                    )
+                elif moved is False:
+                    record["local_archive_failure"] = "slot_claim_failed"
+                    log.exception(
+                        "[chat] failed to claim slot for new-chat commit for user %s slot %s",
+                        user_id,
+                        slot,
+                    )
+                    return False
+                else:
+                    # Neither outcome is proven; keep the reservation so a retry
+                    # can settle it instead of giving away a committed chat.
+                    record["local_archive_failure"] = "transition_in_progress"
+                    log.exception(
+                        "[chat] slot claim for user %s slot %s raised and the slot "
+                        "state is unreadable",
+                        user_id,
+                        slot,
+                    )
+                    return False
             if not updated:
                 # Specific, not generic: a slot conflict is *retryable* (the owner may
                 # move on), and the client is told which one happened.
@@ -540,6 +589,11 @@ def _new_chat_preservation_error(record: dict) -> tuple[str, str]:
         return (
             "This chat is already being finalized. Nothing was lost; retry in a moment.",
             "transition_in_progress",
+        )
+    if reason == "transition_superseded":
+        return (
+            "This chat was finalized from another window, so this one was not started.",
+            reason,
         )
     if reason == "worker_unresponsive":
         return (
