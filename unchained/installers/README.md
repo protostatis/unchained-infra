@@ -59,3 +59,19 @@ Behavior:
 - If a native installer file exists, `/web/download-installer` serves it directly.
 - If native files are missing, the endpoint returns `503` by default.
 - Set `UNCHAINED_ALLOW_SCRIPT_INSTALLER=1` only for temporary script fallback.
+
+### Desktop app (beta)
+
+The macOS desktop app is a separate client with its own artifact and flag:
+
+- artifact: `unchained-desktop-mac-arm64.dmg` (signed and notarized; built by the desktop
+  repo's `installers/build_mac_app.sh`), placed in this directory;
+- served by `GET /web/download-desktop` (session or install token; macOS only) under its
+  own analytics cta, `download_desktop`;
+- enabled with `UNCHAINED_DESKTOP_BETA=1` in the deployment's `.env` — compose passes it to
+  the web service. The `/install` card appears only when the flag is on **and** this file is
+  present, so turning the flag on without the artifact cannot publish a download that 503s.
+
+The dmg is gitignored, and `deploy.sh` uploads only what exists in this directory on the
+runner, so a release must stage it here before enabling the flag. The filename is fixed, so a
+redeploy overwrites the previous build rather than accumulating stale versions.

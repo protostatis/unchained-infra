@@ -217,6 +217,7 @@ class AnalyticsStore:
                 "install_signin_click",
                 "install_token_issued",
                 "installer_download_start",
+                "desktop_download_start",
                 "install_bootstrap_success",
             ],
         },
@@ -715,6 +716,8 @@ class AnalyticsStore:
                 return "install_token_issued"
             if event in {"installer_download_start", "agent_zip_download_start"}:
                 return "installer_download_start"
+            if event == "desktop_download_start":
+                return "desktop_download_start"
             if event == "install_bootstrap_success":
                 return "install_bootstrap_success"
             return ""

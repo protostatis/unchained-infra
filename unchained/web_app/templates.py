@@ -9266,12 +9266,12 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -10700,6 +10700,24 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -13772,12 +13790,12 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -13928,6 +13946,24 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -16822,12 +16858,12 @@ body{
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -17419,6 +17455,24 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -24497,12 +24551,40 @@ h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spa
 
           <div class="status" id="install-status"></div>
         </div>
+
+        <!-- The desktop app is a different client: its own browser, no agent, no terminal.
+             Rendered only when the deployment ships the beta AND the visitor is on macOS —
+             the build is arm64, so any other OS would get a dead download. -->
+        <div class="card" id="desktop-card" hidden>
+          <div class="card-title">Desktop app <span class="pill">BETA</span></div>
+          <div class="card-lede">One window: a chat and its own browser. No agent, no terminal.</div>
+
+          <div class="row">
+            <span class="pill">Apple silicon</span>
+            <span class="pill">macOS 12+</span>
+            <span class="pill">Signed and notarized</span>
+          </div>
+
+          <ul class="safe">
+            <li>Ships its own Chromium and shows the real page, with the chat floating over it.</li>
+            <li>After installing, open Unchained and choose Connect — you approve it in your browser, exactly like the installer.</li>
+            <li>The API key is stored encrypted on this machine and never shown to a page.</li>
+            <li>Separate from the agent: you can use either, but they are different clients.</li>
+          </ul>
+
+          <div class="row" style="margin-top:14px">
+            <a class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-desktop">Download for macOS</a>
+          </div>
+
+          <div class="note">The beta does not auto-update yet.</div>
+        </div>
       </div>
     </div>
   </div>
 
 <script>
 let _installOs = 'mac';
+const DESKTOP_BETA = __DESKTOP_BETA__;
 let _installStatusTimer = null;
 let installClientUpdateInFlight = false;
 let installClientUpdateSawDisconnect = false;
@@ -24513,9 +24595,22 @@ let installClientUpdateStartedAt = 0;
 let lastInstallClientStatus = null;
 
 function _detectInstallOs() {
-  const src = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
-  if (src.includes('win')) return 'windows';
-  if (src.includes('mac')) return 'mac';
+  // The UA comes first: it is what the download endpoint and the installer scripts see,
+  // and it can be overridden to test another OS. `navigator.platform` is deprecated and
+  // reports the *host*, so relying on it called a Linux UA on a Mac "macOS". Phones and
+  // tablets are excluded before either test: an iPad reports "like Mac OS X" and cannot
+  // run a mac installer.
+  const ua = String(navigator.userAgent || '').toLowerCase();
+  if (/iphone|ipad|ipod|android/.test(ua)) return 'other';
+  if (ua.includes('windows')) return 'windows';
+  if (ua.includes('mac os x') || ua.includes('macintosh')) return 'mac';
+  // The UA named an OS this installer does not target (Linux, ChromeOS): believe it, and
+  // do not let the host's `navigator.platform` argue.
+  if (ua.includes('linux') || ua.includes('x11') || ua.includes('cros')) return 'other';
+  // Only when the UA names no OS at all is the platform worth asking.
+  const platform = String(navigator.platform || '').toLowerCase();
+  if (platform.includes('win')) return 'windows';
+  if (platform.includes('mac')) return 'mac';
   return 'other';
 }
 
@@ -24704,6 +24799,13 @@ async function initInstallPage() {
   else if (_installOs === 'mac') label.textContent = 'macOS';
   else label.textContent = 'Unsupported';
 
+  const installButton = document.getElementById('install-btn');
+  if (installButton) {
+    installButton.textContent = _installOs === 'windows'
+      ? 'Download Installer for Windows'
+      : (_installOs === 'mac' ? 'Download Installer for macOS' : 'Unsupported system');
+  }
+
   if (_installOs === 'other') {
     _setStatus('Native one-click installer is currently available for macOS and Windows. Use Download ZIP for other OSes.', true);
   }
@@ -24716,6 +24818,10 @@ async function initInstallPage() {
       return;
     }
     document.getElementById('ready-panel').style.display = 'block';
+    // Authenticated only: a signed-out visitor gets the sign-in card, never a download
+    // that would answer 401.
+    const desktopCard = document.getElementById('desktop-card');
+    if (desktopCard) desktopCard.hidden = !(DESKTOP_BETA && _installOs === 'mac');
     refreshInstallButton();
     await checkInstallAgentStatus();
     if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);

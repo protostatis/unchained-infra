@@ -150,6 +150,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/chat/delete-archive", "web_app.handlers.chat_flow:handle_chat_delete_archive"),
     ("GET", "/web/download-agent", "web_app.handlers.install_flow:handle_download_agent"),
     ("GET", "/web/download-installer", "web_app.handlers.install_flow:handle_download_installer"),
+    ("GET", "/web/download-desktop", "web_app.handlers.install_flow:handle_download_desktop"),
     ("POST", "/web/install-token", "web_app.handlers.install_flow:handle_install_token"),
     ("POST", "/web/install/claim/start", "web_app.handlers.install_flow:handle_install_claim_start"),
     ("POST", "/web/install/claim/poll", "web_app.handlers.install_flow:handle_install_claim_poll"),
