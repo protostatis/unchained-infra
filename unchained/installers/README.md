@@ -72,6 +72,18 @@ The macOS desktop app is a separate client with its own artifact and flag:
   the web service. The `/install` card appears only when the flag is on **and** this file is
   present, so turning the flag on without the artifact cannot publish a download that 503s.
 
-The dmg is gitignored, and `deploy.sh` uploads only what exists in this directory on the
-runner, so a release must stage it here before enabling the flag. The filename is fixed, so a
-redeploy overwrites the previous build rather than accumulating stale versions.
+The dmg is gitignored, so a deploy cannot carry it, and the image only ever bakes the copy
+the host has. A deploy with `UNCHAINED_DESKTOP_BETA=1` therefore:
+
+- fetches the dmg from `UNCHAINED_DESKTOP_DMG_URL` and verifies it against
+  `UNCHAINED_DESKTOP_DMG_SHA256` — set both in the deployment's `.env` or the deploy
+  environment. A missing digest, a failed download or a mismatch fails the deploy;
+- without a URL, accepts the dmg already on the host and says so. That works, but the
+  deploy cannot prove which build it installed — set the two variables for reproducibility;
+- fails when neither exists, rather than publishing a card with nothing behind it;
+- rebuilds `web` on every deploy while the flag is on. The change classifier only hashes
+  deployed paths, and the dmg is not one, so without this the image would keep serving an
+  older build than the host holds.
+
+The filename is fixed, so a release replaces the previous build rather than accumulating
+stale versions.
