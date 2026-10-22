@@ -10703,12 +10703,19 @@ function openInstallModal() {
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
   {
-    const isWin = typeof _isWindows === 'function' && _isWindows();
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
     const aTitle = document.getElementById('method-a-title');
     const aCta = document.getElementById('method-a-cta');
     const bTitle = document.getElementById('method-b-title');
-    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
-    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
     if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
   }
   const focusable = _installModalFocusable();
@@ -13942,12 +13949,19 @@ function openInstallModal() {
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
   {
-    const isWin = typeof _isWindows === 'function' && _isWindows();
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
     const aTitle = document.getElementById('method-a-title');
     const aCta = document.getElementById('method-a-cta');
     const bTitle = document.getElementById('method-b-title');
-    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
-    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
     if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
   }
   const focusable = _installModalFocusable();
@@ -17444,12 +17458,19 @@ function openInstallModal() {
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
   {
-    const isWin = typeof _isWindows === 'function' && _isWindows();
+    // Three-way, not "Windows or not": this modal is reachable on Linux too, and calling
+    // that a macOS installer was a latent mislabel. The classes match the /install page's
+    // detector, and no undefined-helper guard is needed because it reads the UA directly.
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobile = /iphone|ipad|ipod|android/.test(ua);
+    const isWin = ua.includes('windows');
+    const isMac = !isWin && !mobile
+      && (ua.includes('mac os x') || ua.includes('macintosh'));
     const aTitle = document.getElementById('method-a-title');
     const aCta = document.getElementById('method-a-cta');
     const bTitle = document.getElementById('method-b-title');
-    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
-    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : (isMac ? 'macOS installer' : 'Installer');
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : (isMac ? 'Open .dmg / .pkg installer' : 'Open the install page');
     if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
   }
   const focusable = _installModalFocusable();
