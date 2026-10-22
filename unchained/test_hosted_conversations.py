@@ -348,17 +348,70 @@ class TestHostedConversationRepo(unittest.TestCase):
         with self.assertRaises(ArchivePreservationError):
             self.repo.archive_session("u-test", sid, sessions_dir=str(self.session_dir))
 
-    def test_list_archives_oldest_first_and_respects_limit(self):
+    def _write_archive_file(
+        self,
+        user_id: str,
+        archive_id: str,
+        archived_at,
+        preview: str = "archived",
+    ) -> None:
+        os.makedirs(self.repo._archives_dir(user_id), exist_ok=True)
+        payload = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "archive_id": archive_id,
+            "session_id": f"s-{archive_id}",
+            "slot": 1,
+            "preview": preview,
+            "message_count": 1,
+            "archived_at": archived_at,
+            "messages": [{"role": "user", "content": preview}],
+            "transcript": [{"role": "user", "content": preview}],
+        }
+        with open(self.repo._archive_path(user_id, archive_id), "w") as f:
+            json.dump(payload, f)
+
+    def test_list_archives_newest_first_and_respects_limit(self):
         for i in range(5):
             sid = f"s-trial-agent-arc-{i}"
             self._write_session(sid, [{"role": "user", "content": f"msg {i}"}])
             self.repo.archive_session(
                 "u-limit", sid, sessions_dir=str(self.session_dir),
             )
+        all_archives = self.repo.list_archives("u-limit", limit=10)
+        self.assertEqual(len(all_archives), 5)
+        # Sorted newest-first by archived_at, not by id.
+        times = [archive["archived_at"] for archive in all_archives]
+        self.assertEqual(times, sorted(times, reverse=True))
+
         archives = self.repo.list_archives("u-limit", limit=3)
         self.assertEqual(len(archives), 3)
-        # Sorted newest-first by archive_id (timestamp-based)
-        self.assertGreater(archives[0]["archived_at"], archives[-1]["archived_at"])
+        # The limit drops the oldest archives, never a newer one.
+        self.assertEqual(archives, all_archives[:3])
+
+    def test_list_archives_orders_same_millisecond_ties_by_archived_at(self):
+        """Ids in one millisecond differ only by random suffix.
+
+        The suffix must not decide the order, and it must not decide which
+        archive the limit keeps.
+        """
+        self._write_archive_file("u-tie", "1792672326382.zzz", 1792672326.381)
+        self._write_archive_file("u-tie", "1792672326382.fff", 1792672326.382)
+        self._write_archive_file("u-tie", "1792672326382.aaa", 1792672326.383)
+        self._write_archive_file("u-tie", "1792672326300.zzz", 1792672326.300)
+
+        archives = self.repo.list_archives("u-tie", limit=10)
+
+        self.assertEqual(
+            [archive["archive_id"] for archive in archives],
+            [
+                "1792672326382.aaa",
+                "1792672326382.fff",
+                "1792672326382.zzz",
+                "1792672326300.zzz",
+            ],
+        )
+        newest = self.repo.list_archives("u-tie", limit=1)
+        self.assertEqual([archive["archive_id"] for archive in newest], ["1792672326382.aaa"])
 
     def test_restore_archive_returns_session_and_messages(self):
         sid = "s-trial-agent-archive-src"
