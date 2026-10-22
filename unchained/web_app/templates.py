@@ -24530,12 +24530,40 @@ h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spa
 
           <div class="status" id="install-status"></div>
         </div>
+
+        <!-- The desktop app is a different client: its own browser, no agent, no terminal.
+             Rendered only when the deployment ships the beta AND the visitor is on macOS —
+             the build is arm64, so any other OS would get a dead download. -->
+        <div class="card" id="desktop-card" hidden>
+          <div class="card-title">Desktop app <span class="pill">BETA</span></div>
+          <div class="card-lede">One window: a chat and its own browser. No agent, no terminal.</div>
+
+          <div class="row">
+            <span class="pill">Apple silicon</span>
+            <span class="pill">macOS 12+</span>
+            <span class="pill">Signed and notarized</span>
+          </div>
+
+          <ul class="safe">
+            <li>Ships its own Chromium and shows the real page, with the chat floating over it.</li>
+            <li>After installing, open Unchained and choose Connect — you approve it in your browser, exactly like the installer.</li>
+            <li>The API key is stored encrypted on this machine and never shown to a page.</li>
+            <li>Separate from the agent: you can use either, but they are different clients.</li>
+          </ul>
+
+          <div class="row" style="margin-top:14px">
+            <a class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-desktop">Download for macOS</a>
+          </div>
+
+          <div class="note">The beta does not auto-update yet.</div>
+        </div>
       </div>
     </div>
   </div>
 
 <script>
 let _installOs = 'mac';
+const DESKTOP_BETA = __DESKTOP_BETA__;
 let _installStatusTimer = null;
 let installClientUpdateInFlight = false;
 let installClientUpdateSawDisconnect = false;
@@ -24749,6 +24777,9 @@ async function initInstallPage() {
   if (_installOs === 'windows') label.textContent = 'Windows';
   else if (_installOs === 'mac') label.textContent = 'macOS';
   else label.textContent = 'Unsupported';
+
+  const desktopCard = document.getElementById('desktop-card');
+  if (desktopCard) desktopCard.hidden = !(DESKTOP_BETA && _installOs === 'mac');
 
   const installButton = document.getElementById('install-btn');
   if (installButton) {

@@ -277,6 +277,11 @@ async def handle_install_page(request: web.Request) -> web.Response:
     if acquisition:
         install_return_path = f"/install?{urlencode(acquisition)}"
     html = core.inject_google_client_id(core.INSTALL_ONBOARD_HTML, core.GOOGLE_CLIENT_ID)
+    # The desktop beta is a deployment decision, not a client guess: the page learns it
+    # here and still refuses to show the card off macOS.
+    html = html.replace(
+        "__DESKTOP_BETA__", "true" if core._DESKTOP_BETA_ENABLED else "false"
+    )
     html = html.replace(
         "__INSTALL_RETURN_PATH_ENCODED__",
         quote(install_return_path, safe=""),
