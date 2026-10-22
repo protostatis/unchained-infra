@@ -24258,7 +24258,7 @@ INSTALL_CLAIM_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize Installer</title>
+<title>Approve Unchained</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{--bg:#0b0d10;--surface:#13171d;--line:#2a313b;--text:#e8edf3;--muted:#a7b0bc;--ok:#23c483;--warn:#f59e0b}
@@ -24272,6 +24272,9 @@ h1{margin:0 0 8px;font-size:28px}
 .btn{border:none;border-radius:9px;padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none}
 .btn-primary{background:linear-gradient(135deg,#23c483,#18a96f);color:#052117}
 .btn-ghost{background:transparent;color:#d0daea;border:1px solid #39465a}
+.brand{display:block;margin:0 0 14px;font-size:13px;font-weight:800;letter-spacing:0.18em;color:#e8edf3;text-decoration:none}
+.brand span{color:#e94560}
+.fineprint{margin-top:10px;font-size:12px;line-height:1.5;color:#f59e0b}
 #state{margin-top:12px;font-size:13px}
 #state.ok{color:var(--ok)}
 #state.warn{color:var(--warn)}
@@ -24282,15 +24285,17 @@ h1{margin:0 0 8px;font-size:28px}
 <body>
   <div class="shell">
     <div class="card">
-      <h1>Authorize This Installer</h1>
-      <div class="sub">Approve this device to continue setup. The installer will fetch a short-lived token and exchange it for your API key locally.</div>
+      <a class="brand" href="/">UN<span>CHAINED</span></a>
+      <h1>Approve the Unchained app or installer</h1>
+      <div class="sub">Something you opened wants to connect to your Unchained account. Approving lets it fetch a short-lived token and exchange it for your API key on this machine.</div>
+      <div class="fineprint">Only approve this if you started setting up Unchained yourself, just now. If you did not, close this page.</div>
       <div id="signin-panel" class="row">
         <a class="btn btn-primary" id="signin-link" href="/local">Sign In To Continue</a>
       </div>
       <div id="approve-panel">
         <div class="row">
           <button class="btn btn-primary" id="approve-btn" onclick="approveInstall()">Approve Device</button>
-          <a class="btn btn-ghost" href="/install">Open Installer Page</a>
+          <a class="btn btn-ghost" href="/install">View agent installer page</a>
         </div>
       </div>
       <div id="state"></div>
@@ -24317,7 +24322,7 @@ async function approveInstall() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    setState('Approved. Return to the installer window; setup will continue automatically.', 'ok');
+    setState('Approved. Return to the Unchained app or installer to finish setup.', 'ok');
     btn.textContent = 'Approved';
   } catch (e) {
     btn.disabled = false;
@@ -24334,7 +24339,7 @@ async function initClaimPage() {
     const data = await r.json();
     if (!r.ok || !data.authenticated) {
       document.getElementById('signin-panel').style.display = 'flex';
-      setState('Sign in to approve this installer.', 'warn');
+      setState('Sign in to approve this device.', 'warn');
       return;
     }
     document.getElementById('approve-panel').style.display = 'block';
