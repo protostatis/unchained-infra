@@ -717,16 +717,19 @@ add_services() {
 # the beta on, the artifact has to exist — and when a URL is configured, it has to be the
 # build that URL names. Otherwise the install page silently hides the card, or the image
 # keeps serving a build nobody chose.
-ensure_desktop_artifact() {
-    local flag
-    flag=$(remote_bash "$REMOTE_DIR" <<'EOF'
+
+# Prints the deployment's flag. A .env that cannot be read is an error, not "off": the
+# caller must not skip the artifact check because the remote read failed.
+desktop_beta_flag() {
+    remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
-sed -n 's/^UNCHAINED_DESKTOP_BETA=//p' .env 2>/dev/null | tail -1 | tr -d "\"'" | tr -d '[:space:]'
+test -f .env
+sed -n 's/^UNCHAINED_DESKTOP_BETA=//p' .env | tail -1 | tr -d "\"'" | tr -d '[:space:]'
 EOF
-)
-    [[ "$flag" == "1" ]] || return 0
-    DESKTOP_BETA_ENABLED=true
+}
+
+ensure_desktop_artifact() {
     remote_bash "$REMOTE_DIR" "${UNCHAINED_DESKTOP_DMG_URL:-}" "${UNCHAINED_DESKTOP_DMG_SHA256:-}" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
@@ -741,16 +744,24 @@ read_env() {
 [[ -n "$sha" ]] || sha=$(read_env UNCHAINED_DESKTOP_DMG_SHA256)
 mkdir -p "$(dirname "$target")"
 if [[ -n "$url" ]]; then
+    # sha256sum compares case-insensitively; accept a digest copied in either case.
+    sha=$(printf '%s' "$sha" | tr 'A-F' 'a-f')
     if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
         echo "ERROR: UNCHAINED_DESKTOP_DMG_URL is set without a usable UNCHAINED_DESKTOP_DMG_SHA256." >&2
-        echo "       A deploy has to know which artifact it installs (64 lowercase hex)." >&2
+        echo "       A deploy has to know which artifact it installs (64 hex characters)." >&2
         exit 1
     fi
     tmp="$target.download.$$"
     trap 'rm -f "$tmp"' EXIT
     echo "    fetching the desktop artifact"
-    curl -fsSL --retry 3 --retry-delay 2 -o "$tmp" "$url"
-    printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - >/dev/null
+    curl -fsSL --connect-timeout 10 --max-time 600 --retry 3 --retry-delay 2 -o "$tmp" "$url"
+    if ! digest_output=$(printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - 2>&1); then
+        echo "ERROR: the downloaded artifact does not match its digest." >&2
+        echo "       url:      $url" >&2
+        echo "       expected: $sha" >&2
+        printf '%s\n' "$digest_output" | sed 's/^/       /' >&2
+        exit 1
+    fi
     mv -f "$tmp" "$target"
     trap - EXIT
     echo "    desktop artifact verified"
@@ -1681,7 +1692,14 @@ EOF
 # The desktop artifact is binary and untracked, so neither the upload list nor the
 # classifier below can account for it. Check it here, before anything is rebuilt.
 echo "==> Checking the desktop artifact..."
-ensure_desktop_artifact
+desktop_flag=$(desktop_beta_flag) || {
+    echo "ERROR: could not read UNCHAINED_DESKTOP_BETA from the deployment's .env." >&2
+    exit 1
+}
+if [[ "$desktop_flag" == "1" ]]; then
+    DESKTOP_BETA_ENABLED=true
+    ensure_desktop_artifact
+fi
 
 # Compute the diff between this deploy and the previous one. The remote
 # snapshot was taken before upload; uploads have now run, so any file
