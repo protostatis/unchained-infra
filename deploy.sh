@@ -109,6 +109,7 @@ DEPLOY_LOCK_TOKEN=""
 DEPLOY_BACKUP_READY=false
 DEPLOY_MUTATED=false
 DEPLOY_SUCCEEDED=false
+DESKTOP_BETA_ENABLED=false
 DEPLOY_ROLLBACK_ATTEMPTED=false
 DEPLOY_OVERLAY_APPLIED=false
 DEPLOY_ROLLBACK_ON_FAILURE="${DEPLOY_ROLLBACK_ON_FAILURE:-1}"
@@ -709,6 +710,75 @@ add_services() {
             SERVICES_TO_REBUILD="${SERVICES_TO_REBUILD:+$SERVICES_TO_REBUILD }$service"
         fi
     done
+}
+
+# The desktop dmg is a binary artifact the repo cannot carry (it is gitignored), and the
+# change classifier cannot see it (it hashes deployed paths only). When a deployment has
+# the beta on, the artifact has to exist — and when a URL is configured, it has to be the
+# build that URL names. Otherwise the install page silently hides the card, or the image
+# keeps serving a build nobody chose.
+
+# Prints the deployment's flag. The host `.env` is authoritative: that is where the web
+# container reads it (compose passes it through), so a value set only in the deploy
+# environment would rebuild for a beta the container still has off. A .env that cannot be
+# read is an error, not "off": the caller must not skip the artifact check because the
+# remote read failed.
+desktop_beta_flag() {
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+test -f .env
+sed -n 's/^UNCHAINED_DESKTOP_BETA=//p' .env | tail -1 | tr -d "\"'" | tr -d '[:space:]'
+EOF
+}
+
+ensure_desktop_artifact() {
+    remote_bash "$REMOTE_DIR" "${UNCHAINED_DESKTOP_DMG_URL:-}" "${UNCHAINED_DESKTOP_DMG_SHA256:-}" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+url="$2"
+sha="$3"
+cd "$remote_dir"
+target="unchained/installers/unchained-desktop-mac-arm64.dmg"
+read_env() {
+    sed -n "s/^$1=//p" .env 2>/dev/null | tail -1 | tr -d "\"'" | tr -d '[:space:]'
+}
+[[ -n "$url" ]] || url=$(read_env UNCHAINED_DESKTOP_DMG_URL)
+[[ -n "$sha" ]] || sha=$(read_env UNCHAINED_DESKTOP_DMG_SHA256)
+mkdir -p "$(dirname "$target")"
+if [[ -n "$url" ]]; then
+    # sha256sum compares case-insensitively; accept a digest copied in either case.
+    sha=$(printf '%s' "$sha" | tr 'A-F' 'a-f')
+    if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "ERROR: UNCHAINED_DESKTOP_DMG_URL is set without a usable UNCHAINED_DESKTOP_DMG_SHA256." >&2
+        echo "       A deploy has to know which artifact it installs (64 hex characters)." >&2
+        exit 1
+    fi
+    tmp="$target.download.$$"
+    trap 'rm -f "$tmp"' EXIT
+    echo "    fetching the desktop artifact"
+    curl -fsSL --connect-timeout 10 --max-time 600 --retry 3 --retry-delay 2 -o "$tmp" "$url"
+    if ! digest_output=$(printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - 2>&1); then
+        echo "ERROR: the downloaded artifact does not match its digest." >&2
+        echo "       url:      $url" >&2
+        echo "       expected: $sha" >&2
+        printf '%s\n' "$digest_output" | sed 's/^/       /' >&2
+        exit 1
+    fi
+    mv -f "$tmp" "$target"
+    trap - EXIT
+    echo "    desktop artifact verified"
+elif [[ -s "$target" ]]; then
+    echo "    WARNING: using the desktop artifact already on this host." >&2
+    echo "             Set UNCHAINED_DESKTOP_DMG_URL and UNCHAINED_DESKTOP_DMG_SHA256" >&2
+    echo "             so every deploy installs a known build." >&2
+else
+    echo "ERROR: UNCHAINED_DESKTOP_BETA is on but $target is missing." >&2
+    echo "       Set UNCHAINED_DESKTOP_DMG_URL and UNCHAINED_DESKTOP_DMG_SHA256," >&2
+    echo "       or place the dmg at that path on the host." >&2
+    exit 1
+fi
+EOF
 }
 
 restart_services_serially() {
@@ -1622,6 +1692,18 @@ if [ "$actual" != "$expected" ]; then
 fi
 EOF
 
+# The desktop artifact is binary and untracked, so neither the upload list nor the
+# classifier below can account for it. Check it here, before anything is rebuilt.
+echo "==> Checking the desktop artifact..."
+desktop_flag=$(desktop_beta_flag) || {
+    echo "ERROR: could not read UNCHAINED_DESKTOP_BETA from the deployment's .env." >&2
+    exit 1
+}
+if [[ "$desktop_flag" == "1" ]]; then
+    DESKTOP_BETA_ENABLED=true
+    ensure_desktop_artifact
+fi
+
 # Compute the diff between this deploy and the previous one. The remote
 # snapshot was taken before upload; uploads have now run, so any file
 # whose hash differs from the snapshot is something this deploy changed.
@@ -1730,6 +1812,14 @@ else
         CADDY_RECREATE_REQUIRED=true
     fi
     cd "$SCRIPT_DIR"
+fi
+
+if $DESKTOP_BETA_ENABLED; then
+    # The image bakes the dmg (Dockerfile COPY) and the classifier cannot see a file
+    # that is not a deployed path. Rebuilding web keeps the image and the artifact on
+    # this host in step; with an unchanged dmg the COPY layer is a cache hit.
+    echo "    The desktop beta is enabled — web will be rebuilt."
+    add_services web
 fi
 
 # Build affected services. caddy uses a public image (no build context)
