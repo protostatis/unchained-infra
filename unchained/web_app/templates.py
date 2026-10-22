@@ -9266,12 +9266,12 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -10700,6 +10700,17 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    const isWin = typeof _isWindows === 'function' && _isWindows();
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -13772,12 +13783,12 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -13928,6 +13939,17 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    const isWin = typeof _isWindows === 'function' && _isWindows();
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -16822,12 +16844,12 @@ body{
         <div class="method-grid">
           <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Installer</b>
-            <span class="method-cta">Open installer page</span>
+            <b id="method-a-title">Installer</b>
+            <span class="method-cta" id="method-a-cta">Open installer page</span>
           </a>
           <div class="method-card">
             <span class="method-label">Option B</span>
-            <b>Terminal command</b>
+            <b id="method-b-title">Terminal command</b>
             <span class="method-cta">Use the command below</span>
           </div>
         </div>
@@ -17419,6 +17441,17 @@ function openInstallModal() {
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
   document.addEventListener('keydown', handleInstallModalKeydown);
+  // The installer and the command both follow the detected OS, so their labels have to
+  // as well: a Windows user was told "Terminal command" next to a PowerShell command.
+  {
+    const isWin = typeof _isWindows === 'function' && _isWindows();
+    const aTitle = document.getElementById('method-a-title');
+    const aCta = document.getElementById('method-a-cta');
+    const bTitle = document.getElementById('method-b-title');
+    if (aTitle) aTitle.textContent = isWin ? 'Windows installer' : 'macOS installer';
+    if (aCta) aCta.textContent = isWin ? 'Open .exe / .msi installer' : 'Open .dmg / .pkg installer';
+    if (bTitle) bTitle.textContent = isWin ? 'PowerShell command' : 'Terminal command';
+  }
   const focusable = _installModalFocusable();
   (focusable[0] || modal).focus({preventScroll:true});
 }
@@ -24513,9 +24546,22 @@ let installClientUpdateStartedAt = 0;
 let lastInstallClientStatus = null;
 
 function _detectInstallOs() {
-  const src = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
-  if (src.includes('win')) return 'windows';
-  if (src.includes('mac')) return 'mac';
+  // The UA comes first: it is what the download endpoint and the installer scripts see,
+  // and it can be overridden to test another OS. `navigator.platform` is deprecated and
+  // reports the *host*, so relying on it called a Linux UA on a Mac "macOS". Phones and
+  // tablets are excluded before either test: an iPad reports "like Mac OS X" and cannot
+  // run a mac installer.
+  const ua = String(navigator.userAgent || '').toLowerCase();
+  if (/iphone|ipad|ipod|android/.test(ua)) return 'other';
+  if (ua.includes('windows')) return 'windows';
+  if (ua.includes('mac os x') || ua.includes('macintosh')) return 'mac';
+  // The UA named an OS this installer does not target (Linux, ChromeOS): believe it, and
+  // do not let the host's `navigator.platform` argue.
+  if (ua.includes('linux') || ua.includes('x11') || ua.includes('cros')) return 'other';
+  // Only when the UA names no OS at all is the platform worth asking.
+  const platform = String(navigator.platform || '').toLowerCase();
+  if (platform.includes('win')) return 'windows';
+  if (platform.includes('mac')) return 'mac';
   return 'other';
 }
 
@@ -24703,6 +24749,13 @@ async function initInstallPage() {
   if (_installOs === 'windows') label.textContent = 'Windows';
   else if (_installOs === 'mac') label.textContent = 'macOS';
   else label.textContent = 'Unsupported';
+
+  const installButton = document.getElementById('install-btn');
+  if (installButton) {
+    installButton.textContent = _installOs === 'windows'
+      ? 'Download Installer for Windows'
+      : (_installOs === 'mac' ? 'Download Installer for macOS' : 'Unsupported system');
+  }
 
   if (_installOs === 'other') {
     _setStatus('Native one-click installer is currently available for macOS and Windows. Use Download ZIP for other OSes.', true);
