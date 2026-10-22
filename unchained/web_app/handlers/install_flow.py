@@ -220,6 +220,18 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
 
     path = core._desktop_installer_path()
     if not path:
+        core._track_event(
+            request,
+            "desktop_download_fail",
+            route="/web/download-desktop",
+            route_intended="/install",
+            route_effective="/web/download-desktop",
+            cta_id="download_desktop",
+            error_code="desktop_installer_missing",
+            source="web",
+            status_code=503,
+            meta={"platform": "mac"},
+        )
         return web.json_response(
             {"error": "The desktop app build is not available yet"}, status=503
         )
@@ -246,7 +258,12 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
     )
     return web.FileResponse(
         path=path,
-        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            # A build that changes under the same name must not be cached by a proxy or
+            # the browser; the request is authenticated anyway.
+            "Cache-Control": "private, no-store",
+        },
     )
 
 

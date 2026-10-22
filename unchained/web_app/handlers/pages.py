@@ -277,10 +277,17 @@ async def handle_install_page(request: web.Request) -> web.Response:
     if acquisition:
         install_return_path = f"/install?{urlencode(acquisition)}"
     html = core.inject_google_client_id(core.INSTALL_ONBOARD_HTML, core.GOOGLE_CLIENT_ID)
-    # The desktop beta is a deployment decision, not a client guess: the page learns it
-    # here and still refuses to show the card off macOS.
-    html = html.replace(
-        "__DESKTOP_BETA__", "true" if core._DESKTOP_BETA_ENABLED else "false"
+    # The card is offered only when this deployment can actually serve the download: the
+    # flag alone would publish a card that 503s on a host whose installers/ has no dmg yet
+    # (a fresh CI deploy, for instance). The client still refuses to show it off macOS.
+    desktop_beta = bool(
+        getattr(core, "_DESKTOP_BETA_ENABLED", False)
+        and core._desktop_installer_path() is not None
+    )
+    html = html.replace("__DESKTOP_BETA__", "true" if desktop_beta else "false")
+    # The page differs by deployment flag, so it must not be cached by anything.
+    return web.Response(
+        text=html, content_type="text/html", headers={"Cache-Control": "no-store"}
     )
     html = html.replace(
         "__INSTALL_RETURN_PATH_ENCODED__",

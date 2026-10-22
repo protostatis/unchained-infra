@@ -24778,9 +24778,6 @@ async function initInstallPage() {
   else if (_installOs === 'mac') label.textContent = 'macOS';
   else label.textContent = 'Unsupported';
 
-  const desktopCard = document.getElementById('desktop-card');
-  if (desktopCard) desktopCard.hidden = !(DESKTOP_BETA && _installOs === 'mac');
-
   const installButton = document.getElementById('install-btn');
   if (installButton) {
     installButton.textContent = _installOs === 'windows'
@@ -24800,6 +24797,10 @@ async function initInstallPage() {
       return;
     }
     document.getElementById('ready-panel').style.display = 'block';
+    // Authenticated only: a signed-out visitor gets the sign-in card, never a download
+    // that would answer 401.
+    const desktopCard = document.getElementById('desktop-card');
+    if (desktopCard) desktopCard.hidden = !(DESKTOP_BETA && _installOs === 'mac');
     refreshInstallButton();
     await checkInstallAgentStatus();
     if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);
