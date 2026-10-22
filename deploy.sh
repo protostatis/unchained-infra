@@ -718,8 +718,11 @@ add_services() {
 # build that URL names. Otherwise the install page silently hides the card, or the image
 # keeps serving a build nobody chose.
 
-# Prints the deployment's flag. A .env that cannot be read is an error, not "off": the
-# caller must not skip the artifact check because the remote read failed.
+# Prints the deployment's flag. The host `.env` is authoritative: that is where the web
+# container reads it (compose passes it through), so a value set only in the deploy
+# environment would rebuild for a beta the container still has off. A .env that cannot be
+# read is an error, not "off": the caller must not skip the artifact check because the
+# remote read failed.
 desktop_beta_flag() {
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail

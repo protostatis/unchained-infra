@@ -78,6 +78,9 @@ the host has. A deploy with `UNCHAINED_DESKTOP_BETA=1` therefore:
 - fetches the dmg from `UNCHAINED_DESKTOP_DMG_URL` and verifies it against
   `UNCHAINED_DESKTOP_DMG_SHA256` — set both in the deployment's `.env` or the deploy
   environment. A missing digest, a failed download or a mismatch fails the deploy;
+- reads the flag itself only from the deployment's `.env`, because that is where the web
+  container reads it. Setting `UNCHAINED_DESKTOP_BETA` only in the deploy environment
+  would check and rebuild for a beta the container still has off;
 - without a URL, accepts the dmg already on the host and says so. That works, but the
   deploy cannot prove which build it installed — set the two variables for reproducibility;
 - fails when neither exists, rather than publishing a card with nothing behind it;
