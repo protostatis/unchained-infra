@@ -191,6 +191,82 @@ async def handle_download_installer(request: web.Request) -> web.Response:
     )
 
 
+async def handle_download_desktop(request: web.Request) -> web.Response:
+    """GET /web/download-desktop — the macOS desktop app (beta).
+
+    A different client from the agent, so it has its own artifact lane and its own flag.
+    macOS only: the build is arm64, and offering it to another OS would be a dead download.
+    """
+    core = _core()
+    if not core._DESKTOP_BETA_ENABLED:
+        return web.json_response(
+            {"error": "The desktop app is not available on this deployment"}, status=404
+        )
+    platform = core._normalize_installer_platform(request.query.get("os", "mac"))
+    if platform != "mac":
+        return web.json_response({"error": "The desktop app is macOS only"}, status=400)
+
+    install_token = core._request_install_token(request)
+    auth_info = None
+    token_info = None
+    if install_token:
+        token_info = core._auth.validate_install_token(install_token, consume=False)
+        if not token_info:
+            return web.json_response({"error": "Invalid or expired install token"}, status=401)
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+
+    path = core._desktop_installer_path()
+    if not path:
+        core._track_event(
+            request,
+            "desktop_download_fail",
+            route="/web/download-desktop",
+            route_intended="/install",
+            route_effective="/web/download-desktop",
+            cta_id="download_desktop",
+            error_code="desktop_installer_missing",
+            source="web",
+            status_code=503,
+            meta={"platform": "mac"},
+        )
+        return web.json_response(
+            {"error": "The desktop app build is not available yet"}, status=503
+        )
+
+    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+    user_type = auth_info.get("user_type", "") if auth_info else ""
+    core._track_event(
+        request,
+        "desktop_download_start",
+        route="/web/download-desktop",
+        route_intended="/install",
+        route_effective="/web/download-desktop",
+        cta_id="download_desktop",
+        user_id=user_id,
+        user_type=user_type,
+        source="web",
+        status_code=200,
+        meta={
+            "platform": "mac",
+            "artifact": "desktop",
+            "filename": path.name,
+            "channel": "install_token" if token_info else "session",
+        },
+    )
+    return web.FileResponse(
+        path=path,
+        headers={
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            # A build that changes under the same name must not be cached by a proxy or
+            # the browser; the request is authenticated anyway.
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
 async def handle_install_token(request: web.Request) -> web.Response:
     """POST /web/install-token — create a short-lived install token for installers."""
     core = _core()

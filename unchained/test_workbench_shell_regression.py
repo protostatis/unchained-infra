@@ -28,10 +28,13 @@ import web_app.templates as templates
 from template_utils import inject_google_client_id
 from web_app.handlers import pages as pages_module
 
-# Captured before the workbench layer moved to static assets (P0.0).
+# Captured before the workbench layer moved to static assets (P0.0). Recomputed when the
+# install modal's method cards gained ids, so their labels can follow the detected OS
+# ("macOS installer" / "Windows installer", "Terminal command" / "PowerShell command").
+# The three id attributes are the whole diff: scripts and styles are normalised out.
 BASE_MARKUP_SHA256 = {
-    "trial": "725562d8513977fc986d9c1ddd8d01b768ca9dfac8d2bd960deb4b68b74f9249",
-    "workspace": "821e75af840ba0201edde00d43a96e6565697a44c9912993fa6856c88f9c0e70",
+    "trial": "cf374f4788d6efee25fb0f8d0c5ebf8b7aa2032803d65e356a58930c5e087e94",
+    "workspace": "0eab31ad7da2e3748fe01bb56666f488b8d15092770e8caf6063f5c4e203fa25",
 }
 
 _STYLE_RE = re.compile(r"<style[^>]*>.*?</style>", re.DOTALL | re.IGNORECASE)

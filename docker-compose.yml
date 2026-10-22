@@ -231,6 +231,9 @@ services:
       - UNCHAINED_SSE_DEBUG=${UNCHAINED_SSE_DEBUG:-0}
       # Opt-in Agent Workbench presentation for /workspace (see web.py).
       - UNCHAINED_WORKBENCH_SHELL=${UNCHAINED_WORKBENCH_SHELL:-}
+      # The macOS desktop app (beta) as an install option. Off unless enabled; the card
+      # also requires the dmg to be present in unchained/installers on the host.
+      - UNCHAINED_DESKTOP_BETA=${UNCHAINED_DESKTOP_BETA:-0}
       - HOSTED_AGENT_SERVICE_TOKEN=${HOSTED_AGENT_SERVICE_TOKEN:?HOSTED_AGENT_SERVICE_TOKEN_required}
       - HOSTED_MAX_ACTIVE_TURNS=${HOSTED_MAX_ACTIVE_TURNS:-16}
       - HOSTED_MAX_ACTIVE_TURNS_PER_USER=${HOSTED_MAX_ACTIVE_TURNS_PER_USER:-3}

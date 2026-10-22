@@ -1227,9 +1227,12 @@ def _assert_native_installer_first_contract(
     actions = modal[actions_start:actions_end]
 
     assert "Pick one: installer or terminal command." in modal, template_name
-    assert methods.index(_NATIVE_INSTALL_CTA) < methods.index("<b>Terminal command</b>"), template_name
+    assert methods.index(_NATIVE_INSTALL_CTA) < methods.index('<b id="method-b-title">Terminal command</b>'), template_name
     assert methods.index("Option A") < methods.index("Option B"), template_name
-    assert methods.index("<b>Installer</b>") < methods.index("<b>Terminal command</b>"), template_name
+    # The two method titles carry ids now: their labels follow the detected OS
+    # ("macOS installer" / "Windows installer", "Terminal command" / "PowerShell command").
+    assert methods.index('<b id="method-a-title">Installer</b>') < \
+        methods.index('<b id="method-b-title">Terminal command</b>'), template_name
     assert "Option B command" in modal, template_name
     assert actions.index(_NATIVE_INSTALL_CTA) < actions.index(_TERMINAL_COMMAND_CTA), template_name
 

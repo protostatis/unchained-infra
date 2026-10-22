@@ -942,6 +942,17 @@ _WINDOWS_INSTALLER_FILES = _parse_installer_filename_list(
         _DEFAULT_WINDOWS_INSTALLER_FILES[1],
     ),
 )
+# The desktop app is a different client with its own artifact and its own lane: serving it
+# from the agent installer's filename would make the two indistinguishable at download.
+# macOS-only for the beta (an arm64 build), and off unless a deployment turns it on.
+_DEFAULT_DESKTOP_MAC_INSTALLER_FILES = ("unchained-desktop-mac-arm64.dmg",)
+_DESKTOP_MAC_INSTALLER_FILES = _parse_installer_filename_list(
+    os.environ.get("UNCHAINED_DESKTOP_INSTALLER_FILES", "").strip(),
+    _DEFAULT_DESKTOP_MAC_INSTALLER_FILES,
+)
+_DESKTOP_BETA_ENABLED = (
+    os.environ.get("UNCHAINED_DESKTOP_BETA", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
 _ALLOW_SCRIPT_INSTALLER_FALLBACK = (
     os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -1060,6 +1071,31 @@ def _native_installer_candidates(platform: str) -> list[str]:
         ordered.append(name)
         seen.add(name)
     return ordered
+
+
+def _desktop_installer_path() -> Path | None:
+    """The macOS desktop app (beta) artifact, if this deployment ships one."""
+    if not _DESKTOP_BETA_ENABLED:
+        return None
+    root = _INSTALLER_ASSETS_DIR.resolve()
+    existing: list[tuple[Path, int]] = []
+    for name in _DESKTOP_MAC_INSTALLER_FILES:
+        candidate = (root / name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            try:
+                mtime_ns = candidate.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            existing.append((candidate, mtime_ns))
+    if not existing:
+        return None
+    # Same rule as the agent installer: the freshest artifact wins.
+    existing.sort(key=lambda item: item[1], reverse=True)
+    return existing[0][0]
 
 
 def _native_installer_path(platform: str) -> Path | None:
