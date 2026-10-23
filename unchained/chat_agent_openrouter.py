@@ -1169,6 +1169,79 @@ def _cap_openai_history(messages: list[dict], max_non_system: int) -> list[dict]
     return tail
 
 
+_TOOL_CALL_INTERRUPTED = (
+    "Tool call was interrupted before it returned a result. "
+    "Do not retry it unless the user asks."
+)
+
+
+def _repair_tool_call_blocks(messages: list) -> int:
+    """Answer every assistant ``tool_calls`` id, in order, exactly once.
+
+    OpenAI-compatible providers reject a transcript whose assistant ``tool_calls``
+    message is not followed by one ``tool`` message per id — DeepSeek says it as
+    "An assistant message with 'tool_calls' must be followed by tool messages
+    responding to each 'tool_call_id'". A stopped turn leaves exactly that behind,
+    because the assistant message is appended before its tools run, so the next
+    message ("resume") sent a context the provider refused with 400.
+
+    The rebuild also covers older sessions already on disk: interrupted calls get
+    a placeholder result, tool results are re-emitted under their assistant message
+    in call order, and tool results that answer no call are dropped.
+
+    Returns the number of entries inserted or dropped (0 means already valid).
+    """
+    answers: dict[str, dict] = {}
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            call_id = str(msg.get("tool_call_id") or "")
+            if call_id and call_id not in answers:
+                answers[call_id] = msg
+
+    out: list = []
+    answered: set[str] = set()
+    inserted = 0
+    emitted_real = 0
+    for msg in messages:
+        if not isinstance(msg, dict):
+            out.append(msg)
+            continue
+        if msg.get("role") == "tool":
+            # Re-emitted under its assistant message; a leftover here answers no call.
+            continue
+        out.append(msg)
+        calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
+        if not calls:
+            continue
+        for call in calls:
+            call_id = str((call or {}).get("id") or "") if isinstance(call, dict) else ""
+            if not call_id or call_id in answered:
+                continue
+            answered.add(call_id)
+            answer = answers.get(call_id)
+            if answer is None:
+                answer = {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": _TOOL_CALL_INTERRUPTED,
+                }
+                inserted += 1
+            else:
+                emitted_real += 1
+            out.append(answer)
+
+    total_tool_messages = sum(
+        1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
+    )
+    repaired = inserted + (total_tool_messages - emitted_real)
+    # A count of 0 does not mean "nothing to do": the same results in the wrong order
+    # need no insert and no drop, but the provider still wants call order. Compare the
+    # rebuilt list instead of trusting the counter.
+    if len(out) != len(messages) or any(a is not b for a, b in zip(out, messages)):
+        messages[:] = out
+    return repaired
+
+
 def _prepare_hosted_context(
     messages: list[dict],
     *,
@@ -1581,6 +1654,12 @@ class TrialAgent:
             msgs = data.get("messages", [])
             if not isinstance(msgs, list):
                 msgs = []
+            repaired = _repair_tool_call_blocks(msgs)
+            if repaired:
+                print(
+                    f"[{session_id}] Repaired {repaired} tool-call block entries "
+                    "from disk"
+                )
             self.transcripts[session_id] = visible_transcript_from_payload(data)
             print(f"[{session_id}] Loaded {len(msgs)} messages from disk")
         except FileNotFoundError:
@@ -3002,6 +3081,11 @@ class TrialAgent:
 
         except asyncio.CancelledError:
             print(f"[{session_id}] Task cancelled")
+            # This turn's assistant tool_calls message is already in the history;
+            # stopping before the tools ran would persist it unanswered.
+            repaired = _repair_tool_call_blocks(messages)
+            if repaired:
+                print(f"[{session_id}] Answered {repaired} interrupted tool call(s)")
             self._save_session(session_id, messages, raise_on_error=True)
             # Don't send done — the cancel handler or new message handler does that
         except Exception as e:
@@ -3009,6 +3093,7 @@ class TrialAgent:
             print(f"[{session_id}] Error ({type(e).__name__}): {e}")
             traceback.print_exc()
             await self._send(session_id, {"type": "error", "data": str(e) or type(e).__name__})
+            _repair_tool_call_blocks(messages)
             self._save_session(session_id, messages)
             await self._send(session_id, {"type": "done"})
         finally:
@@ -3046,6 +3131,15 @@ class TrialAgent:
                     f"count={browser_stats['compacted']} "
                     f"chars={browser_stats['chars_before']}→{browser_stats['chars_after']}"
                 )
+        # Last gate before the provider sees the transcript: every assistant
+        # tool_calls block must carry one tool result per id. Compaction above can
+        # also split a block, so this runs after it, not only at load time.
+        repaired = _repair_tool_call_blocks(messages)
+        if repaired:
+            print(
+                f"[{session_id}] Repaired {repaired} tool-call block entries "
+                "before the provider call"
+            )
         body: dict = {
             "model": effective_model,
             "messages": messages,
