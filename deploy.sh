@@ -223,8 +223,13 @@ cat >/dev/null'
     printf -v quoted_script '%q' "$remote_script"
     printf -v quoted_lock_file '%q' "$REMOTE_DIR/.deploy.lock"
     printf -v quoted_token '%q' "$DEPLOY_LOCK_TOKEN"
+    # stderr must not share the status file: OpenSSH prints its own warnings there
+    # (measured: "connection is not using a post-quantum key exchange algorithm"),
+    # and the parser reads the first line as the token — a granted lock then looks
+    # like a refusal.
     "${SSH_CMD[@]}" "bash -c $quoted_script -- $quoted_lock_file $quoted_token" \
-        < "$DEPLOY_LOCK_FIFO" > "$DEPLOY_LOCK_STATUS_FILE" 2>&1 &
+        < "$DEPLOY_LOCK_FIFO" > "$DEPLOY_LOCK_STATUS_FILE" \
+        2> "$DEPLOY_LOCK_WORK_DIR/stderr" &
     DEPLOY_LOCK_SSH_PID=$!
     # Keep the remote stdin open. Its `flock` is released automatically if this
     # process dies or this descriptor is closed in release_remote_deploy_lock.
@@ -239,6 +244,11 @@ cat >/dev/null'
                 return 0
             fi
             echo "ERROR: could not acquire remote deployment lock: $lock_status" >&2
+            # The holder may still be writing its stderr; reap it before reading.
+            wait "$DEPLOY_LOCK_SSH_PID" 2>/dev/null || true
+            if [[ -s "$DEPLOY_LOCK_WORK_DIR/stderr" ]]; then
+                sed 's/^/    /' "$DEPLOY_LOCK_WORK_DIR/stderr" >&2
+            fi
             release_remote_deploy_lock
             return 1
         fi
