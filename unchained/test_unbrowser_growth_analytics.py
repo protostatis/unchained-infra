@@ -203,6 +203,14 @@ class InstallAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("must-not-be-stored", response.text)
         self.assertNotIn("__INSTALL_RETURN_PATH", response.text)
 
+    def test_return_path_is_quoted_as_a_js_string_literal(self):
+        # The path lands inside `const INSTALL_RETURN_PATH = '...';`. Acquisition values are
+        # already allowlisted, but the substitution must not depend on that staying true.
+        self.assertEqual(pages._js_string_literal("/install"), "'/install'")
+        self.assertEqual(pages._js_string_literal("a'b"), "'a\\'b'")
+        self.assertEqual(pages._js_string_literal("x</script>"), "'x\\x3c/script>'")
+        self.assertEqual(pages._js_string_literal("a\\b"), "'a\\\\b'")
+
     async def test_sign_in_return_falls_back_to_plain_install_path(self):
         core = _InstallCore()
         request = _Request("/install")

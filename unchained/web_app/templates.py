@@ -24857,8 +24857,11 @@ async function initInstallPage() {
     await checkInstallAgentStatus();
     if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);
   } catch (e) {
-    document.getElementById('auth-panel').style.display = 'flex';
+    // Same one-entry rule as above: an auth check that throws must not leave both the
+    // banner and the desktop CTA asking the visitor to sign in.
+    console.warn('install page: auth check failed', e);
     if (desktopAvailable) pointDesktopCtaAtSignIn();
+    else document.getElementById('auth-panel').style.display = 'flex';
   }
 }
 

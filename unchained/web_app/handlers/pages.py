@@ -268,6 +268,21 @@ def _build_legal_page(
 </html>"""
 
 
+def _js_string_literal(value: str) -> str:
+    """Quote a value as a single-quoted JS string literal, including the quotes."""
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        .replace("<", "\\x3c")
+    )
+    return f"'{escaped}'"
+
+
 async def handle_install_page(request: web.Request) -> web.Response:
     """Serve the one-click installer onboarding page."""
     core = _core()
@@ -279,10 +294,15 @@ async def handle_install_page(request: web.Request) -> web.Response:
     html = core.inject_google_client_id(core.INSTALL_ONBOARD_HTML, core.GOOGLE_CLIENT_ID)
     # Sign-in must come back to /install with the acquisition params intact; the placeholders
     # have to be substituted before the response is built (they used to sit after it).
+    # Acquisition values are allowlisted to [A-Za-z0-9._:-] upstream, but the JS one is
+    # escaped anyway so a future caller cannot break out of the string literal.
     html = html.replace(
         "__INSTALL_RETURN_PATH_ENCODED__",
         quote(install_return_path, safe=""),
-    ).replace("__INSTALL_RETURN_PATH__", install_return_path)
+    ).replace(
+        "'__INSTALL_RETURN_PATH__'",
+        _js_string_literal(install_return_path),
+    )
     # The card is offered only when this deployment can actually serve the download: the
     # flag alone would publish a card that 503s on a host whose installers/ has no dmg yet
     # (a fresh CI deploy, for instance). The client still refuses to show it off macOS.
