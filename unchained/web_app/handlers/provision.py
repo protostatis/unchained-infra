@@ -270,10 +270,18 @@ async def handle_provision_start(request: web.Request) -> web.Response:
     core._provision_cooldowns[user_id] = time.time()
 
     if use_relay:
-        agent_id = auth_info.get("agent_id")
+        # The profile list and the launch have to reach the same lane. The list resolves
+        # the user's bridge agent (which may be a named profile such as "desktop"), while
+        # auth_info["agent_id"] is the base account id — so resolving it here too keeps
+        # the picker and the launch on one agent instead of two.
+        try:
+            bridge_info = await core._resolve_bridge_agent(auth_info)
+            agent_id = bridge_info.get("bridge_agent_id") or auth_info.get("agent_id")
+        except Exception:
+            agent_id = auth_info.get("agent_id")
         if not agent_id:
             return web.json_response(
-                {"error": "No agent_id resolved for relay provisioning"}, status=400
+                {"error": "No agent resolved for relay provisioning"}, status=400
             )
         relay_host, relay_port = core._parse_relay()
         result = await signup_agent.provision_key(
