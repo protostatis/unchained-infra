@@ -59,6 +59,14 @@ _SLOT_STATE_CURRENT_VERSION = 1
 _SLOT_COUNT = 3
 
 
+def _archive_sort_time(archive: dict) -> float:
+    """Sort key for archive summaries; a corrupt timestamp sorts as oldest."""
+    try:
+        return float(archive.get("archived_at") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class ArchivePreservationError(RuntimeError):
     """An existing session could not be safely preserved before replacement."""
 
@@ -700,7 +708,17 @@ class HostedConversationRepo:
         return self._read_restore_archive_payload(user_id, archive_id)
 
     def list_archives(self, user_id: str, *, limit: int = 100) -> list[dict]:
-        """Return archive summaries sorted newest-first."""
+        """Return archive summaries sorted newest-first.
+
+        Archive ids are ``<epoch-milliseconds>.<random>``, so ordering by
+        filename is only millisecond-accurate: archives written in the same
+        millisecond are ordered by their random suffix rather than by
+        ``archived_at``, which is the value the archive picker renders. Scan
+        through the whole millisecond group that straddles *limit* and order
+        the window by ``archived_at`` so ties cannot reorder or drop entries.
+        """
+        if limit <= 0:
+            return []
         self._ensure_user_dirs(user_id)
         result: list[dict] = []
         archives_dir = self._archives_dir(user_id)
@@ -708,10 +726,14 @@ class HostedConversationRepo:
             entries = sorted(os.scandir(archives_dir), key=lambda e: e.name, reverse=True)
         except FileNotFoundError:
             return []
+        boundary_ms: str | None = None
         for entry in entries:
             if not entry.is_file() or not entry.name.endswith(".json"):
                 continue
             archive_id = entry.name[:-5]  # strip ".json"
+            archive_ms = archive_id.split(".", 1)[0]
+            if boundary_ms is not None and archive_ms != boundary_ms:
+                break
             try:
                 with open(entry.path) as f:
                     data = json.load(f)
@@ -727,9 +749,10 @@ class HostedConversationRepo:
                 "session_id": data.get("session_id", ""),
                 "model_id": data.get("model_id", ""),
             })
-            if len(result) >= limit:
-                break
-        return result
+            if len(result) == limit:
+                boundary_ms = archive_ms
+        result.sort(key=_archive_sort_time, reverse=True)
+        return result[:limit]
 
     def restore_archive(
         self,
