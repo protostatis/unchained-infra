@@ -110,19 +110,18 @@ class InstallPageMarkupTests(unittest.TestCase):
     def test_the_card_is_present_but_hidden_and_gated(self):
         from web_app.templates import INSTALL_ONBOARD_HTML as html
 
-        self.assertIn('<div class="card" id="desktop-card" hidden>', html)
+        self.assertIn('<section class="card card-primary" id="desktop-card" hidden>', html)
         self.assertIn('href="/web/download-desktop"', html)
         self.assertIn("const DESKTOP_BETA = __DESKTOP_BETA__;", html)
         # Shown only when the deployment ships the beta *and* the visitor is on macOS.
-        self.assertIn(
-            "desktopCard.hidden = !(DESKTOP_BETA && _installOs === 'mac')", html
-        )
+        self.assertIn("const desktopAvailable = DESKTOP_BETA && _installOs === 'mac';", html)
+        self.assertIn("card.hidden = !desktopAvailable;", html)
 
     def test_the_card_names_the_client_it_is_not(self):
         from web_app.templates import INSTALL_ONBOARD_HTML as html
 
         self.assertIn("No agent, no terminal", html)
-        self.assertIn("they are different clients", html)
+        self.assertIn("different clients", html)
 
 
 if __name__ == "__main__":
