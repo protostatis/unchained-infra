@@ -4020,6 +4020,21 @@ class ToolCallBlockRepairTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(history[1]["content"], "first")
 
+    def test_an_out_of_order_block_is_reordered_even_with_nothing_missing(self):
+        history = [
+            self._assistant("call-a", "call-b"),
+            {"role": "tool", "tool_call_id": "call-b", "content": "second"},
+            {"role": "tool", "tool_call_id": "call-a", "content": "first"},
+        ]
+
+        repaired = _repair_tool_call_blocks(history)
+
+        self.assertEqual(repaired, 0)  # nothing inserted, nothing dropped
+        self.assertEqual(
+            [m["tool_call_id"] for m in history if m["role"] == "tool"],
+            ["call-a", "call-b"],
+        )
+
     def test_a_partial_block_only_fills_the_missing_id(self):
         history = [
             self._assistant("call-a", "call-b"),

@@ -1234,7 +1234,10 @@ def _repair_tool_call_blocks(messages: list) -> int:
         1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
     )
     repaired = inserted + (total_tool_messages - emitted_real)
-    if repaired:
+    # A count of 0 does not mean "nothing to do": the same results in the wrong order
+    # need no insert and no drop, but the provider still wants call order. Compare the
+    # rebuilt list instead of trusting the counter.
+    if len(out) != len(messages) or any(a is not b for a, b in zip(out, messages)):
         messages[:] = out
     return repaired
 
