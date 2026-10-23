@@ -630,6 +630,22 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("cta.dataset.analyticsCta='landing_preview_'+s.id", web.LANDING_HTML)
         self.assertNotIn("landing_job_", web.LANDING_HTML)
 
+    def test_landing_reaches_the_installer(self):
+        # The landing page sells the connector but used to offer no way to install it:
+        # every CTA pointed at /trial, /first-look or /mcp.
+        self.assertIn(
+            'href="/install?ref=unchained-nav-download&amp;utm_source=unchainedsky',
+            web.LANDING_HTML,
+        )
+        self.assertIn('data-analytics-cta="landing_install_nav">Download</a>', web.LANDING_HTML)
+        self.assertIn(
+            'data-analytics-cta="landing_install_footer">Download</a>', web.LANDING_HTML
+        )
+        self.assertIn(
+            'data-analytics-cta="landing_install_bottom">Download the app</a>',
+            web.LANDING_HTML,
+        )
+
     def test_landing_explains_when_the_connector_is_worth_installing(self):
         self.assertIn("Unchained drives. You navigate.", web.LANDING_HTML)
         self.assertIn(

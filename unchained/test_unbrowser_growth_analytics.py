@@ -193,7 +193,7 @@ class InstallAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core.page_views, 1)
         self.assertEqual(response.status, 200)
         self.assertIn(
-            f'href="/local?next={quote(expected_path, safe="")}">Sign In</a>',
+            f'href="/local?next={quote(expected_path, safe="")}">Sign in</a>',
             response.text,
         )
         self.assertIn(
@@ -209,7 +209,7 @@ class InstallAttributionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(pages, "_core", return_value=core):
             response = await pages.handle_install_page(request)
 
-        self.assertIn('href="/local?next=%2Finstall">Sign In</a>', response.text)
+        self.assertIn('href="/local?next=%2Finstall">Sign in</a>', response.text)
         self.assertIn("const INSTALL_RETURN_PATH = '/install';", response.text)
         self.assertNotIn("__INSTALL_RETURN_PATH", response.text)
 
