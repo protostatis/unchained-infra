@@ -28,6 +28,7 @@ from chat_agent_openrouter import (
     _openrouter_user_error,
     _prepare_hosted_context,
     _recover_deepseek_dsml_tool_calls,
+    _repair_tool_call_blocks,
     _capture_browser_checkpoint_identity,
     _resolve_concrete_tab,
     _resolve_hosted_internal_context_chars,
@@ -3946,6 +3947,145 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
                 assistant_msgs[0].get("reasoning_content"), reasoning_content
             )
             self.assertEqual(assistant_msgs[0]["tool_calls"], history[2]["tool_calls"])
+
+
+class ToolCallBlockRepairTests(unittest.IsolatedAsyncioTestCase):
+    """A stopped turn must not poison the next provider request.
+
+    The assistant ``tool_calls`` message is appended before its tools run, so a
+    Stop (or a superseded turn) leaves it unanswered. DeepSeek rejects the next
+    request with "An assistant message with 'tool_calls' must be followed by tool
+    messages responding to each 'tool_call_id'".
+    """
+
+    @staticmethod
+    def _assistant(*call_ids):
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "navigate", "arguments": "{}"},
+                }
+                for call_id in call_ids
+            ],
+        }
+
+    def test_interrupted_turn_is_answered_in_call_order(self):
+        history = [
+            {"role": "user", "content": "open the page"},
+            self._assistant("call-a", "call-b"),
+            {"role": "user", "content": "resume"},
+        ]
+
+        repaired = _repair_tool_call_blocks(history)
+
+        self.assertEqual(repaired, 2)
+        self.assertEqual(
+            [m["role"] for m in history],
+            ["user", "assistant", "tool", "tool", "user"],
+        )
+        self.assertEqual([m["tool_call_id"] for m in history[2:4]], ["call-a", "call-b"])
+        self.assertIn("interrupted", history[2]["content"])
+
+    def test_a_valid_block_is_left_alone(self):
+        history = [
+            {"role": "user", "content": "open the page"},
+            self._assistant("call-a"),
+            {"role": "tool", "tool_call_id": "call-a", "content": "ok"},
+            {"role": "user", "content": "resume"},
+        ]
+        before = json.loads(json.dumps(history))
+
+        self.assertEqual(_repair_tool_call_blocks(history), 0)
+        self.assertEqual(history, before)
+
+    def test_results_are_reordered_and_strays_dropped(self):
+        history = [
+            {"role": "tool", "tool_call_id": "call-z", "content": "orphan"},
+            self._assistant("call-a", "call-b"),
+            {"role": "tool", "tool_call_id": "call-b", "content": "second"},
+            {"role": "tool", "tool_call_id": "call-a", "content": "first"},
+            {"role": "tool", "tool_call_id": "call-a", "content": "duplicate"},
+        ]
+
+        repaired = _repair_tool_call_blocks(history)
+
+        self.assertEqual(repaired, 2)  # the orphan and the duplicate
+        self.assertEqual(
+            [m.get("tool_call_id") for m in history if m.get("role") == "tool"],
+            ["call-a", "call-b"],
+        )
+        self.assertEqual(history[1]["content"], "first")
+
+    def test_a_partial_block_only_fills_the_missing_id(self):
+        history = [
+            self._assistant("call-a", "call-b"),
+            {"role": "tool", "tool_call_id": "call-a", "content": "ok"},
+        ]
+
+        self.assertEqual(_repair_tool_call_blocks(history), 1)
+        self.assertEqual(
+            [(m["role"], m.get("tool_call_id")) for m in history],
+            [("assistant", None), ("tool", "call-a"), ("tool", "call-b")],
+        )
+
+    async def test_the_provider_body_answers_every_tool_call(self):
+        history = [
+            {"role": "user", "content": "open the page"},
+            self._assistant("call-a"),
+            {"role": "user", "content": "resume"},
+        ]
+        agent = TrialAgent(
+            api_key="trial-websocket-key",
+            agent_id="trial-agent",
+            server="ws://web:8080",
+            model="deepseek-v4-flash",
+        )
+        captured = {}
+
+        async def fake_call(_client, body, _model, *_args, **_kwargs):
+            captured["messages"] = body["messages"]
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+        with patch.object(agent, "_do_deepseek_call", side_effect=fake_call):
+            await agent._call_openrouter(
+                None, history, "deepseek-v4-flash", session_id="s-body"
+            )
+
+        self.assertEqual(
+            [m["role"] for m in captured["messages"]],
+            ["user", "assistant", "tool", "user"],
+        )
+        self.assertEqual(captured["messages"][2]["tool_call_id"], "call-a")
+
+    def test_a_session_saved_mid_tool_is_repaired_on_load(self):
+        sid = "s-interrupted-tool"
+        with tempfile.TemporaryDirectory() as session_dir:
+            Path(session_dir, f"{sid}.json").write_text(json.dumps({
+                "schema_version": SESSION_SCHEMA_VERSION,
+                "messages": [
+                    {"role": "user", "content": "open the page"},
+                    self._assistant("call-a"),
+                ],
+                "transcript": [{"role": "user", "content": "open the page"}],
+            }))
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                agent = TrialAgent(
+                    api_key="trial-websocket-key",
+                    agent_id="trial-agent",
+                    server="ws://web:8080",
+                    model="deepseek-v4-flash",
+                )
+                loaded = agent._load_session(sid)
+
+        self.assertEqual(
+            [m["role"] for m in loaded],
+            ["system", "user", "assistant", "tool"],
+        )
+        self.assertEqual(loaded[-1]["tool_call_id"], "call-a")
 
 
 if __name__ == "__main__":
