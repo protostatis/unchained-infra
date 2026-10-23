@@ -244,6 +244,8 @@ cat >/dev/null'
                 return 0
             fi
             echo "ERROR: could not acquire remote deployment lock: $lock_status" >&2
+            # The holder may still be writing its stderr; reap it before reading.
+            wait "$DEPLOY_LOCK_SSH_PID" 2>/dev/null || true
             if [[ -s "$DEPLOY_LOCK_WORK_DIR/stderr" ]]; then
                 sed 's/^/    /' "$DEPLOY_LOCK_WORK_DIR/stderr" >&2
             fi
