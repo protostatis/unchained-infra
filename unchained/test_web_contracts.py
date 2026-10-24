@@ -2282,8 +2282,13 @@ class AgentIdClaimTests(unittest.TestCase):
         # A reconnect from the same kind is not a conflict; a different kind is.
         self.assertFalse(_client_conflict({}, {"client": "cli"}))
         self.assertFalse(_client_conflict({"client": "desktop"}, {"client": "desktop"}))
+        # A desktop never displaces the CLI agent...
         self.assertTrue(_client_conflict({}, {"client": "desktop"}))
-        self.assertTrue(_client_conflict({"client": "desktop"}, {}))
+        self.assertTrue(_client_conflict({"client": "cli"}, {"client": "desktop"}))
+        # ...and the CLI agent takes the lane back without being refused: a refused CLI
+        # exits (it expects auth_ok), while the desktop just retries.
+        self.assertFalse(_client_conflict({"client": "desktop"}, {}))
+        self.assertFalse(_client_conflict({"client": "desktop"}, {"client": "cli"}))
 
     def test_a_client_may_name_its_own_lane_only(self):
         from web_app.handlers.chat_stream import _agent_id_claim_is_ours

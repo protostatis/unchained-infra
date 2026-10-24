@@ -1183,12 +1183,20 @@ def _client_conflict(existing_caps: object, incoming_caps: object) -> bool:
     An unnamed client and a self-declared ``cli`` are the same kind — the CLI agent
     sends no kind, and treating "absent" and "cli" as different would refuse a CLI
     reconnect across an upgrade.
+
+    The CLI agent always wins the lane, in both directions. It is the long-standing
+    owner: its archive store and turn routing are not optional, and a refused CLI exits
+    (it expects ``auth_ok``). The desktop yields — its archive store is one of two ways
+    to reach the same lane's device, since the server's archive endpoints address
+    whichever client holds the socket.
     """
     left = _client_kind(existing_caps)
     right = _client_kind(incoming_caps)
     if left == right:
         return False
-    return {left, right} != {"unknown", "cli"}
+    if {left, right} == {"unknown", "cli"}:
+        return False
+    return right == "desktop"
 
 
 def _agent_id_claim_is_ours(key_hash: str, claimed: str) -> bool:
