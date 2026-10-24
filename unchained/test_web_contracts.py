@@ -2273,9 +2273,12 @@ class AgentIdClaimTests(unittest.TestCase):
     def test_one_lane_has_one_client(self):
         from web_app.handlers.chat_stream import _client_conflict, _client_kind
 
-        self.assertEqual(_client_kind({}), "cli")
+        # An unnamed client is "unknown", so it neither displaces nor is displaced by
+        # a named one — but two unnamed clients are the same kind and may reconnect.
+        self.assertEqual(_client_kind({}), "unknown")
         self.assertEqual(_client_kind({"client": "desktop"}), "desktop")
-        self.assertEqual(_client_kind({"client": "../weird"}), "cli")
+        self.assertEqual(_client_kind({"client": "../weird"}), "unknown")
+        self.assertFalse(_client_conflict({}, {"client": ""}))
         # A reconnect from the same kind is not a conflict; a different kind is.
         self.assertFalse(_client_conflict({}, {"client": "cli"}))
         self.assertFalse(_client_conflict({"client": "desktop"}, {"client": "desktop"}))

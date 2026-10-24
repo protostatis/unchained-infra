@@ -1160,10 +1160,17 @@ async def _deferred_agent_cleanup(
 
 
 def _client_kind(capabilities: object) -> str:
-    """Which client owns an agent lane. The CLI agent names none; that is "cli"."""
+    """Which client owns an agent lane.
+
+    A client that names none is "unknown", not "cli": the CLI agent sends no kind, and so
+    does any app from before this check existed. "Unknown" is compatible with itself (a
+    CLI agent reconnecting is the same client) and in conflict with a named kind — which
+    is what stops a newer desktop from displacing a CLI agent, or the reverse, while a
+    rollout is half-finished.
+    """
     caps = capabilities if isinstance(capabilities, dict) else {}
     kind = str(caps.get("client") or "").strip().lower()
-    return kind if re.fullmatch(r"[a-z0-9_-]{1,32}", kind) else "cli"
+    return kind if re.fullmatch(r"[a-z0-9_-]{1,32}", kind) else "unknown"
 
 
 def _client_conflict(existing_caps: object, incoming_caps: object) -> bool:
@@ -1172,8 +1179,16 @@ def _client_conflict(existing_caps: object, incoming_caps: object) -> bool:
     Archives are addressed by agent id, so a different client taking the socket would
     receive this account's conversations. One lane, one client: the connected one keeps
     it, and the newcomer is told why.
+
+    An unnamed client and a self-declared ``cli`` are the same kind — the CLI agent
+    sends no kind, and treating "absent" and "cli" as different would refuse a CLI
+    reconnect across an upgrade.
     """
-    return _client_kind(existing_caps) != _client_kind(incoming_caps)
+    left = _client_kind(existing_caps)
+    right = _client_kind(incoming_caps)
+    if left == right:
+        return False
+    return {left, right} != {"unknown", "cli"}
 
 
 def _agent_id_claim_is_ours(key_hash: str, claimed: str) -> bool:
