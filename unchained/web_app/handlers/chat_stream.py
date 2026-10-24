@@ -1159,6 +1159,39 @@ async def _deferred_agent_cleanup(
           f"closed {len(session_tabs)} session tabs")
 
 
+def _client_kind(capabilities: object) -> str:
+    """Which client owns an agent lane. The CLI agent names none; that is "cli"."""
+    caps = capabilities if isinstance(capabilities, dict) else {}
+    kind = str(caps.get("client") or "").strip().lower()
+    return kind if re.fullmatch(r"[a-z0-9_-]{1,32}", kind) else "cli"
+
+
+def _client_conflict(existing_caps: object, incoming_caps: object) -> bool:
+    """Whether these two connections are different clients for the same lane.
+
+    Archives are addressed by agent id, so a different client taking the socket would
+    receive this account's conversations. One lane, one client: the connected one keeps
+    it, and the newcomer is told why.
+    """
+    return _client_kind(existing_caps) != _client_kind(incoming_caps)
+
+
+def _agent_id_claim_is_ours(key_hash: str, claimed: str) -> bool:
+    """Whether a client may register under this agent id.
+
+    A client may name its own lane — the profile suffix is how several browsers on
+    one account stay distinct — but never another account's base id. This matters for
+    archives: the app addresses `store_hosted_archive` to the agent id on the session
+    record, so an accepted foreign claim would deliver that account's conversations to
+    whoever claimed it. The CLI agent sends no id at all and keeps the derived base.
+    """
+    base = f"claude-{key_hash}"
+    text = str(claimed or "")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", text):
+        return False
+    return text == base or text.startswith(base + "-")
+
+
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
@@ -1186,12 +1219,26 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     if is_trial_agent and core.TRIAL_AGENT_ID:
         agent_id = core.TRIAL_AGENT_ID
     elif auth_msg.get("agent_id"):
-        agent_id = auth_msg["agent_id"]
+        claimed = str(auth_msg["agent_id"] or "").strip()
+        if not _agent_id_claim_is_ours(core._key_hash(key), claimed):
+            await ws.send_json({"type": "error", "data": "invalid agent id"})
+            await ws.close(code=4003, message=b"invalid agent id")
+            return ws
+        agent_id = claimed
     else:
         agent_id = f"claude-{core._key_hash(key)}"
     caps = auth_msg.get("capabilities", {})
     if not isinstance(caps, dict):
         caps = {}
+    existing_ws = core._chat_agents.get(agent_id)
+    if existing_ws is not None and not getattr(existing_ws, "closed", True):
+        if _client_conflict(core._chat_agent_caps.get(agent_id) or {}, caps):
+            await ws.send_json({
+                "type": "error",
+                "data": "another client is connected for this account",
+            })
+            await ws.close(code=4009, message=b"another client is connected")
+            return ws
     await ws.send_json({"type": "auth_ok"})
     old_ws = core._chat_agents.get(agent_id)
     # Always cancel any pending deferred cleanup for this agent on

@@ -2263,5 +2263,35 @@ class TestStealthEvasions(unittest.TestCase):
         self.assertEqual(js1, js2, "WebGL GPU should be consistent per session")
 
 
+class AgentIdClaimTests(unittest.TestCase):
+    """The agent socket is addressed by agent id, so a claim must be the caller's own.
+
+    Archives are delivered to the agent id on a session record. Accepting a claim for
+    another account's base id would hand that account's transcripts to whoever made it.
+    """
+
+    def test_one_lane_has_one_client(self):
+        from web_app.handlers.chat_stream import _client_conflict, _client_kind
+
+        self.assertEqual(_client_kind({}), "cli")
+        self.assertEqual(_client_kind({"client": "desktop"}), "desktop")
+        self.assertEqual(_client_kind({"client": "../weird"}), "cli")
+        # A reconnect from the same kind is not a conflict; a different kind is.
+        self.assertFalse(_client_conflict({}, {"client": "cli"}))
+        self.assertFalse(_client_conflict({"client": "desktop"}, {"client": "desktop"}))
+        self.assertTrue(_client_conflict({}, {"client": "desktop"}))
+        self.assertTrue(_client_conflict({"client": "desktop"}, {}))
+
+    def test_a_client_may_name_its_own_lane_only(self):
+        from web_app.handlers.chat_stream import _agent_id_claim_is_ours
+
+        self.assertTrue(_agent_id_claim_is_ours("abc12345", "claude-abc12345"))
+        self.assertTrue(_agent_id_claim_is_ours("abc12345", "claude-abc12345-desktop"))
+        self.assertFalse(_agent_id_claim_is_ours("abc12345", "claude-ffffffff-desktop"))
+        self.assertFalse(_agent_id_claim_is_ours("abc12345", "claude-abc12345x"))
+        self.assertFalse(_agent_id_claim_is_ours("abc12345", "../claude-abc12345"))
+        self.assertFalse(_agent_id_claim_is_ours("abc12345", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
