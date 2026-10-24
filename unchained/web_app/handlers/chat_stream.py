@@ -1159,6 +1159,54 @@ async def _deferred_agent_cleanup(
           f"closed {len(session_tabs)} session tabs")
 
 
+def _client_kind(capabilities: object) -> str:
+    """Which client owns an agent lane.
+
+    A client that names none is "unknown", not "cli": the CLI agent sends no kind, and so
+    does any app from before this check existed. "Unknown" is compatible with itself (a
+    CLI agent reconnecting is the same client) and in conflict with a named kind — which
+    is what stops a newer desktop from displacing a CLI agent, or the reverse, while a
+    rollout is half-finished.
+    """
+    caps = capabilities if isinstance(capabilities, dict) else {}
+    kind = str(caps.get("client") or "").strip().lower()
+    return kind if re.fullmatch(r"[a-z0-9_-]{1,32}", kind) else "unknown"
+
+
+def _client_conflict(existing_caps: object, incoming_caps: object) -> bool:
+    """Whether these two connections are different clients for the same lane.
+
+    Archives are addressed by agent id, so a different client taking the socket would
+    receive this account's conversations. One lane, one client: the connected one keeps
+    it, and the newcomer is told why.
+
+    An unnamed client and a self-declared ``cli`` are the same kind — the CLI agent
+    sends no kind, and treating "absent" and "cli" as different would refuse a CLI
+    reconnect across an upgrade.
+    """
+    left = _client_kind(existing_caps)
+    right = _client_kind(incoming_caps)
+    if left == right:
+        return False
+    return {left, right} != {"unknown", "cli"}
+
+
+def _agent_id_claim_is_ours(key_hash: str, claimed: str) -> bool:
+    """Whether a client may register under this agent id.
+
+    A client may name its own lane — the profile suffix is how several browsers on
+    one account stay distinct — but never another account's base id. This matters for
+    archives: the app addresses `store_hosted_archive` to the agent id on the session
+    record, so an accepted foreign claim would deliver that account's conversations to
+    whoever claimed it. The CLI agent sends no id at all and keeps the derived base.
+    """
+    base = f"claude-{key_hash}"
+    text = str(claimed or "")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", text):
+        return False
+    return text == base or text.startswith(base + "-")
+
+
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
@@ -1186,7 +1234,12 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     if is_trial_agent and core.TRIAL_AGENT_ID:
         agent_id = core.TRIAL_AGENT_ID
     elif auth_msg.get("agent_id"):
-        agent_id = auth_msg["agent_id"]
+        claimed = str(auth_msg["agent_id"] or "").strip()
+        if not _agent_id_claim_is_ours(core._key_hash(key), claimed):
+            await ws.send_json({"type": "error", "data": "invalid agent id"})
+            await ws.close(code=4003, message=b"invalid agent id")
+            return ws
+        agent_id = claimed
     else:
         agent_id = f"claude-{core._key_hash(key)}"
     caps = auth_msg.get("capabilities", {})
@@ -1198,6 +1251,17 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     # reconnect — even if the old WS was already cleaned up and
     # _chat_agents no longer contains it.
     _cancel_deferred_cleanup(core, agent_id)
+    # No await between this check and the registration below: two different clients
+    # racing for one lane must not both pass it. (Same-kind reconnects are how a
+    # restart works, so those still replace the socket.)
+    if old_ws is not None and not getattr(old_ws, "closed", True):
+        if _client_conflict(core._chat_agent_caps.get(agent_id) or {}, caps):
+            await ws.send_json({
+                "type": "error",
+                "data": "another client is connected for this account",
+            })
+            await ws.close(code=4009, message=b"another client is connected")
+            return ws
     core._chat_agents[agent_id] = ws
     core._chat_agent_caps[agent_id] = caps
     # Migrate dispatch_ws on all of this agent's active turns so they
