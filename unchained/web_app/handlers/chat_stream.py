@@ -1230,8 +1230,16 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     caps = auth_msg.get("capabilities", {})
     if not isinstance(caps, dict):
         caps = {}
-    existing_ws = core._chat_agents.get(agent_id)
-    if existing_ws is not None and not getattr(existing_ws, "closed", True):
+    await ws.send_json({"type": "auth_ok"})
+    old_ws = core._chat_agents.get(agent_id)
+    # Always cancel any pending deferred cleanup for this agent on
+    # reconnect — even if the old WS was already cleaned up and
+    # _chat_agents no longer contains it.
+    _cancel_deferred_cleanup(core, agent_id)
+    # No await between this check and the registration below: two different clients
+    # racing for one lane must not both pass it. (Same-kind reconnects are how a
+    # restart works, so those still replace the socket.)
+    if old_ws is not None and not getattr(old_ws, "closed", True):
         if _client_conflict(core._chat_agent_caps.get(agent_id) or {}, caps):
             await ws.send_json({
                 "type": "error",
@@ -1239,12 +1247,6 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             })
             await ws.close(code=4009, message=b"another client is connected")
             return ws
-    await ws.send_json({"type": "auth_ok"})
-    old_ws = core._chat_agents.get(agent_id)
-    # Always cancel any pending deferred cleanup for this agent on
-    # reconnect — even if the old WS was already cleaned up and
-    # _chat_agents no longer contains it.
-    _cancel_deferred_cleanup(core, agent_id)
     core._chat_agents[agent_id] = ws
     core._chat_agent_caps[agent_id] = caps
     # Migrate dispatch_ws on all of this agent's active turns so they
