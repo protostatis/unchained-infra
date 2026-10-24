@@ -605,13 +605,13 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_landing_auth_cta_points_to_auth_entry(self):
         self.assertIn(
             'href="/trial" class="signin" id="landing-auth-link" '
-            'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
+            'data-analytics-cta="landing_connect_chrome_nav">Open workspace</a>',
             web.LANDING_HTML,
         )
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
         self.assertIn("if(path==='/demo')return fallback", web.LANDING_HTML)
-        self.assertIn("Open my browser workspace", web.LANDING_HTML)
-        self.assertIn("Open local workspace", web.LANDING_HTML)
+        self.assertIn("return 'Open workspace'", web.LANDING_HTML)
+        self.assertNotIn("Open my browser workspace", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
 
     def test_landing_mobile_navigation_has_accessible_disclosure(self):
