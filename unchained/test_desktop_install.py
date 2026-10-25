@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import web
-from web_app.handlers import install_flow
+from web_app.handlers import install_flow, pages
 
 
 class DesktopArtifactResolutionTests(unittest.TestCase):
@@ -84,9 +84,25 @@ class DownloadDesktopHandlerTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(self._core(platform="windows"))
         self.assertEqual(response.status, 400)
 
-    async def test_signed_out_is_401(self):
-        response = await self._call(self._core(authenticated=False))
-        self.assertEqual(response.status, 401)
+    async def test_anonymous_download_is_allowed(self):
+        # The download is the top of the funnel; the account gate belongs in the app's
+        # Connect step, not in front of a 135MB file.
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = Path(tmp) / "unchained-desktop-mac-arm64.dmg"
+            dmg.write_bytes(b"dmg-bytes")
+            core = self._core(authenticated=False, artifact=dmg)
+            response = await self._call(core)
+        self.assertEqual(response.status, 200)
+        meta = core._track_event.call_args.kwargs["meta"]
+        self.assertEqual(meta["channel"], "public")
+
+    async def test_a_session_makes_the_download_attributable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = Path(tmp) / "unchained-desktop-mac-arm64.dmg"
+            dmg.write_bytes(b"dmg-bytes")
+            core = self._core(artifact=dmg)
+            await self._call(core)
+        self.assertEqual(core._track_event.call_args.kwargs["meta"]["channel"], "session")
 
     async def test_missing_artifact_is_503(self):
         response = await self._call(self._core(artifact=None))
@@ -104,6 +120,75 @@ class DownloadDesktopHandlerTests(unittest.IsolatedAsyncioTestCase):
         meta = core._track_event.call_args.kwargs["meta"]
         self.assertEqual(meta["artifact"], "desktop")
         self.assertEqual(core._track_event.call_args.kwargs["cta_id"], "download_desktop")
+
+
+class DesktopDownloadLimitTests(unittest.TestCase):
+    def setUp(self):
+        install_flow._desktop_download_hits.clear()
+
+    def tearDown(self):
+        install_flow._desktop_download_hits.clear()
+
+    def test_one_address_may_not_pull_it_in_a_loop(self):
+        now = 1_000_000.0
+        allowed = [
+            install_flow._desktop_download_allowed("203.0.113.7", now + i)
+            for i in range(install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP)
+        ]
+        self.assertTrue(all(allowed))
+        self.assertFalse(
+            install_flow._desktop_download_allowed(
+                "203.0.113.7", now + install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP
+            )
+        )
+        # Another address is unaffected, and the window lets the first one back in.
+        self.assertTrue(install_flow._desktop_download_allowed("203.0.113.8", now))
+        self.assertTrue(
+            install_flow._desktop_download_allowed(
+                "203.0.113.7", now + install_flow._DESKTOP_DOWNLOAD_WINDOW_S + 1
+            )
+        )
+
+
+class DesktopPageTests(unittest.IsolatedAsyncioTestCase):
+    def _core(self, *, beta=True, artifact=None, version=""):
+        from web_app.templates import DESKTOP_PAGE_HTML
+
+        return SimpleNamespace(
+            _DESKTOP_BETA_ENABLED=beta,
+            _DESKTOP_VERSION=version,
+            DESKTOP_PAGE_HTML=DESKTOP_PAGE_HTML,
+            _desktop_installer_path=lambda: artifact,
+            _track_page_view=Mock(),
+        )
+
+    async def _call(self, core):
+        request = SimpleNamespace(query={}, headers={}, remote="127.0.0.1")
+        with patch.object(pages, "_core", return_value=core):
+            return await pages.handle_desktop_page(request)
+
+    async def test_the_page_is_public_and_offers_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = Path(tmp) / "unchained-desktop-mac-arm64.dmg"
+            dmg.write_bytes(b"x" * (3 * 1024 * 1024))
+            response = await self._call(self._core(artifact=dmg, version="0.5.2"))
+        self.assertEqual(response.status, 200)
+        self.assertIn("Download for macOS", response.text)
+        self.assertIn('href="/web/download-desktop"', response.text)
+        self.assertIn("3 MB", response.text)
+        self.assertIn("v0.5.2", response.text)
+
+    async def test_flag_off_is_404(self):
+        response = await self._call(self._core(beta=False))
+        self.assertEqual(response.status, 404)
+
+    async def test_missing_build_is_404(self):
+        response = await self._call(self._core(artifact=None))
+        self.assertEqual(response.status, 404)
+
+    def test_the_page_is_in_the_sitemap(self):
+        body = asyncio.run(web.handle_sitemap_xml(None)).text
+        self.assertIn("https://unchainedsky.com/desktop", body)
 
 
 class InstallPageMarkupTests(unittest.TestCase):

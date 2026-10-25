@@ -122,6 +122,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/labs/x-manager", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
     ("GET", "/local", "web_app.handlers.pages:handle_local_page"),
     ("GET", "/install", "web_app.handlers.pages:handle_install_page"),
+    ("GET", "/desktop", "web_app.handlers.pages:handle_desktop_page"),
     ("GET", "/cli", "web_app.handlers.pages:handle_cli_page"),
     ("GET", "/app", "web_app.handlers.pages:handle_claude_page"),
     ("POST", "/web/labs/you-navigate/run", "web_app.handlers.x_manager_demo:handle_x_manager_demo_run"),

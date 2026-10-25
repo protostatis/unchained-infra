@@ -317,6 +317,39 @@ async def handle_install_page(request: web.Request) -> web.Response:
     )
 
 
+async def handle_desktop_page(request: web.Request) -> web.Response:
+    """GET /desktop — the public page for the macOS app.
+
+    Public on purpose: the download is the top of the funnel, and the account gate
+    belongs in the app's Connect step, not in front of a 135MB file. The page is a 404
+    when this deployment does not ship the build, so it never advertises a dead link.
+    """
+    core = _core()
+    core._track_page_view(request)
+    if not getattr(core, "_DESKTOP_BETA_ENABLED", False):
+        return web.Response(status=404, text="Not found", content_type="text/plain")
+    path = core._desktop_installer_path()
+    if path is None:
+        return web.Response(status=404, text="Not found", content_type="text/plain")
+    try:
+        size_mb = max(1, round(path.stat().st_size / (1024 * 1024)))
+    except OSError:
+        size_mb = 0
+    version = str(getattr(core, "_DESKTOP_VERSION", "") or "").strip()
+    version_line = f" &middot; v{escape(version)}" if version else ""
+    html = (
+        core.DESKTOP_PAGE_HTML
+        .replace("__DESKTOP_SIZE_MB__", str(size_mb) if size_mb else "~135")
+        .replace("__DESKTOP_VERSION_LINE__", version_line)
+    )
+    # The build and the flag can change between deploys; never serve a stale page.
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_cli_page(request: web.Request) -> web.Response:
     """Serve the CLI install guide page."""
     core = _core()

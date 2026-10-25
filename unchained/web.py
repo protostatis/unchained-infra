@@ -62,6 +62,7 @@ from web_app.templates import (
     CHAT_GEMINI_HTML,
     CHAT_HTML,
     CLAUDE_CHAT_HTML,
+    DESKTOP_PAGE_HTML,
     FIRST_LOOK_PREVIEW_HTML,
     HEADLESS_DEMO_HTML,
     HTML,
@@ -953,6 +954,9 @@ _DESKTOP_MAC_INSTALLER_FILES = _parse_installer_filename_list(
 _DESKTOP_BETA_ENABLED = (
     os.environ.get("UNCHAINED_DESKTOP_BETA", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
+# Shown on /desktop and by the (future) update check. The dmg's name carries no version,
+# so the deployment states it; empty means "do not claim a version".
+_DESKTOP_VERSION = os.environ.get("UNCHAINED_DESKTOP_VERSION", "").strip()[:32]
 _ALLOW_SCRIPT_INSTALLER_FALLBACK = (
     os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -1809,6 +1813,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
     pages = [
         ("https://unchainedsky.com/", "1.0", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
+        ("https://unchainedsky.com/desktop", "0.9", "weekly"),
         ("https://unchainedsky.com/browserbase-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/browser-mcp-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/chrome-tax", "0.8", "monthly"),

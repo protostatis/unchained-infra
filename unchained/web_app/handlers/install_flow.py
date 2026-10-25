@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from aiohttp import web
 
 
@@ -191,11 +194,46 @@ async def handle_download_installer(request: web.Request) -> web.Response:
     )
 
 
+# A public download is ~135MB, so it needs a floor against a loop. This is per source
+# address and deliberately generous: a person re-downloading on a new machine is not the
+# case worth blocking, a script pulling it fifty times is.
+_DESKTOP_DOWNLOAD_WINDOW_S = 3600
+_DESKTOP_DOWNLOAD_MAX_PER_IP = 8
+_desktop_download_hits: dict[str, list[float]] = {}
+_desktop_download_lock = threading.Lock()
+
+
+def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
+    """Record one download attempt and say whether this source is still under the cap."""
+    now_ts = time.time() if now is None else float(now)
+    key = str(source_ip or "unknown")[:64]
+    with _desktop_download_lock:
+        recent = [
+            stamp for stamp in _desktop_download_hits.get(key, [])
+            if now_ts - stamp < _DESKTOP_DOWNLOAD_WINDOW_S
+        ]
+        if len(recent) >= _DESKTOP_DOWNLOAD_MAX_PER_IP:
+            _desktop_download_hits[key] = recent
+            return False
+        recent.append(now_ts)
+        _desktop_download_hits[key] = recent
+        if len(_desktop_download_hits) > 4096:
+            for stale in list(_desktop_download_hits):
+                if now_ts - _desktop_download_hits[stale][-1] > _DESKTOP_DOWNLOAD_WINDOW_S:
+                    _desktop_download_hits.pop(stale, None)
+        return True
+
+
 async def handle_download_desktop(request: web.Request) -> web.Response:
     """GET /web/download-desktop — the macOS desktop app (beta).
 
     A different client from the agent, so it has its own artifact lane and its own flag.
     macOS only: the build is arm64, and offering it to another OS would be a dead download.
+
+    Public on purpose. The app is useless without an account, but the account gate belongs
+    in its Connect step: requiring a session to fetch the file puts a sign-up wall in front
+    of the top of the funnel, and makes the app impossible to share. An install token or a
+    session is still honoured when present, for attribution.
     """
     core = _core()
     if not core._DESKTOP_BETA_ENABLED:
@@ -214,9 +252,8 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
         if not token_info:
             return web.json_response({"error": "Invalid or expired install token"}, status=401)
     else:
+        # Anonymous is allowed; a session only makes the download attributable.
         auth_info = core._authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
 
     path = core._desktop_installer_path()
     if not path:
@@ -236,8 +273,21 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             {"error": "The desktop app build is not available yet"}, status=503
         )
 
-    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-    user_type = auth_info.get("user_type", "") if auth_info else ""
+    forwarded = (
+        request.headers.get("X-Forwarded-For", "")
+        or getattr(request, "remote", "")
+        or ""
+    )
+    source_ip = str(forwarded).split(",")[0].strip()
+    if not _desktop_download_allowed(source_ip):
+        return web.json_response(
+            {"error": "Too many downloads from this address; try again later"},
+            status=429,
+            headers={"Retry-After": str(_DESKTOP_DOWNLOAD_WINDOW_S)},
+        )
+
+    user_id = token_info.get("user_id", "") if token_info else (auth_info or {}).get("user_id", "")
+    user_type = (auth_info or {}).get("user_type", "")
     core._track_event(
         request,
         "desktop_download_start",
@@ -253,7 +303,10 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             "platform": "mac",
             "artifact": "desktop",
             "filename": path.name,
-            "channel": "install_token" if token_info else "session",
+            "channel": (
+                "install_token" if token_info
+                else ("session" if auth_info else "public")
+            ),
         },
     )
     return web.FileResponse(
@@ -261,7 +314,7 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
         headers={
             "Content-Disposition": f'attachment; filename="{path.name}"',
             # A build that changes under the same name must not be cached by a proxy or
-            # the browser; the request is authenticated anyway.
+            # the browser.
             "Cache-Control": "private, no-store",
         },
     )

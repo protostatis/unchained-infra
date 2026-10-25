@@ -7136,7 +7136,7 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div><div class="scan" aria-hidden="true"></div>
-<nav class="topnav" aria-label="Primary"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><button type="button" class="menu-toggle" id="landing-menu-toggle" aria-expanded="false" aria-controls="landing-nav-links" aria-label="Open navigation menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"><span></span><span></span></span></button><div class="links" id="landing-nav-links"><a href="#fit">Which product?</a><a href="#calculator">Use cases</a><a href="#start">Start</a><a href="/install?ref=unchained-nav-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_install_nav">Download</a><a href="https://searchagentsky.com/?ref=unchained-nav&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_public_search_nav">Public research</a><div class="developer-menu" id="landing-developer-menu"><button type="button" class="developer-toggle" id="landing-developer-toggle" aria-expanded="false" aria-controls="landing-developer-links">For developers</button><div class="developer-links" id="landing-developer-links" role="group" aria-label="Developer resources"><a href="/mcp">MCP / CLI</a><a href="/unbrowser">unbrowser</a><a href="/chrome-tax">Why lighter?</a></div></div><a href="/trial" class="signin" id="landing-auth-link" data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a></div></div></nav>
+<nav class="topnav" aria-label="Primary"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><button type="button" class="menu-toggle" id="landing-menu-toggle" aria-expanded="false" aria-controls="landing-nav-links" aria-label="Open navigation menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"><span></span><span></span></span></button><div class="links" id="landing-nav-links"><a href="#fit">Which product?</a><a href="#calculator">Use cases</a><a href="#start">Start</a><a href="/desktop?ref=unchained-nav-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_desktop_nav">Download</a><a href="https://searchagentsky.com/?ref=unchained-nav&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_public_search_nav">Public research</a><div class="developer-menu" id="landing-developer-menu"><button type="button" class="developer-toggle" id="landing-developer-toggle" aria-expanded="false" aria-controls="landing-developer-links">For developers</button><div class="developer-links" id="landing-developer-links" role="group" aria-label="Developer resources"><a href="/mcp">MCP / CLI</a><a href="/unbrowser">unbrowser</a><a href="/chrome-tax">Why lighter?</a></div></div><a href="/trial" class="signin" id="landing-auth-link" data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a></div></div></nav>
 <section class="hero">
   <div class="hero-tag">Unchained drives. You navigate.</div>
   <h1>You command. <em>Your AI runs the browser.</em></h1>
@@ -7179,8 +7179,8 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 <section class="section reveal"><div class="section-label">No micromanaging</div><h2 class="section-title">You call the shots. <em>Unchained runs the steps.</em></h2><p class="section-desc">Unchained handles browser steps in a local Chrome workspace. Start with read-only work and keep consequential actions with you.</p><div class="flow-grid"><div class="flow-card" data-tip="name the browser outcome, not the clicks"><div class="num">01</div><h3>Set the destination</h3><p>Describe the result you want from a signed-in site or multi-step browser workflow&mdash;not every click along the way.</p></div><div class="flow-card" data-tip="the guided path uses its own local Chrome workspace"><div class="num">02</div><h3>Open the local workspace</h3><p>The guided connector launches a dedicated Chrome workspace. You sign in there only to the sites the job needs.</p></div><div class="flow-card" data-tip="use Unchained web chat or a supported agent client"><div class="num">03</div><h3>Choose a supported path</h3><p>Use Unchained web chat or connect a supported Claude, Codex, OpenCode, or MCP workflow.</p></div><div class="flow-card" data-tip="check the result and confirm consequential actions yourself"><div class="num">04</div><h3>Review what happened</h3><p>Check the result, the pages used, and any prepared action before you ask the agent to send, buy, or submit.</p></div></div></section>
 <section class="section reveal" id="capability"><div class="section-label">Why connect</div><h2 class="section-title">A local browser workspace for a <em>supported AI path.</em></h2><p class="section-desc">The value is not another public-web answer. It is giving the workflow a browser session that can stay signed in and take steps on your computer.</p><div class="flow-grid"><div class="flow-card"><div class="num">Session</div><h3>A dedicated Chrome workspace</h3><p>The guided path uses its own on-machine Chrome data directory, so the workspace can retain its sign-in state between runs.</p></div><div class="flow-card"><div class="num">Choice</div><h3>Your supported agent path</h3><p>Use the guided Unchained web experience or a supported Claude, Codex, OpenCode, or MCP client.</p></div><div class="flow-card"><div class="num">Control</div><h3>Your stop point</h3><p>Quit the local agent to stop browser automation, and keep final send, purchase, and submit actions with you.</p></div><div class="flow-card"><div class="num">Output</div><h3>A result you can inspect</h3><p>Ask for a linked shortlist, status report, comparison, or prepared browser change rather than a vague automation run.</p></div></div></section>
 <section class="section reveal" id="start"><div class="section-label">Start with proof</div><h2 class="section-title">Connect only after the <em>job is clear.</em></h2><p class="section-desc">Watch one public task first. If your own task needs a signed-in browser session and actions, use the guided connector. Developers can go straight to MCP or a supported CLI lane.</p><div class="decision-tree"><div class="path-grid"><div class="path-card"><div class="path-eyebrow">No setup</div><h3>Watch a browser task</h3><p>Best if you want to see the browser loop before connecting anything.</p><ul><li>Shared browser demo</li><li>Public-site examples</li><li>No local workspace needed</li></ul><a class="rec-cta secondary" href="/first-look?ref=unchained-start-demo&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_first_look_start">Watch a task run &rarr;</a></div><div class="path-card recommended"><div class="path-eyebrow">When your task needs it</div><h3>Open a local browser workspace</h3><p>Best when the task depends on a site login or browser actions and is worth using a dedicated local workspace.</p><ul><li>Dedicated Unchained Chrome workspace on macOS or Windows</li><li>Sign in there only to sites the task needs</li><li>No Claude, Codex, or OpenCode CLI required for the guided trial</li></ul><a class="rec-cta" href="/trial?ref=unchained-start-chrome&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_connect_chrome_start">Open local browser workspace &rarr;</a></div><div class="path-card"><div class="path-eyebrow">Developers</div><h3>Use MCP / CLI</h3><p>Best if you already work from Claude, Codex, OpenCode, or another MCP client.</p><ul><li>Browser tools for agents</li><li>Local workflow control</li><li>Profile controls vary by supported client path</li></ul><div class="path-links"><a href="/local">Claude CLI</a><a href="/local?provider=codex-cli">Codex CLI</a><a href="/local?provider=opencode-cli">OpenCode CLI</a></div><a class="rec-cta secondary" href="/mcp?ref=unchained-start-mcp&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_mcp_start">Set up MCP / CLI &rarr;</a></div></div></div></section>
-<section class="cta-section"><h2>You set the destination. Ready to let the agent drive?</h2><p>Use SearchAgentSky for public research. When the job needs a signed-in browser session, open the dedicated Unchained workspace or use a supported developer path.</p><div class="hero-actions"><a href="https://searchagentsky.com/?ref=unchained-bottom-public&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="cta-btn" data-analytics-cta="landing_public_search_bottom">Search public sources</a><a href="/trial?ref=unchained-bottom-chrome&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="ghost-btn" data-analytics-cta="landing_connect_chrome_bottom">Open local workspace</a><a href="/install?ref=unchained-bottom-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="ghost-btn" data-analytics-cta="landing_install_bottom">Download the app</a></div></section>
-<footer><div class="footer-links"><a href="/first-look">Demo</a><a href="/trial">Open local workspace</a><a href="https://searchagentsky.com/?ref=unchained-footer&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_public_search_footer">Public research</a><a href="/unbrowser">unbrowser</a><a href="/mcp">MCP / CLI</a><a href="/install?ref=unchained-footer-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_install_footer">Download</a><a href="/privacy">Privacy</a><a href="/data-deletion">Data deletion</a><a href="mailto:__CONTACT_EMAIL__">Contact</a></div><div>UNCHAINED DRIVES. YOU NAVIGATE.</div></footer>
+<section class="cta-section"><h2>You set the destination. Ready to let the agent drive?</h2><p>Use SearchAgentSky for public research. When the job needs a signed-in browser session, open the dedicated Unchained workspace or use a supported developer path.</p><div class="hero-actions"><a href="https://searchagentsky.com/?ref=unchained-bottom-public&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="cta-btn" data-analytics-cta="landing_public_search_bottom">Search public sources</a><a href="/trial?ref=unchained-bottom-chrome&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="ghost-btn" data-analytics-cta="landing_connect_chrome_bottom">Open local workspace</a><a href="/desktop?ref=unchained-bottom-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" class="ghost-btn" data-analytics-cta="landing_desktop_bottom">Download the app</a></div></section>
+<footer><div class="footer-links"><a href="/first-look">Demo</a><a href="/trial">Open local workspace</a><a href="https://searchagentsky.com/?ref=unchained-footer&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_public_search_footer">Public research</a><a href="/unbrowser">unbrowser</a><a href="/mcp">MCP / CLI</a><a href="/desktop?ref=unchained-footer-download&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=landing_value_prop_v1" data-analytics-cta="landing_desktop_footer">Download</a><a href="/privacy">Privacy</a><a href="/data-deletion">Data deletion</a><a href="mailto:__CONTACT_EMAIL__">Contact</a></div><div>UNCHAINED DRIVES. YOU NAVIGATE.</div></footer>
 <script>
 const $=id=>document.getElementById(id);
 const SCENARIOS=[
@@ -24357,6 +24357,190 @@ initClaimPage();
 """
 
 
+DESKTOP_PAGE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unchained for Mac — a chat, and the browser it drives</title>
+<meta name="description" content="The Unchained desktop app puts a chat and its own Chromium in one window. The agent drives that browser with your logins, and every finished chat is stored on your Mac — not on our servers.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta property="og:title" content="Unchained for Mac — a chat, and the browser it drives">
+<meta property="og:description" content="One window: a chat and its own browser. Your logins, your machine, your archives.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/desktop">
+<style>
+:root{
+  --bg:#080a0d;--surface:#11161d;--line:#273241;--line-strong:#3a4656;
+  --text:#eef3f8;--muted:#9aa7b7;--soft:#c9d4e2;--accent:#ff6b4a;--accent-2:#5cd48a;
+  --mono:'SF Mono','Menlo','Monaco','Consolas',monospace;
+}
+*{box-sizing:border-box}
+html{min-height:100%}
+body{
+  margin:0;min-height:100dvh;color:var(--text);
+  font-family:"Avenir Next","Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  background:
+    radial-gradient(900px 520px at 8% -8%, rgba(255,107,74,0.16), transparent 60%),
+    radial-gradient(720px 420px at 92% 4%, rgba(92,212,138,0.10), transparent 58%),
+    linear-gradient(180deg,#0d1117 0%,var(--bg) 68%);
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size:54px 54px;
+  mask-image:linear-gradient(to bottom, rgba(0,0,0,0.75), transparent 82%);
+}
+a{color:#ffd5cc}
+.shell{position:relative;z-index:1;max-width:1020px;margin:0 auto;padding:30px 20px 64px}
+.topline{display:flex;align-items:center;gap:16px;margin-bottom:44px;color:var(--muted);font-size:12.5px}
+.brand{letter-spacing:0.18em;text-transform:uppercase;color:#dfe8f4;font-weight:800;text-decoration:none}
+.brand span{color:var(--accent)}
+.topline nav{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap}
+.topline nav a{color:var(--soft);text-decoration:none}
+.topline nav a:hover{color:var(--text)}
+.hero{max-width:760px;margin-bottom:52px}
+.kicker{font-size:11px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent)}
+h1{margin:12px 0 16px;font-size:clamp(38px,6vw,64px);line-height:0.98;letter-spacing:-0.04em;max-width:14ch}
+.sub{color:var(--soft);font-size:16px;line-height:1.6;max-width:640px;margin:0 0 26px}
+.cta-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  border:none;border-radius:13px;padding:14px 22px;font-size:15px;font-weight:800;
+  font-family:inherit;cursor:pointer;text-decoration:none;
+}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#ff8a5c);color:#180906;box-shadow:0 14px 34px rgba(255,107,74,0.2)}
+.btn-primary:hover{filter:brightness(1.05)}
+.btn-ghost{background:rgba(255,255,255,0.03);border:1px solid var(--line);color:var(--soft)}
+.btn-ghost:hover{border-color:var(--line-strong);color:var(--text)}
+.req{margin:14px 0 0;color:var(--muted);font-size:12.5px;line-height:1.6}
+.req b{color:var(--soft);font-weight:600}
+.section{margin:0 0 44px}
+.section h2{margin:0 0 6px;font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted)}
+.section p.lede{margin:0 0 18px;color:var(--soft);font-size:14.5px;line-height:1.6;max-width:680px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.card{background:linear-gradient(180deg,rgba(19,25,33,0.92),rgba(14,19,25,0.92));border:1px solid rgba(255,255,255,0.09);border-radius:16px;padding:18px}
+.card h3{margin:0 0 8px;font-size:15.5px}
+.card p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;counter-reset:step}
+.step{position:relative;padding:18px 18px 18px 52px;border:1px solid rgba(255,255,255,0.08);border-radius:16px;background:rgba(255,255,255,0.02)}
+.step::before{
+  counter-increment:step;content:counter(step);
+  position:absolute;left:16px;top:17px;width:24px;height:24px;border-radius:50%;
+  display:grid;place-items:center;font-family:var(--mono);font-size:12px;font-weight:700;
+  color:#ffb9a6;background:rgba(255,107,74,0.14);border:1px solid rgba(255,107,74,0.4);
+}
+.step b{display:block;margin-bottom:4px;font-size:14px}
+.step span{color:var(--muted);font-size:12.5px;line-height:1.5}
+.not{border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:18px 20px;background:rgba(255,255,255,0.02)}
+.not ul{margin:0;padding-left:18px;color:var(--muted);font-size:13.5px;line-height:1.7}
+.not li{margin:4px 0}
+.not a{color:#ffd5cc}
+.faq{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 28px}
+.faq div{border-top:1px solid rgba(255,255,255,0.07);padding-top:12px}
+.faq b{display:block;margin-bottom:5px;font-size:13.5px}
+.faq span{color:var(--muted);font-size:13px;line-height:1.6}
+footer{margin-top:56px;padding-top:18px;border-top:1px solid rgba(255,255,255,0.07);color:var(--muted);font-size:12px;display:flex;gap:14px;flex-wrap:wrap}
+footer a{color:var(--muted);text-decoration:none}
+footer a:hover{color:var(--text)}
+footer .spacer{margin-left:auto}
+.badge{display:inline-flex;align-items:center;border:1px solid rgba(255,107,74,0.42);background:rgba(255,107,74,0.14);color:#ffbdaa;font-size:10px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;border-radius:999px;padding:4px 9px;margin-left:10px;vertical-align:middle}
+@media (max-width:820px){
+  .grid,.steps{grid-template-columns:1fr}
+  .faq{grid-template-columns:1fr}
+  h1{font-size:clamp(34px,9vw,44px)}
+  .topline{flex-wrap:wrap;gap:10px}
+  .topline nav{margin-left:0;width:100%}
+}
+</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topline">
+      <a class="brand" href="/">UN<span>CHAIN</span>ED</a>
+      <nav aria-label="Page">
+        <a href="#how">How it works</a>
+        <a href="#why">Why it is local</a>
+        <a href="#faq">Questions</a>
+        <a href="/install">Local agent</a>
+      </nav>
+    </div>
+
+    <section class="hero">
+      <div class="kicker">Desktop app &middot; macOS beta</div>
+      <h1>Your AI&rsquo;s browser. Your Mac.</h1>
+      <p class="sub">One window: a chat and its own Chromium. The agent drives that browser with the logins you already have, and every finished chat is stored on this machine &mdash; not on our servers.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" id="download" href="/web/download-desktop">Download for macOS</a>
+        <a class="btn btn-ghost" href="/first-look">Watch a task run first &rarr;</a>
+      </div>
+      <p class="req">
+        <b>Apple silicon &middot; macOS 13+</b> &middot; __DESKTOP_SIZE_MB__ MB &middot; signed and notarized__DESKTOP_VERSION_LINE__
+      </p>
+    </section>
+
+    <section class="section" id="why">
+      <h2>Three things that make it different</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>A real browser, not a stream</h3>
+          <p>The page is rendered by the app&rsquo;s own Chromium, in the same window. No screencast, no mirror, no stale frame &mdash; you and the agent look at the same page.</p>
+        </article>
+        <article class="card">
+          <h3>Your logins, where they are</h3>
+          <p>Sign in inside the app&rsquo;s browser, or bring an existing Chrome profile across with one click. The profile stays on this Mac; the key is stored encrypted here too.</p>
+        </article>
+        <article class="card">
+          <h3>Finished chats stay here</h3>
+          <p>When a chat is replaced, the transcript is written to this Mac first and only then deleted from the server. Archives live in the app, and the app can restore them.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="how">
+      <h2>How it goes</h2>
+      <div class="steps">
+        <div class="step"><b>Download and open</b><span>Drag it to Applications, open it, and the browser is there.</span></div>
+        <div class="step"><b>Connect</b><span>Approve this device in your browser once. The key never leaves this machine.</span></div>
+        <div class="step"><b>Ask for a task</b><span>Name the outcome. The agent navigates, collects, compares, and prepares &mdash; you keep the final click.</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>What it is not</h2>
+      <div class="not">
+        <ul>
+          <li>It is not the <a href="/install">local agent</a>. That one connects the Chrome you already use; this one brings its own. You can use either, or both.</li>
+          <li>It is not a remote browser. Nothing is streamed from a server, and no page is rendered anywhere but here.</li>
+          <li>It has no model picker. The deployment decides the model; a surface that cannot choose cannot choose wrong.</li>
+          <li>It is a beta. It does not auto-update yet &mdash; updating means downloading the current build again.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <h2>Questions</h2>
+      <div class="faq">
+        <div><b>Does it work on an Intel Mac?</b><span>Not yet. The build is Apple silicon only.</span></div>
+        <div><b>Windows or Linux?</b><span>Not yet. The macOS build is the beta; other platforms are not shipped.</span></div>
+        <div><b>Do my conversations go to your servers?</b><span>The chat itself runs through the hosted agent, but a finished chat is archived to this Mac before the server copy is deleted. Archives are yours.</span></div>
+        <div><b>What does it need?</b><span>A Mac on macOS 13 or later with Apple silicon, and an Unchained account to connect.</span></div>
+        <div><b>How do I update?</b><span>Download the current build from this page and replace the app. Auto-update is planned.</span></div>
+        <div><b>Can I stop it?</b><span>Quit the app: the browser and the connection end with it. Nothing keeps running in the background.</span></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="/">Unchained</a>
+      <a href="/install">Install the local agent</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/data-deletion">Data deletion</a>
+      <span class="spacer">UNCHAINED DRIVES. YOU NAVIGATE.</span>
+    </footer>
+  </div>
+</body>
+</html>"""
+
 INSTALL_ONBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24521,7 +24705,7 @@ body.agent-only .hero{position:static;padding-top:0}
         <div class="kicker">Install</div>
         <h1>Install Unchained.</h1>
         <p class="sub" id="hero-sub">The desktop app keeps the chat and its browser in one window. The local agent connects the Chrome you already use.</p>
-        <p class="meta-line" id="hero-meta">Desktop app: Apple silicon, macOS 12+<br>Local agent: macOS and Windows</p>
+        <p class="meta-line" id="hero-meta">Desktop app: Apple silicon, macOS 13+<br>Local agent: macOS and Windows</p>
       </section>
 
       <div class="stack">
@@ -24541,10 +24725,11 @@ body.agent-only .hero{position:static;padding-top:0}
           <h2 class="card-title">Desktop app</h2>
           <p class="card-lede">One window: the chat and its own browser. No agent, no terminal.</p>
           <div class="facts">
-            <span>Apple silicon</span><i></i><span>macOS 12+</span>
+            <span>Apple silicon</span><i></i><span>macOS 13+</span>
           </div>
           <a class="btn btn-primary btn-lg" id="desktop-download" href="/web/download-desktop">Download for macOS</a>
-          <p class="fineprint">Open it and choose Connect &mdash; you approve the request in your browser. The API key stays encrypted on this machine and is never shown to a page.</p>
+          <p class="fineprint">Open it and choose Connect &mdash; you approve the request in your browser. The API key stays encrypted on this machine and is never shown to a page.
+            <a href="/desktop">What it is, and what it is not &rarr;</a></p>
         </section>
 
         <div class="divider" id="agent-divider" hidden><span>Or connect the local agent</span></div>
@@ -24799,15 +24984,6 @@ async function startInstall() {
   }
 }
 
-// The desktop app is the headline, so a signed-out visitor still sees it; only its CTA
-// changes. The download endpoint answers 401, so send the click through sign-in instead.
-function pointDesktopCtaAtSignIn() {
-  const cta = document.getElementById('desktop-download');
-  if (!cta) return;
-  cta.href = '/local?next=' + encodeURIComponent(INSTALL_RETURN_PATH);
-  cta.textContent = 'Sign in to download';
-}
-
 function applyInstallCopy() {
   const desktopAvailable = DESKTOP_BETA && _installOs === 'mac';
   document.body.classList.toggle('agent-only', !desktopAvailable);
@@ -24841,11 +25017,9 @@ async function initInstallPage() {
     const r = await fetch('/auth/me');
     const data = await r.json();
     if (!r.ok || !data.authenticated) {
-      // One sign-in entry, not two: with the desktop card on the page its own CTA is the
-      // sign-in, and the banner would only repeat it. Without the card (other OSes) the
-      // banner is the only way in.
-      if (desktopAvailable) pointDesktopCtaAtSignIn();
-      else document.getElementById('auth-panel').style.display = 'flex';
+      // The desktop app downloads signed out; the agent does not. So the banner is about
+      // the agent, and the desktop card keeps its own working CTA.
+      document.getElementById('auth-panel').style.display = 'flex';
       return;
     }
     document.getElementById('ready-panel').style.display = 'block';
@@ -24857,11 +25031,8 @@ async function initInstallPage() {
     await checkInstallAgentStatus();
     if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);
   } catch (e) {
-    // Same one-entry rule as above: an auth check that throws must not leave both the
-    // banner and the desktop CTA asking the visitor to sign in.
     console.warn('install page: auth check failed', e);
-    if (desktopAvailable) pointDesktopCtaAtSignIn();
-    else document.getElementById('auth-panel').style.display = 'flex';
+    document.getElementById('auth-panel').style.display = 'flex';
   }
 }
 
