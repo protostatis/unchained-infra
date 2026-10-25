@@ -234,6 +234,8 @@ services:
       # The macOS desktop app (beta) as an install option. Off unless enabled; the card
       # also requires the dmg to be present in unchained/installers on the host.
       - UNCHAINED_DESKTOP_BETA=${UNCHAINED_DESKTOP_BETA:-0}
+      # Shown on /desktop; the dmg name carries no version, so the deployment states it.
+      - UNCHAINED_DESKTOP_VERSION=${UNCHAINED_DESKTOP_VERSION:-}
       - HOSTED_AGENT_SERVICE_TOKEN=${HOSTED_AGENT_SERVICE_TOKEN:?HOSTED_AGENT_SERVICE_TOKEN_required}
       - HOSTED_MAX_ACTIVE_TURNS=${HOSTED_MAX_ACTIVE_TURNS:-16}
       - HOSTED_MAX_ACTIVE_TURNS_PER_USER=${HOSTED_MAX_ACTIVE_TURNS_PER_USER:-3}
