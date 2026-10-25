@@ -157,7 +157,7 @@ class DesktopDownloadLimitTests(unittest.TestCase):
     def test_the_key_table_cannot_grow_without_bound(self):
         now = 2_000_000.0
         for index in range(install_flow._DESKTOP_DOWNLOAD_MAX_KEYS + 50):
-            install_flow._desktop_download_allowed(f"198.51.100.{index % 256}:{index}", now)
+            install_flow._desktop_download_allowed(f"198.51.100.{index % 256}:{index}", now)[0]
         self.assertLessEqual(
             len(install_flow._desktop_download_hits),
             install_flow._DESKTOP_DOWNLOAD_MAX_KEYS,
@@ -166,21 +166,23 @@ class DesktopDownloadLimitTests(unittest.TestCase):
     def test_one_address_may_not_pull_it_in_a_loop(self):
         now = 1_000_000.0
         allowed = [
-            install_flow._desktop_download_allowed("203.0.113.7", now + i)
+            install_flow._desktop_download_allowed("203.0.113.7", now + i)[0]
             for i in range(install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP)
         ]
         self.assertTrue(all(allowed))
-        self.assertFalse(
-            install_flow._desktop_download_allowed(
-                "203.0.113.7", now + install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP
-            )
+        blocked, retry_after = install_flow._desktop_download_allowed(
+            "203.0.113.7", now + install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP
         )
+        self.assertFalse(blocked)
+        # The wait is what is left of the window, not the whole hour again.
+        self.assertLessEqual(retry_after, install_flow._DESKTOP_DOWNLOAD_WINDOW_S)
+        self.assertGreater(retry_after, install_flow._DESKTOP_DOWNLOAD_WINDOW_S - 10)
         # Another address is unaffected, and the window lets the first one back in.
-        self.assertTrue(install_flow._desktop_download_allowed("203.0.113.8", now))
+        self.assertTrue(install_flow._desktop_download_allowed("203.0.113.8", now)[0])
         self.assertTrue(
             install_flow._desktop_download_allowed(
                 "203.0.113.7", now + install_flow._DESKTOP_DOWNLOAD_WINDOW_S + 1
-            )
+            )[0]
         )
 
 
@@ -212,9 +214,19 @@ class DesktopPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("3 MB", response.text)
         self.assertIn("v0.5.2", response.text)
 
-    async def test_flag_off_is_404(self):
-        response = await self._call(self._core(beta=False))
+    async def test_flag_off_is_404_and_is_not_a_page_view(self):
+        core = self._core(beta=False)
+        response = await self._call(core)
         self.assertEqual(response.status, 404)
+        core._track_page_view.assert_not_called()
+
+    async def test_a_served_page_is_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = Path(tmp) / "unchained-desktop-mac-arm64.dmg"
+            dmg.write_bytes(b"x")
+            core = self._core(artifact=dmg)
+            await self._call(core)
+        core._track_page_view.assert_called_once()
 
     async def test_missing_build_is_404(self):
         response = await self._call(self._core(artifact=None))

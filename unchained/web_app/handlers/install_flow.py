@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import threading
 import time
@@ -11,6 +12,8 @@ from aiohttp import web
 
 
 from web_app.core import get_core as _core
+
+log = logging.getLogger(__name__)
 
 
 async def handle_public_install_script(request: web.Request) -> web.Response:
@@ -212,6 +215,14 @@ _TRUSTED_PROXIES = [
     for entry in os.environ.get("UNCHAINED_TRUSTED_PROXIES", "").split(",")
     if entry.strip()
 ]
+if not _TRUSTED_PROXIES:
+    # Deployments should name their proxy network explicitly (docker-compose does). This
+    # fallback keeps a bare dev run working, and says so once instead of silently
+    # trusting every private peer for the client's address.
+    log.warning(
+        "[install] UNCHAINED_TRUSTED_PROXIES is empty; trusting loopback and private "
+        "peers to set X-Forwarded-For"
+    )
 
 
 def _is_trusted_proxy(address: str) -> bool:
@@ -247,8 +258,15 @@ def _client_source_ip(request: web.Request) -> str:
     return remote or "unknown"
 
 
-def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
-    """Record one download attempt and say whether this source is still under the cap."""
+def _desktop_download_allowed(
+    source_ip: str, now: float | None = None
+) -> tuple[bool, int]:
+    """Record one attempt; return whether it is allowed and, if not, the wait in seconds.
+
+    The table is per process on purpose: this deployment runs one web process, so the cap
+    is the cap. Several workers or pods would multiply it, and a shared store would be the
+    fix at that point — see the docstring on the handler.
+    """
     now_ts = time.time() if now is None else float(now)
     key = str(source_ip or "unknown")[:64]
     with _desktop_download_lock:
@@ -258,7 +276,9 @@ def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
         ]
         if len(recent) >= _DESKTOP_DOWNLOAD_MAX_PER_IP:
             _desktop_download_hits[key] = recent
-            return False
+            oldest = min(recent)
+            remaining = _DESKTOP_DOWNLOAD_WINDOW_S - (now_ts - oldest)
+            return False, max(1, int(round(remaining)))
         recent.append(now_ts)
         _desktop_download_hits[key] = recent
         if len(_desktop_download_hits) > _DESKTOP_DOWNLOAD_MAX_KEYS:
@@ -273,7 +293,7 @@ def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
                     key=lambda entry: _desktop_download_hits[entry][-1],
                 )
                 _desktop_download_hits.pop(oldest, None)
-        return True
+        return True, 0
 
 
 async def handle_download_desktop(request: web.Request) -> web.Response:
@@ -328,11 +348,12 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
     # The cap is for anonymous traffic. A session or an install token is attributable, so
     # a shared address (an office NAT, a CI runner) cannot lock those users out.
     if not token_info and not auth_info:
-        if not _desktop_download_allowed(_client_source_ip(request)):
+        allowed, retry_after = _desktop_download_allowed(_client_source_ip(request))
+        if not allowed:
             return web.json_response(
                 {"error": "Too many downloads from this address; try again later"},
                 status=429,
-                headers={"Retry-After": str(_DESKTOP_DOWNLOAD_WINDOW_S)},
+                headers={"Retry-After": str(retry_after)},
             )
 
     user_id = token_info.get("user_id", "") if token_info else (auth_info or {}).get("user_id", "")

@@ -325,12 +325,13 @@ async def handle_desktop_page(request: web.Request) -> web.Response:
     when this deployment does not ship the build, so it never advertises a dead link.
     """
     core = _core()
-    core._track_page_view(request)
     if not getattr(core, "_DESKTOP_BETA_ENABLED", False):
         return web.Response(status=404, text="Not found", content_type="text/plain")
     path = core._desktop_installer_path()
     if path is None:
         return web.Response(status=404, text="Not found", content_type="text/plain")
+    # Only a served page is a page view; a 404 is not traffic worth counting.
+    core._track_page_view(request)
     try:
         size_mb = max(1, round(path.stat().st_size / (1024 * 1024)))
     except OSError:

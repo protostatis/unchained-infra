@@ -249,6 +249,7 @@ services:
       - CREDIT_ADMIN_ALLOWLIST=${CREDIT_ADMIN_ALLOWLIST:-}
       - UNCHAINED_HOSTED_DATA_DIR=/data/hosted-conversations
       - UNCHAINED_SESSIONS_DIR=${UNCHAINED_SESSIONS_DIR:-/data/sessions}
+      - UNCHAINED_TRUSTED_PROXIES=${UNCHAINED_TRUSTED_PROXIES:-172.16.0.0/12}
     depends_on:
       - relay
       - private-core
