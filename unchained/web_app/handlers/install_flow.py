@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+import os
+import threading
+import time
+
 from aiohttp import web
 
 
 from web_app.core import get_core as _core
+
+log = logging.getLogger(__name__)
 
 
 async def handle_public_install_script(request: web.Request) -> web.Response:
@@ -191,11 +199,113 @@ async def handle_download_installer(request: web.Request) -> web.Response:
     )
 
 
+# A public download is ~135MB, so it needs a floor against a loop. This is per source
+# address and deliberately generous: a person re-downloading on a new machine is not the
+# case worth blocking, a script pulling it fifty times is.
+_DESKTOP_DOWNLOAD_WINDOW_S = 3600
+_DESKTOP_DOWNLOAD_MAX_PER_IP = 8
+_DESKTOP_DOWNLOAD_MAX_KEYS = 4096
+_desktop_download_hits: dict[str, list[float]] = {}
+_desktop_download_lock = threading.Lock()
+
+# Which peers may speak for the client. Empty means "loopback and private networks",
+# which is the deployment's own reverse proxy; a public address is never trusted.
+_TRUSTED_PROXIES = [
+    entry.strip()
+    for entry in os.environ.get("UNCHAINED_TRUSTED_PROXIES", "").split(",")
+    if entry.strip()
+]
+if not _TRUSTED_PROXIES:
+    # Deployments should name their proxy network explicitly (docker-compose does). This
+    # fallback keeps a bare dev run working, and says so once instead of silently
+    # trusting every private peer for the client's address.
+    log.warning(
+        "[install] UNCHAINED_TRUSTED_PROXIES is empty; trusting loopback and private "
+        "peers to set X-Forwarded-For"
+    )
+
+
+def _is_trusted_proxy(address: str) -> bool:
+    """Whether this peer is a reverse proxy that may set X-Forwarded-For."""
+    text = str(address or "").strip()
+    if not text:
+        return False
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    for entry in _TRUSTED_PROXIES:
+        try:
+            if ip in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return ip.is_loopback or ip.is_private
+
+
+def _client_source_ip(request: web.Request) -> str:
+    """The address the cap is keyed on.
+
+    X-Forwarded-For is honoured only when the connection came from a proxy we trust;
+    otherwise any client could rotate the header and never meet the cap.
+    """
+    remote = str(getattr(request, "remote", "") or "").strip()
+    forwarded = str(request.headers.get("X-Forwarded-For", "") or "").strip()
+    if forwarded and _is_trusted_proxy(remote):
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return remote or "unknown"
+
+
+def _desktop_download_allowed(
+    source_ip: str, now: float | None = None
+) -> tuple[bool, int]:
+    """Record one attempt; return whether it is allowed and, if not, the wait in seconds.
+
+    The table is per process on purpose: this deployment runs one web process, so the cap
+    is the cap. Several workers or pods would multiply it, and a shared store would be the
+    fix at that point — see the docstring on the handler.
+    """
+    now_ts = time.time() if now is None else float(now)
+    key = str(source_ip or "unknown")[:64]
+    with _desktop_download_lock:
+        recent = [
+            stamp for stamp in _desktop_download_hits.get(key, [])
+            if now_ts - stamp < _DESKTOP_DOWNLOAD_WINDOW_S
+        ]
+        if len(recent) >= _DESKTOP_DOWNLOAD_MAX_PER_IP:
+            _desktop_download_hits[key] = recent
+            oldest = min(recent)
+            remaining = _DESKTOP_DOWNLOAD_WINDOW_S - (now_ts - oldest)
+            return False, max(1, int(round(remaining)))
+        recent.append(now_ts)
+        _desktop_download_hits[key] = recent
+        if len(_desktop_download_hits) > _DESKTOP_DOWNLOAD_MAX_KEYS:
+            for stale in list(_desktop_download_hits):
+                if now_ts - _desktop_download_hits[stale][-1] > _DESKTOP_DOWNLOAD_WINDOW_S:
+                    _desktop_download_hits.pop(stale, None)
+            # A flood of distinct keys is the abuse case, not the exception: if the sweep
+            # freed nothing, drop the oldest keys so the table cannot grow without bound.
+            while len(_desktop_download_hits) > _DESKTOP_DOWNLOAD_MAX_KEYS:
+                oldest = min(
+                    _desktop_download_hits,
+                    key=lambda entry: _desktop_download_hits[entry][-1],
+                )
+                _desktop_download_hits.pop(oldest, None)
+        return True, 0
+
+
 async def handle_download_desktop(request: web.Request) -> web.Response:
     """GET /web/download-desktop — the macOS desktop app (beta).
 
     A different client from the agent, so it has its own artifact lane and its own flag.
     macOS only: the build is arm64, and offering it to another OS would be a dead download.
+
+    Public on purpose. The app is useless without an account, but the account gate belongs
+    in its Connect step: requiring a session to fetch the file puts a sign-up wall in front
+    of the top of the funnel, and makes the app impossible to share. An install token or a
+    session is still honoured when present, for attribution.
     """
     core = _core()
     if not core._DESKTOP_BETA_ENABLED:
@@ -214,9 +324,8 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
         if not token_info:
             return web.json_response({"error": "Invalid or expired install token"}, status=401)
     else:
+        # Anonymous is allowed; a session only makes the download attributable.
         auth_info = core._authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
 
     path = core._desktop_installer_path()
     if not path:
@@ -236,8 +345,19 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             {"error": "The desktop app build is not available yet"}, status=503
         )
 
-    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-    user_type = auth_info.get("user_type", "") if auth_info else ""
+    # The cap is for anonymous traffic. A session or an install token is attributable, so
+    # a shared address (an office NAT, a CI runner) cannot lock those users out.
+    if not token_info and not auth_info:
+        allowed, retry_after = _desktop_download_allowed(_client_source_ip(request))
+        if not allowed:
+            return web.json_response(
+                {"error": "Too many downloads from this address; try again later"},
+                status=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    user_id = token_info.get("user_id", "") if token_info else (auth_info or {}).get("user_id", "")
+    user_type = (auth_info or {}).get("user_type", "")
     core._track_event(
         request,
         "desktop_download_start",
@@ -253,7 +373,10 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             "platform": "mac",
             "artifact": "desktop",
             "filename": path.name,
-            "channel": "install_token" if token_info else "session",
+            "channel": (
+                "install_token" if token_info
+                else ("session" if auth_info else "public")
+            ),
         },
     )
     return web.FileResponse(
@@ -261,8 +384,8 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
         headers={
             "Content-Disposition": f'attachment; filename="{path.name}"',
             # A build that changes under the same name must not be cached by a proxy or
-            # the browser; the request is authenticated anyway.
-            "Cache-Control": "private, no-store",
+            # the browser.
+            "Cache-Control": "no-store",
         },
     )
 
