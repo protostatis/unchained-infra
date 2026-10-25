@@ -84,6 +84,16 @@ class DownloadDesktopHandlerTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(self._core(platform="windows"))
         self.assertEqual(response.status, 400)
 
+    async def test_an_authenticated_download_is_not_capped(self):
+        # A shared address (office NAT, CI) must not lock out attributable downloads.
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = Path(tmp) / "unchained-desktop-mac-arm64.dmg"
+            dmg.write_bytes(b"dmg-bytes")
+            core = self._core(artifact=dmg)
+            for _ in range(install_flow._DESKTOP_DOWNLOAD_MAX_PER_IP + 2):
+                response = await self._call(core)
+                self.assertEqual(response.status, 200)
+
     async def test_anonymous_download_is_allowed(self):
         # The download is the top of the funnel; the account gate belongs in the app's
         # Connect step, not in front of a 135MB file.
@@ -128,6 +138,30 @@ class DesktopDownloadLimitTests(unittest.TestCase):
 
     def tearDown(self):
         install_flow._desktop_download_hits.clear()
+
+    def test_forwarded_for_is_only_trusted_from_a_proxy(self):
+        class Req:
+            def __init__(self, remote, forwarded=""):
+                self.remote = remote
+                self.headers = {"X-Forwarded-For": forwarded} if forwarded else {}
+
+        # The deployment's proxy may speak for the client...
+        self.assertEqual(install_flow._client_source_ip(Req("172.18.0.4", "203.0.113.7")), "203.0.113.7")
+        self.assertEqual(install_flow._client_source_ip(Req("127.0.0.1", "203.0.113.7")), "203.0.113.7")
+        # ...a public peer may not: its header would let it rotate the cap away.
+        # A genuinely public peer (8.8.8.8): its header is ignored. Note Python counts
+        # the documentation ranges as private, so they cannot stand in for "public" here.
+        self.assertEqual(install_flow._client_source_ip(Req("8.8.8.8", "1.1.1.1")), "8.8.8.8")
+        self.assertEqual(install_flow._client_source_ip(Req("8.8.8.8")), "8.8.8.8")
+
+    def test_the_key_table_cannot_grow_without_bound(self):
+        now = 2_000_000.0
+        for index in range(install_flow._DESKTOP_DOWNLOAD_MAX_KEYS + 50):
+            install_flow._desktop_download_allowed(f"198.51.100.{index % 256}:{index}", now)
+        self.assertLessEqual(
+            len(install_flow._desktop_download_hits),
+            install_flow._DESKTOP_DOWNLOAD_MAX_KEYS,
+        )
 
     def test_one_address_may_not_pull_it_in_a_loop(self):
         now = 1_000_000.0

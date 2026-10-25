@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import threading
 import time
 
@@ -199,8 +201,50 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 # case worth blocking, a script pulling it fifty times is.
 _DESKTOP_DOWNLOAD_WINDOW_S = 3600
 _DESKTOP_DOWNLOAD_MAX_PER_IP = 8
+_DESKTOP_DOWNLOAD_MAX_KEYS = 4096
 _desktop_download_hits: dict[str, list[float]] = {}
 _desktop_download_lock = threading.Lock()
+
+# Which peers may speak for the client. Empty means "loopback and private networks",
+# which is the deployment's own reverse proxy; a public address is never trusted.
+_TRUSTED_PROXIES = [
+    entry.strip()
+    for entry in os.environ.get("UNCHAINED_TRUSTED_PROXIES", "").split(",")
+    if entry.strip()
+]
+
+
+def _is_trusted_proxy(address: str) -> bool:
+    """Whether this peer is a reverse proxy that may set X-Forwarded-For."""
+    text = str(address or "").strip()
+    if not text:
+        return False
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    for entry in _TRUSTED_PROXIES:
+        try:
+            if ip in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return ip.is_loopback or ip.is_private
+
+
+def _client_source_ip(request: web.Request) -> str:
+    """The address the cap is keyed on.
+
+    X-Forwarded-For is honoured only when the connection came from a proxy we trust;
+    otherwise any client could rotate the header and never meet the cap.
+    """
+    remote = str(getattr(request, "remote", "") or "").strip()
+    forwarded = str(request.headers.get("X-Forwarded-For", "") or "").strip()
+    if forwarded and _is_trusted_proxy(remote):
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return remote or "unknown"
 
 
 def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
@@ -217,10 +261,18 @@ def _desktop_download_allowed(source_ip: str, now: float | None = None) -> bool:
             return False
         recent.append(now_ts)
         _desktop_download_hits[key] = recent
-        if len(_desktop_download_hits) > 4096:
+        if len(_desktop_download_hits) > _DESKTOP_DOWNLOAD_MAX_KEYS:
             for stale in list(_desktop_download_hits):
                 if now_ts - _desktop_download_hits[stale][-1] > _DESKTOP_DOWNLOAD_WINDOW_S:
                     _desktop_download_hits.pop(stale, None)
+            # A flood of distinct keys is the abuse case, not the exception: if the sweep
+            # freed nothing, drop the oldest keys so the table cannot grow without bound.
+            while len(_desktop_download_hits) > _DESKTOP_DOWNLOAD_MAX_KEYS:
+                oldest = min(
+                    _desktop_download_hits,
+                    key=lambda entry: _desktop_download_hits[entry][-1],
+                )
+                _desktop_download_hits.pop(oldest, None)
         return True
 
 
@@ -273,18 +325,15 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             {"error": "The desktop app build is not available yet"}, status=503
         )
 
-    forwarded = (
-        request.headers.get("X-Forwarded-For", "")
-        or getattr(request, "remote", "")
-        or ""
-    )
-    source_ip = str(forwarded).split(",")[0].strip()
-    if not _desktop_download_allowed(source_ip):
-        return web.json_response(
-            {"error": "Too many downloads from this address; try again later"},
-            status=429,
-            headers={"Retry-After": str(_DESKTOP_DOWNLOAD_WINDOW_S)},
-        )
+    # The cap is for anonymous traffic. A session or an install token is attributable, so
+    # a shared address (an office NAT, a CI runner) cannot lock those users out.
+    if not token_info and not auth_info:
+        if not _desktop_download_allowed(_client_source_ip(request)):
+            return web.json_response(
+                {"error": "Too many downloads from this address; try again later"},
+                status=429,
+                headers={"Retry-After": str(_DESKTOP_DOWNLOAD_WINDOW_S)},
+            )
 
     user_id = token_info.get("user_id", "") if token_info else (auth_info or {}).get("user_id", "")
     user_type = (auth_info or {}).get("user_type", "")
@@ -315,7 +364,7 @@ async def handle_download_desktop(request: web.Request) -> web.Response:
             "Content-Disposition": f'attachment; filename="{path.name}"',
             # A build that changes under the same name must not be cached by a proxy or
             # the browser.
-            "Cache-Control": "private, no-store",
+            "Cache-Control": "no-store",
         },
     )
 

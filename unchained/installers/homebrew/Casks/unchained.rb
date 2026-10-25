@@ -14,6 +14,10 @@ cask "unchained" do
 
   app "Unchained.app"
 
+  livecheck do
+    skip "Pinned to the published build; bump with installers/homebrew/README.md"
+  end
+
   zap trash: [
     "~/Library/Application Support/Unchained",
     "~/Library/Caches/com.unchainedsky.desktop",
