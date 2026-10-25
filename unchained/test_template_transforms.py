@@ -1133,7 +1133,7 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("A local browser workspace for a <em>supported AI path.</em>", templates.LANDING_HTML)
         self.assertIn("Search public sources &mdash; no install", templates.LANDING_HTML)
         self.assertIn(
-            'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
+            'data-analytics-cta="landing_connect_chrome_nav">Open workspace</a>',
             templates.LANDING_HTML,
         )
         self.assertIn("No Claude, Codex, or OpenCode CLI required for the guided trial", templates.LANDING_HTML)
