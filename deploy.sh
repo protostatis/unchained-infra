@@ -1594,8 +1594,13 @@ set -euo pipefail
 remote_dir="$1"
 mkdir -p "$remote_dir/unchained/installers"
 EOF
+# Installer *assets* only: the directory also holds source (the Homebrew cask), and scp
+# without -r fails the whole deployment when it meets one.
 shopt -s nullglob
-INSTALLER_FILES=(unchained/installers/*)
+INSTALLER_FILES=()
+for installer_path in unchained/installers/*; do
+    [[ -f "$installer_path" ]] && INSTALLER_FILES+=("$installer_path")
+done
 shopt -u nullglob
 if [[ "${#INSTALLER_FILES[@]}" -gt 0 ]]; then
     "${SCP_CMD[@]}" \
