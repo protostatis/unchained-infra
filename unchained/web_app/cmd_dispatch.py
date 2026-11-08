@@ -119,6 +119,8 @@ async def _cmd_rhythm_catch(body, agent_id, tab_id, relay_host, relay_port, clou
     result = await cloud_tools.run_rhythm_catch(
         agent_id, tab_id, url, task, terms,
         click_text=body.get("click_text", ""),
+        group_selector=body.get("group_selector", ""),
+        limit=body.get("limit", 20),
         relay_host=relay_host, relay_port=relay_port)
     return {"type": "text", "data": result}
 

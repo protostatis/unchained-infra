@@ -765,7 +765,8 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
 @mcp.tool()
 async def rhythm_catch(
     url: str, task: str, catch_terms: str,
-    click_text: str = "", tab_id: str = "auto", agent_id: str = "",
+    click_text: str = "", group_selector: str = "", limit: int = 20,
+    tab_id: str = "auto", agent_id: str = "",
 ) -> str:
     """Scan an SPA page for specific data using event-driven interception.
 
@@ -778,11 +779,23 @@ async def rhythm_catch(
         task: What you're looking for (e.g. "find home prices in SF").
         catch_terms: Comma-separated terms to scan for (e.g. "price,bed,sqft").
         click_text: Optional — text of element to click before scanning.
+        group_selector: Optional CSS selector for the record container, e.g.
+            "li.s-item" or "[data-testid='property-card']". When set, one
+            result is returned per container with its full text (price,
+            condition, seller) instead of one result per text node. Use this
+            whenever the page is a list of records: capping text nodes can
+            discard most records, and a bare title usually lacks the evidence
+            needed to judge it.
+        limit: Maximum results (1-200, default 20). The response reports
+            caught_count (matches before the cap) and truncated.
     """
     aid = _resolve_agent(profile=agent_id)
     terms = [t.strip() for t in catch_terms.split(",") if t.strip()]
     return await cloud_tools.run_rhythm_catch(
-        aid, tab_id, url, task, terms, click_text=click_text,
+        aid, tab_id, url, task, terms,
+        click_text=click_text,
+        group_selector=group_selector,
+        limit=limit,
     )
 
 

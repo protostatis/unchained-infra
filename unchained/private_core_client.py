@@ -570,12 +570,16 @@ class PrivateCoreClient:
     async def run_rhythm_catch(self, agent_id: str, tab_id: str,
                                url: str, task: str, catch_terms: list,
                                click_text: str = "",
+                               group_selector: str = "",
+                               limit: int = 20,
                                relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
         return await self.execute(
             OP_RHYTHM_CATCH,
             agent_id=agent_id, tab_id=tab_id,
             url=url, task=task, catch_terms=catch_terms,
             click_text=click_text,
+            group_selector=group_selector,
+            limit=limit,
             relay_host=relay_host, relay_port=relay_port,
         )
 
