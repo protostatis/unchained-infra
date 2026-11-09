@@ -63,6 +63,8 @@ jobs:
           cd unchained
           python test_open_core_boundary.py
           python test_cloud_tools_click.py
+          python test_cdp_tool_rhythm.py
+          python test_private_core_client_rhythm.py
           python test_opencode_agent.py
           python test_chat_event_transport.py
           python test_sse_write_guard.py

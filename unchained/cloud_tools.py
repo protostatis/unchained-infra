@@ -6,7 +6,7 @@ Implementation lives behind `private_core_client`.
 
 from __future__ import annotations
 
-from private_core_client import get_private_core_client
+from private_core_client import DEFAULT_CATCH_LIMIT, get_private_core_client
 
 
 def _client():
@@ -193,10 +193,13 @@ async def run_ddm_in_frame(agent_id: str, tab_id: str, frame_id: str,
 
 async def run_rhythm_catch(agent_id: str, tab_id: str, url: str, task: str, catch_terms: list,
                            click_text: str = "",
+                           group_selector: str = "", limit: int = DEFAULT_CATCH_LIMIT,
                            relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
     return await _client().run_rhythm_catch(
         agent_id, tab_id, url, task, catch_terms,
-        click_text, relay_host, relay_port,
+        click_text=click_text,
+        group_selector=group_selector, limit=limit,
+        relay_host=relay_host, relay_port=relay_port,
     )
 
 
