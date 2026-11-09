@@ -1465,17 +1465,16 @@ fi
 # Copy rhythm repo into build context (for Dockerfile COPY rhythm/ rhythm/).
 # Only the files needed at runtime are copied — not tests, data, or docs.
 RHYTHM_DST="$SCRIPT_DIR/rhythm"
+RHYTHM_STAGED=false
 stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM"
 rhythm_stage_status=$?
 if [[ "$rhythm_stage_status" -eq 0 ]]; then
     echo "==> Rhythm staged into the build context from $RHYTHM_SRC"
-    # Rhythm is outside the deployed-path checksum list, so its content cannot
-    # invalidate the image by itself. Force a full rebuild whenever it ships;
-    # otherwise the new rhythm is uploaded but the running image keeps the old.
-    if ! $FORCE_FULL_DEPLOY; then
-        echo "    Forcing a full rebuild so the image picks up the staged rhythm."
-        FORCE_FULL_DEPLOY=true
-    fi
+    # Rhythm is outside the deployed-path checksums, so the diff below cannot
+    # see it. private-core is rebuilt below instead of forcing a full deploy:
+    # it is the only service that serves rhythm (RHYTHM_ROOT), and a full
+    # rebuild of every image exceeds the disk on the production host.
+    RHYTHM_STAGED=true
 elif [[ "$rhythm_stage_status" -eq 1 ]]; then
     echo "ERROR: RHYTHM_SRC=$RHYTHM_SRC is incomplete (REQUIRE_RHYTHM=1)." >&2
     echo "ERROR: point RHYTHM_SRC at a full rhythm checkout, or set REQUIRE_RHYTHM=0 to deploy without rhythm." >&2
@@ -1835,6 +1834,16 @@ else
         CADDY_RECREATE_REQUIRED=true
     fi
     cd "$SCRIPT_DIR"
+fi
+
+if $RHYTHM_STAGED; then
+    # Rhythm is uploaded rather than diffed, so the checksum classifier above
+    # never reports it. Rebuild the one service that serves it. Rebuilding every
+    # image is not an option here: each image bakes the ~272MB installers
+    # directory and the production host has ~1.5GB free, so a full rebuild
+    # exhausts the disk mid-build and rolls the release back.
+    echo "    Rhythm changed — private-core will be rebuilt."
+    add_services private-core
 fi
 
 if $DESKTOP_BETA_ENABLED; then
