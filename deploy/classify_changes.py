@@ -169,7 +169,10 @@ SUBTREE_RULES: list[tuple[str, set[str]]] = [
     ("unchained/scripts/", set()),  # dev/maintenance scripts, not runtime
     ("unchained/docs/", set()),
     ("unchained/testdata/", set()),
-    ("rhythm/", {"web", "mcp", "private-core"}),  # rhythm tools used broadly
+    # Only private-core serves rhythm (it is the sole RHYTHM_ROOT consumer, and
+    # the oss boundary guard rejects rhythm references anywhere else), so a
+    # rhythm change must not drag web or mcp into a rebuild.
+    ("rhythm/", {"private-core"}),
     ("research_desk_vendor/", {"web"}),
 ]
 

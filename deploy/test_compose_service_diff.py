@@ -50,6 +50,14 @@ class TestChangedServices(unittest.TestCase):
             {"web", "trial-agent"},
         )
 
+    def test_rhythm_rebuilds_only_its_single_consumer(self):
+        # private-core is the only service that serves rhythm; rebuilding web or
+        # mcp for a rhythm change wastes the deploy host's disk.
+        self.assertEqual(classify_path("rhythm/REVISION"), {"private-core"})
+        self.assertEqual(classify_path("rhythm/tools.py"), {"private-core"})
+        self.assertEqual(classify_path("rhythm/catcher_agent.js"), {"private-core"})
+        self.assertEqual(classify_path("rhythm/some_new_module.py"), {"private-core"})
+
     def test_reports_only_the_service_with_an_effective_change(self):
         old = _config()
         new = copy.deepcopy(old)
