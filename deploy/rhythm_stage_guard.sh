@@ -51,9 +51,12 @@ stage_rhythm_source() {
             "$rhythm_src/catcher_agent.js" "$rhythm_src/prime_interceptor.js" \
             "$rhythm_src/executor_binding.js" "$rhythm_dst/" || return 3
         # A silent partial copy is the failure this guard exists to prevent, so
-        # verify the staged tree rather than trusting the copy commands.
+        # verify the staged tree rather than trusting the copy commands. `-s`
+        # also rejects a zero-byte file, which is what a truncated copy leaves
+        # behind. The required paths are the exact staged layout: the two
+        # package files under rhythm/, the rest at the top level.
         while IFS= read -r f; do
-            [[ -f "$rhythm_dst/$f" ]] || return 3
+            [[ -s "$rhythm_dst/$f" ]] || return 3
         done < <(rhythm_required_files)
         return 0
     fi
