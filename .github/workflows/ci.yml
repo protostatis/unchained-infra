@@ -39,6 +39,7 @@ jobs:
           bash -n deploy.sh
           bash -n deploy/activate_browser_terminal_canary.sh
           bash -n deploy/deploy_source_guard.sh
+          bash -n deploy/rhythm_stage_guard.sh
           bash -n deploy/public_terminal_pilot_remote.sh
           bash -n deploy/commission_global_cache_runner.sh
           docker compose \
@@ -48,6 +49,7 @@ jobs:
             config --no-interpolate --quiet
           python deploy/test_runtime_context_files.py
           python deploy/test_deploy_source_guard.py
+          python deploy/test_rhythm_stage_guard.py
           python deploy/test_compose_service_diff.py
           python deploy/test_fin_terminal_secrets.py
           python deploy/test_hosted_context_rollout.py
@@ -219,6 +221,21 @@ jobs:
           path: private-core
           persist-credentials: false
 
+      - name: Checkout rhythm
+        if: steps.candidate.outputs.deploy == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: protostatis/rhythm
+          # The rhythm repo is private and separate from the private core, so it
+          # may need its own token. Fall back to the private core token for
+          # installations where one PAT already covers both repositories.
+          token: ${{ secrets.RHYTHM_REPO_PAT || secrets.PRIVATE_CORE_REPO_PAT }}
+          # Pinned release: bump together with any intentional rhythm change so a
+          # deployment always ships one identifiable rhythm revision.
+          ref: 43dcae621c3a25131d062bbf87dd8abc16fe6279
+          path: rhythm-src
+          persist-credentials: false
+
       - name: Prepare verified SSH configuration
         if: steps.candidate.outputs.deploy == 'true'
         id: ssh
@@ -243,6 +260,8 @@ jobs:
           KEY_PATH: ${{ steps.ssh.outputs.key }}
           DEPLOY_SSH_KNOWN_HOSTS_FILE: ${{ steps.ssh.outputs.known_hosts }}
           PRIVATE_CORE_SRC: ${{ github.workspace }}/private-core/unchained
+          RHYTHM_SRC: ${{ github.workspace }}/rhythm-src
+          REQUIRE_RHYTHM: "1"
           FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY }}
           FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET: ${{ secrets.FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET }}
         run: ./deploy.sh
