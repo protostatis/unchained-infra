@@ -31,6 +31,7 @@ cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
 source "$SCRIPT_DIR/deploy/deploy_source_guard.sh"
+source "$SCRIPT_DIR/deploy/rhythm_stage_guard.sh"
 
 DEPLOY_REVISION="${DEPLOY_REVISION-}"
 verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION" || exit 1
@@ -39,6 +40,11 @@ INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
 PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
 RHYTHM_SRC="${RHYTHM_SRC:-$SCRIPT_DIR/../rhythm}"
+# Production deploys must ship a complete rhythm source: a missing or partial
+# copy silently leaves the previously baked rhythm in the image while the
+# overlay ships a new private core. Set REQUIRE_RHYTHM=0 only for a deployment
+# that genuinely runs without rhythm.
+REQUIRE_RHYTHM="${REQUIRE_RHYTHM:-0}"
 
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"
@@ -1459,21 +1465,23 @@ fi
 # Copy rhythm repo into build context (for Dockerfile COPY rhythm/ rhythm/).
 # Only the files needed at runtime are copied — not tests, data, or docs.
 RHYTHM_DST="$SCRIPT_DIR/rhythm"
-if [[ -d "$RHYTHM_SRC/rhythm" ]]; then
-    echo "==> Copying rhythm into build context..."
-    rm -rf "$RHYTHM_DST"
-    mkdir -p "$RHYTHM_DST/rhythm"
-    cp "$RHYTHM_SRC/rhythm/__init__.py" "$RHYTHM_DST/rhythm/"
-    cp "$RHYTHM_SRC/rhythm/tools.py" "$RHYTHM_DST/rhythm/"
-    for f in rhythm_binding.py schema_registry.py schema_db.py state_machine.py \
-             catcher_agent.js prime_interceptor.js executor_binding.js; do
-        cp "$RHYTHM_SRC/$f" "$RHYTHM_DST/"
-    done
-    echo "    Rhythm files copied."
+stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM"
+rhythm_stage_status=$?
+if [[ "$rhythm_stage_status" -eq 0 ]]; then
+    echo "==> Rhythm staged into the build context from $RHYTHM_SRC"
+    # Rhythm is outside the deployed-path checksum list, so its content cannot
+    # invalidate the image by itself. Force a full rebuild whenever it ships;
+    # otherwise the new rhythm is uploaded but the running image keeps the old.
+    if ! $FORCE_FULL_DEPLOY; then
+        echo "    Forcing a full rebuild so the image picks up the staged rhythm."
+        FORCE_FULL_DEPLOY=true
+    fi
+elif [[ "$rhythm_stage_status" -eq 1 ]]; then
+    echo "ERROR: RHYTHM_SRC=$RHYTHM_SRC is incomplete (REQUIRE_RHYTHM=1)." >&2
+    echo "ERROR: point RHYTHM_SRC at a full rhythm checkout, or set REQUIRE_RHYTHM=0 to deploy without rhythm." >&2
+    exit 1
 else
     echo "==> Rhythm not found at $RHYTHM_SRC — skipping (tools will return 'not available')."
-    mkdir -p "$RHYTHM_DST"
-    touch "$RHYTHM_DST/.empty"
 fi
 
 # Prevent shipping public stubs to production by mistake.
