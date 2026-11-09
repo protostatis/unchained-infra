@@ -42,9 +42,10 @@ PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
 RHYTHM_SRC="${RHYTHM_SRC:-$SCRIPT_DIR/../rhythm}"
 # Production deploys must ship a complete rhythm source: a missing or partial
 # copy silently leaves the previously baked rhythm in the image while the
-# overlay ships a new private core. Set REQUIRE_RHYTHM=0 only for a deployment
-# that genuinely runs without rhythm.
-REQUIRE_RHYTHM="${REQUIRE_RHYTHM:-0}"
+# overlay ships a new private core. Rhythm is required by default so that a
+# manual deploy cannot reopen that hole; REQUIRE_RHYTHM=0 is a deliberate
+# override for a deployment that genuinely runs without rhythm.
+REQUIRE_RHYTHM="${REQUIRE_RHYTHM:-1}"
 
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"

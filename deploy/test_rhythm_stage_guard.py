@@ -170,5 +170,51 @@ class RhythmStageCallerTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "")
 
 
+DEPLOY = ROOT / "deploy.sh"
+
+
+class DeployCallerPolicyTests(unittest.TestCase):
+    """Wiring checks on deploy.sh itself.
+
+    A correct guard is still bypassable by its caller: an unguarded call under
+    `set -e` aborts the script before the status can be interpreted, and an
+    optional-by-default source reopens the silent staleness this path exists to
+    prevent. These are text-level assertions because the behaviour they protect
+    only shows up during a real deploy.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = DEPLOY.read_text(encoding="utf-8")
+        # Assertions on a call are compared after whitespace normalisation so a
+        # rewrap does not fail the test without a behaviour change.
+        cls.normalized = " ".join(cls.text.split())
+        cls.lines = cls.text.splitlines()
+
+    def test_rhythm_is_required_by_default(self) -> None:
+        self.assertIn('REQUIRE_RHYTHM="${REQUIRE_RHYTHM:-1}"', self.normalized)
+
+    def test_staging_status_is_captured_under_errexit(self) -> None:
+        self.assertIn(
+            'stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM" '
+            "|| rhythm_stage_status=$?",
+            self.normalized,
+        )
+
+    def test_no_unguarded_staging_call(self) -> None:
+        bare = [
+            line
+            for line in self.lines
+            if line.strip().startswith("stage_rhythm_source ")
+            and "|| rhythm_stage_status=$?" not in line
+        ]
+        self.assertEqual(bare, [], f"unguarded staging call: {bare}")
+
+    def test_staged_rhythm_rebuilds_private_core(self) -> None:
+        # Rhythm is outside the deployed-path checksums, so the diff cannot see
+        # it; private-core is the only service that serves it.
+        self.assertIn("add_services private-core", self.normalized)
+
+
 if __name__ == "__main__":
     unittest.main()

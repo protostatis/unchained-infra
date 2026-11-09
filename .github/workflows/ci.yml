@@ -108,6 +108,7 @@ jobs:
       - name: Run OSS boundary guards
         run: |
           python tools/oss_guard/check_private_imports.py
+          python tools/oss_guard/test_check_private_imports.py
           python tools/oss_guard/check_agent_artifact_leaks.py
           python tools/oss_guard/check_public_doc_leaks.py
 
@@ -234,9 +235,16 @@ jobs:
           token: ${{ secrets.RHYTHM_REPO_PAT || secrets.PRIVATE_CORE_REPO_PAT }}
           # Pinned release: bump together with any intentional rhythm change so a
           # deployment always ships one identifiable rhythm revision.
-          ref: 43dcae621c3a25131d062bbf87dd8abc16fe6279
+          ref: 768114a4b63e5df34920ded67af353596a6f179f
           path: rhythm-src
           persist-credentials: false
+
+      # The scanner contract lives in the pinned rhythm checkout, so exercise it
+      # here: a deploy that would ship a broken grouped catch must not land.
+      - name: Test pinned rhythm scanner
+        if: steps.candidate.outputs.deploy == 'true'
+        working-directory: rhythm-src
+        run: node test_scan_grouping.js
 
       - name: Prepare verified SSH configuration
         if: steps.candidate.outputs.deploy == 'true'
