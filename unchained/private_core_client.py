@@ -575,7 +575,10 @@ class PrivateCoreClient:
                                url: str, task: str, catch_terms: list,
                                click_text: str = "",
                                group_selector: str = "",
-                               limit: int = DEFAULT_CATCH_LIMIT,
+                               # Callers reach this with a JSON body, a CLI
+                               # string or an int, so the body normalizes all
+                               # three rather than trusting the annotation.
+                               limit: int | float | str | None = DEFAULT_CATCH_LIMIT,
                                relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
         payload = dict(
             agent_id=agent_id, tab_id=tab_id,
