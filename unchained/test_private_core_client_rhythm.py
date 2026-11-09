@@ -63,6 +63,15 @@ class TestRhythmCatchWireFormat(unittest.IsolatedAsyncioTestCase):
             await client.run_rhythm_catch("agent", "auto", "u", "t", ["x"], limit="not-a-number")
         self.assertNotIn("limit", execute.await_args.kwargs)
 
+    async def test_limit_is_clamped_to_the_documented_range(self):
+        # The tool documents 1-200; a caller must not be able to forward 0 or
+        # 500 past that contract and depend on the engine to clamp it.
+        for requested, expected in ((0, 1), (-5, 1), (500, 200), (50.7, 50)):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch("agent", "auto", "u", "t", ["x"], limit=requested)
+            self.assertEqual(execute.await_args.kwargs["limit"], expected, requested)
+
     async def test_empty_group_selector_is_not_sent(self):
         client = _client()
         with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:

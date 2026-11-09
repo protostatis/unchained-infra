@@ -116,11 +116,17 @@ async def _cmd_rhythm_catch(body, agent_id, tab_id, relay_host, relay_port, clou
         terms = [t.strip() for t in catch_terms_raw if t.strip()]
     else:
         terms = [t.strip() for t in catch_terms_raw.split(",") if t.strip()]
+    # The JSON body carries whatever the client sent, so normalize the type at
+    # the boundary; the client still clamps the range before it hits the wire.
+    try:
+        limit = int(body.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
     result = await cloud_tools.run_rhythm_catch(
         agent_id, tab_id, url, task, terms,
         click_text=body.get("click_text", ""),
         group_selector=body.get("group_selector", ""),
-        limit=body.get("limit", 20),
+        limit=limit,
         relay_host=relay_host, relay_port=relay_port)
     return {"type": "text", "data": result}
 

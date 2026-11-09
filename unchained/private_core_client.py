@@ -590,10 +590,15 @@ class PrivateCoreClient:
         # engine's own defaults, which are the same values.
         if group_selector:
             payload["group_selector"] = group_selector
+        # int() truncates floats and rejects a numeric string with a fraction
+        # ("50.5"); anything unusable falls back to the default rather than
+        # failing the call. The value is then clamped to the range the tool
+        # documents so a caller cannot forward 0 or 500 past the contract.
         try:
             limit_value = DEFAULT_CATCH_LIMIT if limit is None else int(limit)
         except (TypeError, ValueError):
             limit_value = DEFAULT_CATCH_LIMIT
+        limit_value = max(1, min(200, limit_value))
         if limit_value != DEFAULT_CATCH_LIMIT:
             payload["limit"] = limit_value
         return await self.execute(OP_RHYTHM_CATCH, **payload)
