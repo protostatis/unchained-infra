@@ -35,6 +35,9 @@ rhythm/
 # Trusted private-core checkout used as deploy overlay input in CI
 /private-core/
 
+# Trusted rhythm checkout used as deploy overlay input in CI
+/rhythm-src/
+
 # Secrets
 .env
 .env.*
