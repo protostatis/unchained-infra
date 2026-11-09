@@ -1466,22 +1466,33 @@ fi
 # Only the files needed at runtime are copied — not tests, data, or docs.
 RHYTHM_DST="$SCRIPT_DIR/rhythm"
 RHYTHM_STAGED=false
-stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM"
-rhythm_stage_status=$?
-if [[ "$rhythm_stage_status" -eq 0 ]]; then
-    echo "==> Rhythm staged into the build context from $RHYTHM_SRC"
-    # Rhythm is outside the deployed-path checksums, so the diff below cannot
-    # see it. private-core is rebuilt below instead of forcing a full deploy:
-    # it is the only service that serves rhythm (RHYTHM_ROOT), and a full
-    # rebuild of every image exceeds the disk on the production host.
-    RHYTHM_STAGED=true
-elif [[ "$rhythm_stage_status" -eq 1 ]]; then
-    echo "ERROR: RHYTHM_SRC=$RHYTHM_SRC is incomplete (REQUIRE_RHYTHM=1)." >&2
-    echo "ERROR: point RHYTHM_SRC at a full rhythm checkout, or set REQUIRE_RHYTHM=0 to deploy without rhythm." >&2
-    exit 1
-else
-    echo "==> Rhythm not found at $RHYTHM_SRC — skipping (tools will return 'not available')."
-fi
+# deploy.sh runs under `set -e`, so an unguarded call would exit on the guard's
+# nonzero status before it could be interpreted. Capture the status instead.
+rhythm_stage_status=0
+stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM" || rhythm_stage_status=$?
+case "$rhythm_stage_status" in
+    0)
+        echo "==> Rhythm staged into the build context from $RHYTHM_SRC"
+        # Rhythm is outside the deployed-path checksums, so the diff below cannot
+        # see it. private-core is rebuilt below instead of forcing a full deploy:
+        # it is the only service that serves rhythm (RHYTHM_ROOT), and a full
+        # rebuild of every image exceeds the disk on the production host.
+        RHYTHM_STAGED=true
+        ;;
+    1)
+        echo "ERROR: RHYTHM_SRC=$RHYTHM_SRC is incomplete (REQUIRE_RHYTHM=1)." >&2
+        echo "ERROR: point RHYTHM_SRC at a full rhythm checkout, or set REQUIRE_RHYTHM=0 to deploy without rhythm." >&2
+        exit 1
+        ;;
+    2)
+        echo "==> Rhythm not found at $RHYTHM_SRC — skipping (tools will return 'not available')."
+        ;;
+    *)
+        echo "ERROR: could not stage rhythm from $RHYTHM_SRC (status $rhythm_stage_status)." >&2
+        echo "ERROR: every rhythm source file was present, so this is a filesystem problem, not a missing checkout." >&2
+        exit 1
+        ;;
+esac
 
 # Prevent shipping public stubs to production by mistake.
 if grep -q "Run install_private_core.sh to overlay it." unchained/private_core_server.py 2>/dev/null; then

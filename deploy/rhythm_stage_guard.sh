@@ -15,6 +15,7 @@
 #   0  complete source staged into <rhythm_dst>
 #   2  source is incomplete and optional; <rhythm_dst> holds a .empty marker
 #   1  source is incomplete and required; nothing is staged
+#   3  the source was complete but staging failed (filesystem); nothing usable
 
 rhythm_required_files() {
     printf '%s\n' \
@@ -42,13 +43,21 @@ stage_rhythm_source() {
 
     if [[ "${#missing[@]}" -eq 0 ]]; then
         rm -rf "$rhythm_dst"
-        mkdir -p "$rhythm_dst/rhythm"
+        mkdir -p "$rhythm_dst/rhythm" || return 3
         cp "$rhythm_src/rhythm/__init__.py" "$rhythm_src/rhythm/tools.py" \
-            "$rhythm_dst/rhythm/"
+            "$rhythm_dst/rhythm/" || return 3
         cp "$rhythm_src/rhythm_binding.py" "$rhythm_src/schema_registry.py" \
             "$rhythm_src/schema_db.py" "$rhythm_src/state_machine.py" \
             "$rhythm_src/catcher_agent.js" "$rhythm_src/prime_interceptor.js" \
-            "$rhythm_src/executor_binding.js" "$rhythm_dst/"
+            "$rhythm_src/executor_binding.js" "$rhythm_dst/" || return 3
+        # A silent partial copy is the failure this guard exists to prevent, so
+        # verify the staged tree rather than trusting the copy commands. `-s`
+        # also rejects a zero-byte file, which is what a truncated copy leaves
+        # behind. The required paths are the exact staged layout: the two
+        # package files under rhythm/, the rest at the top level.
+        while IFS= read -r f; do
+            [[ -s "$rhythm_dst/$f" ]] || return 3
+        done < <(rhythm_required_files)
         return 0
     fi
 
