@@ -575,7 +575,7 @@ class PrivateCoreClient:
                                url: str, task: str, catch_terms: list,
                                click_text: str = "",
                                group_selector: str = "",
-                               limit: int = 20,
+                               limit: int = DEFAULT_CATCH_LIMIT,
                                relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
         payload = dict(
             agent_id=agent_id, tab_id=tab_id,
@@ -590,13 +590,15 @@ class PrivateCoreClient:
         # engine's own defaults, which are the same values.
         if group_selector:
             payload["group_selector"] = group_selector
-        # int() truncates floats and rejects a numeric string with a fraction
-        # ("50.5"); anything unusable falls back to the default rather than
-        # failing the call. The value is then clamped to the range the tool
-        # documents so a caller cannot forward 0 or 500 past the contract.
+        # Accept both numbers and numeric strings, and treat a fractional value
+        # the same way either way (int(float("50.5")) == int(50.5) == 50) so a
+        # JSON number and a CLI string cannot disagree. Anything unparseable
+        # falls back to the default rather than failing the call. The result is
+        # clamped to the range the tool documents, so a caller cannot forward 0
+        # or 500 past the contract and rely on the engine to fix it.
         try:
-            limit_value = DEFAULT_CATCH_LIMIT if limit is None else int(limit)
-        except (TypeError, ValueError):
+            limit_value = DEFAULT_CATCH_LIMIT if limit is None else int(float(limit))
+        except (TypeError, ValueError, OverflowError):
             limit_value = DEFAULT_CATCH_LIMIT
         limit_value = max(1, min(200, limit_value))
         if limit_value != DEFAULT_CATCH_LIMIT:

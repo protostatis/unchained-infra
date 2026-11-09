@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# Single source of truth for the catch default; the client omits the field when
+# it matches this value, so the boundary must use the same number.
+from private_core_client import DEFAULT_CATCH_LIMIT
+
 
 class CmdInputError(ValueError):
     """Invalid user input for a command action."""
@@ -119,9 +123,9 @@ async def _cmd_rhythm_catch(body, agent_id, tab_id, relay_host, relay_port, clou
     # The JSON body carries whatever the client sent, so normalize the type at
     # the boundary; the client still clamps the range before it hits the wire.
     try:
-        limit = int(body.get("limit", 20))
-    except (TypeError, ValueError):
-        limit = 20
+        limit = int(float(body.get("limit", DEFAULT_CATCH_LIMIT)))
+    except (TypeError, ValueError, OverflowError):
+        limit = DEFAULT_CATCH_LIMIT
     result = await cloud_tools.run_rhythm_catch(
         agent_id, tab_id, url, task, terms,
         click_text=body.get("click_text", ""),

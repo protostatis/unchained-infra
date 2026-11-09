@@ -58,6 +58,12 @@ class TestRhythmCatchWireFormat(unittest.IsolatedAsyncioTestCase):
             await client.run_rhythm_catch("agent", "auto", "u", "t", ["x"], limit="50")
         self.assertEqual(execute.await_args.kwargs["limit"], 50)
 
+        # A JSON number and a string must not disagree about a fraction.
+        client = _client()
+        with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+            await client.run_rhythm_catch("agent", "auto", "u", "t", ["x"], limit="50.5")
+        self.assertEqual(execute.await_args.kwargs["limit"], 50)
+
         client = _client()
         with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
             await client.run_rhythm_catch("agent", "auto", "u", "t", ["x"], limit="not-a-number")
