@@ -58,6 +58,10 @@ OP_RHYTHM_EXECUTE = _safe_import_op("OP_RHYTHM_EXECUTE", "rhythm_execute")
 OP_RHYTHM_TRAIN = _safe_import_op("OP_RHYTHM_TRAIN", "rhythm_train")
 OP_RHYTHM_QUERY = _safe_import_op("OP_RHYTHM_QUERY", "rhythm_query")
 
+# Matches rhythm_catch's own default; kept here so the client can tell "caller
+# left it alone" from "caller asked for 20" when building the wire payload.
+DEFAULT_CATCH_LIMIT = 20
+
 
 class PrivateCoreError(RuntimeError):
     """Error returned while calling private core."""
@@ -573,15 +577,26 @@ class PrivateCoreClient:
                                group_selector: str = "",
                                limit: int = 20,
                                relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
-        return await self.execute(
-            OP_RHYTHM_CATCH,
+        payload = dict(
             agent_id=agent_id, tab_id=tab_id,
             url=url, task=task, catch_terms=catch_terms,
             click_text=click_text,
-            group_selector=group_selector,
-            limit=limit,
             relay_host=relay_host, relay_port=relay_port,
         )
+        # Only carry the grouping options when the caller actually used one. A
+        # private core deployed before this feature rejects unknown keyword
+        # arguments, so sending the defaults unconditionally would break every
+        # rhythm_catch during a staggered deploy. Omitted keys fall back to the
+        # engine's own defaults, which are the same values.
+        if group_selector:
+            payload["group_selector"] = group_selector
+        try:
+            limit_value = DEFAULT_CATCH_LIMIT if limit is None else int(limit)
+        except (TypeError, ValueError):
+            limit_value = DEFAULT_CATCH_LIMIT
+        if limit_value != DEFAULT_CATCH_LIMIT:
+            payload["limit"] = limit_value
+        return await self.execute(OP_RHYTHM_CATCH, **payload)
 
     async def run_rhythm_execute(self, agent_id: str, tab_id: str,
                                  url: str, targets: list,
