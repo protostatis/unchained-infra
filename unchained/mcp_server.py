@@ -28,7 +28,7 @@ from fastmcp.utilities.types import Image
 
 import cloud_tools
 from auth import Auth
-from private_core_client import PrivateCoreError
+from private_core_client import DEFAULT_CATCH_LIMIT, PrivateCoreError
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -765,7 +765,7 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
 @mcp.tool()
 async def rhythm_catch(
     url: str, task: str, catch_terms: str,
-    click_text: str = "", group_selector: str = "", limit: int = 20,
+    click_text: str = "", group_selector: str = "", limit: int = DEFAULT_CATCH_LIMIT,
     tab_id: str = "auto", agent_id: str = "",
 ) -> str:
     """Scan an SPA page for specific data using event-driven interception.
