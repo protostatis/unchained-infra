@@ -43,6 +43,7 @@ class TestCloudToolsBoundary(unittest.IsolatedAsyncioTestCase):
         fake.run_rhythm_catch.assert_awaited_once_with(
             "agent", "auto", "https://example.com", "find cards", ["4090"],
             click_text="", group_selector="li.s-item", limit=50,
+            assess_top_n=0,
             relay_host="127.0.0.1", relay_port=8765,
         )
 
@@ -54,6 +55,7 @@ class TestCloudToolsBoundary(unittest.IsolatedAsyncioTestCase):
         fake.run_rhythm_catch.assert_awaited_once_with(
             "agent", "auto", "u", "t", ["4090"],
             click_text="", group_selector="", limit=20,
+            assess_top_n=0,
             relay_host="127.0.0.1", relay_port=8765,
         )
 

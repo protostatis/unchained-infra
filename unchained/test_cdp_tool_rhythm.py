@@ -52,6 +52,7 @@ class TestCloudToolsRhythmDelegation(unittest.IsolatedAsyncioTestCase):
             "agent", "auto", "https://ex.com", "find prices",
             ["price", "bed"], click_text="Search",
             group_selector="", limit=20,
+            assess_top_n=0,
             relay_host="127.0.0.1", relay_port=8765)
 
     async def test_rhythm_execute_delegates(self):
