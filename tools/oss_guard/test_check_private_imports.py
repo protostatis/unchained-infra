@@ -155,6 +155,7 @@ class RhythmRuntimeTests(unittest.TestCase):
 class ImportRuleTests(unittest.TestCase):
     def test_rhythm_is_forbidden_for_public_boundary_modules(self) -> None:
         self.assertIn("rhythm", load_guard().FORBIDDEN)
+        self.assertIn("jev_client", load_guard().FORBIDDEN)
 
     def test_imports_are_detected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -579,6 +579,7 @@ class PrivateCoreClient:
                                # string or an int, so the body normalizes all
                                # three rather than trusting the annotation.
                                limit: int | float | str | None = DEFAULT_CATCH_LIMIT,
+                               assess_top_n: int | float | str | None = 0,
                                relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
         payload = dict(
             agent_id=agent_id, tab_id=tab_id,
@@ -606,6 +607,17 @@ class PrivateCoreClient:
         limit_value = max(1, min(200, limit_value))
         if limit_value != DEFAULT_CATCH_LIMIT:
             payload["limit"] = limit_value
+        # Same discipline for the optional assessment: default 0 is omitted, so
+        # a private core that predates the feature never receives the keyword
+        # and never spends money. Non-numeric input falls back to off rather
+        # than failing the extraction call.
+        try:
+            assess_value = 0 if assess_top_n is None else int(float(assess_top_n))
+        except (TypeError, ValueError, OverflowError):
+            assess_value = 0
+        assess_value = max(0, min(50, assess_value))
+        if assess_value:
+            payload["assess_top_n"] = assess_value
         return await self.execute(OP_RHYTHM_CATCH, **payload)
 
     async def run_rhythm_execute(self, agent_id: str, tab_id: str,
