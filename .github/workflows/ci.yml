@@ -143,6 +143,19 @@ jobs:
       - name: Overlay private core files
         run: ./tools/install_private_core.sh private-core/unchained unchained
 
+      - name: Checkout rhythm
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: protostatis/rhythm
+          # Same token fallback as the deploy job: the rhythm repo is private and
+          # separate from the private core.
+          token: ${{ secrets.RHYTHM_REPO_PAT || secrets.PRIVATE_CORE_REPO_PAT }}
+          # Pinned to the same revision the deploy ships. The pair test must
+          # exercise the rhythm that would actually run, not whatever main holds.
+          ref: 6e5503044f04899cff1de46a833a58b1533bda5d
+          path: rhythm-src
+          persist-credentials: false
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.13"
@@ -160,6 +173,10 @@ jobs:
           python test_reflex.py
           python test_tab_leak.py
           python test_web_contracts.py
+          # Drives the real cdp.CDP through the real rhythm_catch. Each side
+          # feature-detects the other, so this is the only check that the
+          # navigation outcome contract actually holds for the shipped pair.
+          RHYTHM_SRC="${{ github.workspace }}/rhythm-src" python test_rhythm_catch_contract.py
 
   deploy-production:
     if: >-
@@ -235,7 +252,7 @@ jobs:
           token: ${{ secrets.RHYTHM_REPO_PAT || secrets.PRIVATE_CORE_REPO_PAT }}
           # Pinned release: bump together with any intentional rhythm change so a
           # deployment always ships one identifiable rhythm revision.
-          ref: 768114a4b63e5df34920ded67af353596a6f179f
+          ref: 6e5503044f04899cff1de46a833a58b1533bda5d
           path: rhythm-src
           persist-credentials: false
 
@@ -244,7 +261,9 @@ jobs:
       - name: Test pinned rhythm scanner
         if: steps.candidate.outputs.deploy == 'true'
         working-directory: rhythm-src
-        run: node test_scan_grouping.js
+        run: |
+          node test_scan_grouping.js
+          node test_scanner_contract.js
 
       - name: Prepare verified SSH configuration
         if: steps.candidate.outputs.deploy == 'true'
