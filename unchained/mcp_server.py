@@ -788,6 +788,30 @@ async def rhythm_catch(
             needed to judge it.
         limit: Maximum results (1-200, default 20). The response reports
             caught_count (matches before the cap) and truncated.
+
+    Reading the result — do not skip this part:
+        `caught_count == 0` means no matches in the scanned DOM snapshot. It is
+        not proof that the site has no such records: nothing here waits for
+        client-side data to arrive. If the page loads records after the scan,
+        retry or use a different extraction strategy.
+
+        `url` is always the URL you requested. `observed_url` is the document
+        actually scanned, which may differ. The `navigation` block says what
+        happened:
+          - "ok"      — Chrome committed a document for this navigation.
+          - "unknown" — the navigation could not be confirmed (reason: timeout,
+                        aborted, superseded). The page may still be the previous
+                        one, so matches are unverified, not just empty results.
+          - "error"   — the navigation definitely produced no document. The tool
+                        returns an error and does NOT scan, because the page on
+                        screen belongs to a different URL and its records would
+                        be a fabrication.
+
+        Whenever the results are not guaranteed to describe the requested URL, a
+        `warning` string says so — including when matches were returned, because
+        a confident-looking record from the wrong page is the more expensive
+        mistake. Treat `navigation.outcome == "ok"` with no warning as the only
+        clean case; other results are usable but must be reported as unverified.
     """
     aid = _resolve_agent(profile=agent_id)
     terms = [t.strip() for t in catch_terms.split(",") if t.strip()]
