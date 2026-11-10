@@ -33,6 +33,7 @@ UNCHAINED_RUNTIME_FILES=(
     "private_core_client.py"
     "private_core_contracts.py"
     "private_core_engine.py"
+    "jev_client.py"
     "private_core_server.py"
     "editable_helpers.js"
     "challenge_detection.py"

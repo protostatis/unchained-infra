@@ -19,6 +19,7 @@ COPY unchained/private_core_client.py .
 COPY unchained/private_core_contracts.py .
 COPY unchained/private_core_server.py .
 COPY unchained/private_core_engine.py .
+COPY unchained/jev_client.py .
 COPY unchained/editable_helpers.js .
 COPY unchained/challenge_detection.py .
 COPY unchained/domain_policy.py .
