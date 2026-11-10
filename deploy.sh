@@ -46,6 +46,10 @@ RHYTHM_SRC="${RHYTHM_SRC:-$SCRIPT_DIR/../rhythm}"
 # manual deploy cannot reopen that hole; REQUIRE_RHYTHM=0 is a deliberate
 # override for a deployment that genuinely runs without rhythm.
 REQUIRE_RHYTHM="${REQUIRE_RHYTHM:-1}"
+# Identity of the staged rhythm (set by write_rhythm_revision). Initialised here
+# because deploy.sh runs under `set -u` and the post-deploy verification passes
+# it to the host whether or not rhythm was staged.
+RHYTHM_REVISION=""
 
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"
@@ -1145,12 +1149,13 @@ EOF
 
 verify_production_health() {
     local services="$1"
-    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" "$FIN_TERMINAL_PUBLIC_HOST" <<'EOF'
+    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" "$FIN_TERMINAL_PUBLIC_HOST" "$RHYTHM_REVISION" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
 services="$2"
 health_host="$3"
 public_host="$4"
+rhythm_revision="${5:-}"
 cd "$remote_dir"
 
 selected() {
@@ -1198,6 +1203,43 @@ done
 for service in caddy scheduler trial-agent; do
     wait_for_state "$service" running
 done
+
+# The image bakes whatever rhythm was uploaded, and the classifier rebuilds
+# private-core when rhythm/REVISION changes. Assert that the running container
+# actually serves the revision this deploy staged: without this, a rhythm that
+# never made it into the image would still report as healthy. The expected value
+# is passed in as an argument rather than re-read from the host, so the check
+# cannot be skipped by a stale or absent file. Retried because a transient
+# `docker compose exec` failure must not roll back a correct release.
+if [[ -n "$rhythm_revision" ]]; then
+    # `docker compose exec` has no timeout flag of its own, and a wedged
+    # container should fail this check rather than hang it. Empty when the host
+    # has no coreutils timeout, which only loses the bound.
+    timeout_cmd=""
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_cmd="timeout 15"
+    fi
+    running_rhythm=""
+    for attempt in 1 2 3; do
+        running_rhythm="$($timeout_cmd docker compose exec -T private-core \
+            sh -c 'cat "${RHYTHM_ROOT:-/app/rhythm}/REVISION" 2>/dev/null' || true)"
+        if [[ "$running_rhythm" == "$rhythm_revision" ]]; then
+            break
+        fi
+        sleep 2
+    done
+    if [[ "$running_rhythm" != "$rhythm_revision" ]]; then
+        if [[ -z "$running_rhythm" ]]; then
+            echo "ERROR: could not read a rhythm revision from the private-core container." >&2
+            echo "ERROR: is private-core running, and does its image predate rhythm/REVISION?" >&2
+        else
+            echo "ERROR: private-core is serving rhythm '$running_rhythm'" >&2
+            echo "ERROR: this deploy staged '$rhythm_revision'" >&2
+        fi
+        exit 1
+    fi
+    echo "==> private-core is serving rhythm $rhythm_revision"
+fi
 if selected trial-agent; then
     for attempt in $(seq 1 30); do
         if docker compose logs --since 2m trial-agent 2>&1 | grep -q 'Authenticated\. Model:'; then
@@ -1442,10 +1484,13 @@ emit_deployed_paths() {
     done
     find research_desk_vendor/unchained_pyreplab -maxdepth 1 -type f -name "*.py" \
         2>/dev/null
-    # NOTE: rhythm is intentionally excluded. The local rhythm copy step
-    # produces a nested layout (rhythm/rhythm/__init__.py) while remote
-    # SCP flattens it (rhythm/__init__.py), so path-based diff would
-    # always show false positives. Use `--full` if you change rhythm.
+    # Rhythm is staged as a nested tree locally but uploaded flattened, so its
+    # individual files cannot be compared by path. rhythm/REVISION covers the
+    # whole staged tree (see write_rhythm_revision) and has the same relative
+    # path on both sides, which is what makes a rhythm change diffable.
+    if [[ -s rhythm/REVISION ]]; then
+        printf '%s\n' "rhythm/REVISION"
+    fi
 }
 
 echo "==> Deploying to $EC2_HOST"
@@ -1474,10 +1519,15 @@ stage_rhythm_source "$RHYTHM_SRC" "$RHYTHM_DST" "$REQUIRE_RHYTHM" || rhythm_stag
 case "$rhythm_stage_status" in
     0)
         echo "==> Rhythm staged into the build context from $RHYTHM_SRC"
-        # Rhythm is outside the deployed-path checksums, so the diff below cannot
-        # see it. private-core is rebuilt below instead of forcing a full deploy:
-        # it is the only service that serves rhythm (RHYTHM_ROOT), and a full
-        # rebuild of every image exceeds the disk on the production host.
+        # Identity of what was staged: uploaded with the tree, baked into the
+        # image, and the only rhythm path in the deployed-path list below.
+        if ! write_rhythm_revision "$RHYTHM_SRC" "$RHYTHM_DST"; then
+            echo "ERROR: could not write the rhythm revision file from $RHYTHM_DST." >&2
+            echo "ERROR: without it a stale rhythm cannot be detected or reported." >&2
+            exit 1
+        fi
+        RHYTHM_REVISION="$(cat "$RHYTHM_DST/REVISION")"
+        echo "    Rhythm revision: $RHYTHM_REVISION"
         RHYTHM_STAGED=true
         ;;
     1)
@@ -1702,7 +1752,7 @@ mkdir -p "$REMOTE_DIR/rhythm"
 EOF
     "${SCP_CMD[@]}" -r "$RHYTHM_DST/rhythm" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
     shopt -s nullglob
-    RHYTHM_TOP_FILES=("$RHYTHM_DST"/*.py "$RHYTHM_DST"/*.js)
+    RHYTHM_TOP_FILES=("$RHYTHM_DST"/*.py "$RHYTHM_DST"/*.js "$RHYTHM_DST/REVISION")
     shopt -u nullglob
     if [[ "${#RHYTHM_TOP_FILES[@]}" -gt 0 ]]; then
         "${SCP_CMD[@]}" "${RHYTHM_TOP_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/"
@@ -1849,13 +1899,14 @@ else
 fi
 
 if $RHYTHM_STAGED; then
-    # Rhythm is uploaded rather than diffed, so the checksum classifier above
-    # never reports it. Rebuild the one service that serves it. Rebuilding every
-    # image is not an option here: each image bakes the ~272MB installers
-    # directory and the production host has ~1.5GB free, so a full rebuild
-    # exhausts the disk mid-build and rolls the release back.
-    echo "    Rhythm changed — private-core will be rebuilt."
-    add_services private-core
+    # rhythm/REVISION is in the deployed-path list, so the classifier above
+    # already reported private-core when the staged identity differs from what
+    # this host is running, and reported nothing when it is identical. Note the
+    # identity is the source revision plus a content digest: a rhythm commit
+    # that touches no runtime file still changes the revision and rebuilds
+    # private-core once, which is the same cost as the unconditional rebuild
+    # this replaces, never more.
+    echo "    Rhythm staged ($RHYTHM_REVISION); private-core is rebuilt only if the host differs."
 fi
 
 if $DESKTOP_BETA_ENABLED; then

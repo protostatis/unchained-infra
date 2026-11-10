@@ -29,7 +29,9 @@ REQUIRED = (
 )
 
 
-class RhythmStageGuardTests(unittest.TestCase):
+class _RhythmFixture:
+    """Shared temp-tree helpers; not a TestCase so tests are not collected twice."""
+
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
         base = Path(self._temp.name)
@@ -55,6 +57,8 @@ class RhythmStageGuardTests(unittest.TestCase):
             ["bash", "-c", script], capture_output=True, text=True
         )
 
+
+class RhythmStageGuardTests(_RhythmFixture, unittest.TestCase):
     def test_complete_source_is_staged(self) -> None:
         self._write_source()
 
@@ -170,6 +174,93 @@ class RhythmStageCallerTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "")
 
 
+class RhythmRevisionTests(_RhythmFixture, unittest.TestCase):
+    """The staged identity file that makes a rhythm change diffable."""
+
+    def _write_revision(self) -> subprocess.CompletedProcess:
+        script = (
+            f'source "{GUARD}"\n'
+            f'write_rhythm_revision "{self.src}" "{self.dst}"\n'
+        )
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def _revision(self) -> str:
+        return (self.dst / "REVISION").read_text(encoding="utf-8").strip()
+
+    def _digest(self) -> str:
+        return self._revision().split("sha256:", 1)[1]
+
+    def test_revision_records_source_and_content_digest(self) -> None:
+        self._write_source()
+        self.assertEqual(self._stage(require="1").returncode, 0)
+
+        result = self._write_revision()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        revision, _, digest = self._revision().partition(" sha256:")
+        self.assertEqual(revision, "unknown")  # no git metadata in the fixture
+        self.assertRegex(digest, r"^[0-9a-f]{32}$")
+
+    def test_digest_is_stable_for_identical_content(self) -> None:
+        self._write_source()
+        self._stage(require="1")
+        self._write_revision()
+        first = self._revision()
+
+        self._stage(require="1")
+        self._write_revision()
+
+        self.assertEqual(self._revision(), first)
+
+    def test_content_change_changes_the_digest(self) -> None:
+        self._write_source()
+        self._stage(require="1")
+        self._write_revision()
+        before = self._digest()
+
+        (self.src / "rhythm" / "tools.py").write_text("# edited\n", encoding="utf-8")
+        self._stage(require="1")
+        self._write_revision()
+
+        self.assertNotEqual(self._digest(), before)
+
+    def test_unstaged_tree_is_a_failure(self) -> None:
+        # Nothing was staged, so there is no identity to assert and shipping
+        # one would describe files that are not in the build context.
+        self._write_source()
+
+        result = self._write_revision()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.dst / "REVISION").exists())
+
+    def test_git_revision_is_recorded_and_dirty_is_flagged(self) -> None:
+        self._write_source()
+        self._stage(require="1")
+        git = [
+            "git", "-C", str(self.src),
+            "-c", "user.email=deploy@test", "-c", "user.name=deploy",
+        ]
+        subprocess.run(["git", "-C", str(self.src), "init", "-q", "."], check=True)
+        subprocess.run(["git", "-C", str(self.src), "add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "fixture"], check=True)
+        head = subprocess.run(
+            ["git", "-C", str(self.src), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        self._write_revision()
+        self.assertTrue(self._revision().startswith(f"{head} sha256:"), self._revision())
+
+        (self.src / "rhythm" / "tools.py").write_text("# uncommitted\n", encoding="utf-8")
+        self._stage(require="1")
+        self._write_revision()
+
+        self.assertTrue(
+            self._revision().startswith(f"{head}-dirty sha256:"), self._revision()
+        )
+
+
 DEPLOY = ROOT / "deploy.sh"
 
 
@@ -210,10 +301,41 @@ class DeployCallerPolicyTests(unittest.TestCase):
         ]
         self.assertEqual(bare, [], f"unguarded staging call: {bare}")
 
-    def test_staged_rhythm_rebuilds_private_core(self) -> None:
-        # Rhythm is outside the deployed-path checksums, so the diff cannot see
-        # it; private-core is the only service that serves it.
-        self.assertIn("add_services private-core", self.normalized)
+    def test_staged_rhythm_gets_a_diffable_identity(self) -> None:
+        # rhythm/REVISION is the only rhythm path in the deployed-path list, so
+        # it is what makes a rhythm change visible to the classifier (and what
+        # stops an unchanged rhythm from rebuilding private-core every deploy).
+        self.assertIn(
+            'write_rhythm_revision "$RHYTHM_SRC" "$RHYTHM_DST"', self.normalized
+        )
+        self.assertIn("rhythm/REVISION", self.normalized)
+
+    def test_revision_is_uploaded_with_the_tree(self) -> None:
+        self.assertIn('"$RHYTHM_DST/REVISION"', self.text)
+
+    def test_running_revision_is_asserted_after_deploy(self) -> None:
+        # A rhythm that never made it into the image would otherwise still
+        # report as healthy. The expected value travels as an argument to the
+        # verification script rather than being re-read from a host file, so a
+        # missing file cannot silently skip the check.
+        self.assertIn(
+            'cat "${RHYTHM_ROOT:-/app/rhythm}/REVISION"', self.normalized
+        )
+        self.assertIn('"$FIN_TERMINAL_PUBLIC_HOST" "$RHYTHM_REVISION"', self.normalized)
+        self.assertIn('rhythm_revision="${5:-}"', self.normalized)
+        self.assertIn('if [[ -n "$rhythm_revision" ]]; then', self.normalized)
+
+    def test_rhythm_staging_no_longer_forces_a_rebuild(self) -> None:
+        # The classifier owns this decision now (rhythm/ -> private-core, see
+        # test_compose_service_diff.py); forcing it here rebuilds private-core
+        # on every deploy whether or not rhythm changed. The block is cut at a
+        # line-anchored "fi": splitting on the bare substring would stop inside
+        # the word "classifier" and assert nothing.
+        staged_block = self.text.split("if $RHYTHM_STAGED; then", 1)[1].split(
+            "\nfi\n", 1
+        )[0]
+        self.assertIn("Rhythm staged", staged_block)
+        self.assertNotIn("add_services", staged_block)
 
 
 if __name__ == "__main__":
