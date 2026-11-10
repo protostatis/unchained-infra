@@ -611,12 +611,20 @@ class PrivateCoreClient:
         # a private core that predates the feature never receives the keyword
         # and never spends money. Non-numeric input falls back to off rather
         # than failing the extraction call.
-        try:
-            assess_value = 0 if assess_top_n is None else int(float(assess_top_n))
-        except (TypeError, ValueError, OverflowError):
+        # A JSON `true` is an int in Python and would coerce to 1, silently
+        # turning on third-party data sharing. Reject booleans rather than
+        # guessing what the caller meant. Fractional values truncate toward
+        # zero on purpose: "2.9 records" is still 2 records.
+        if isinstance(assess_top_n, bool):
             assess_value = 0
+        else:
+            try:
+                assess_value = (0 if assess_top_n is None
+                                else int(float(assess_top_n)))
+            except (TypeError, ValueError, OverflowError):
+                assess_value = 0
         assess_value = max(0, min(50, assess_value))
-        if assess_value:
+        if assess_value > 0:
             payload["assess_top_n"] = assess_value
         return await self.execute(OP_RHYTHM_CATCH, **payload)
 

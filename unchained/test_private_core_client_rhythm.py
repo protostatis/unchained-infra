@@ -141,6 +141,18 @@ class TestAssessWireFormat(unittest.IsolatedAsyncioTestCase):
             else:
                 self.assertEqual(kwargs["assess_top_n"], expected)
 
+    async def test_json_true_does_not_silently_enable_sharing(self):
+        # bool is an int subclass, so True would otherwise become 1 and start
+        # sending page text to a third party.
+        for raw in (True, False):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch(
+                    "agent", "auto", "https://e.com", "t", ["x"],
+                    assess_top_n=raw)
+            self.assertNotIn("assess_top_n", execute.await_args.kwargs,
+                             f"input {raw!r}")
+
     async def test_unparseable_value_falls_back_to_off(self):
         for raw in ("many", "", object()):
             client = _client()
