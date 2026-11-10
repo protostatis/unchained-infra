@@ -17,6 +17,7 @@ for f in \
   private_core_engine.py \
   private_core_server.py \
   private_core_contracts.py \
+  jev_client.py \
   challenge_detection.py \
   domain_policy.py \
   CLAUDE.md \

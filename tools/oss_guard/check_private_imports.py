@@ -28,7 +28,7 @@ PUBLIC_BOUNDARY_FILES = [
     SRC / "mcp_server.py",
     SRC / "private_core_client.py",
 ]
-FORBIDDEN = {"cdp", "ddm", "intel", "rhythm"}
+FORBIDDEN = {"cdp", "ddm", "intel", "rhythm", "jev_client"}
 
 # The only module allowed to resolve the rhythm runtime (it is overlaid from the
 # private core at deploy time; the public copy is a stub).

@@ -85,5 +85,84 @@ class TestRhythmCatchWireFormat(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("group_selector", execute.await_args.kwargs)
 
 
+
+class TestAssessWireFormat(unittest.IsolatedAsyncioTestCase):
+    """assess_top_n follows the same omit-if-default rule as grouping.
+
+    A private core deployed before the assessment feature does not accept the
+    keyword, so sending 0 unconditionally would break every rhythm_catch during
+    a staggered deploy — and, once the feature exists, would not cost anything
+    but would still be a contract violation.
+    """
+
+    async def test_off_by_default_is_omitted(self):
+        client = _client()
+        with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+            await client.run_rhythm_catch("agent", "auto", "https://e.com", "t", ["x"])
+
+        self.assertNotIn("assess_top_n", execute.await_args.kwargs)
+
+    async def test_explicit_zero_is_omitted(self):
+        client = _client()
+        with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+            await client.run_rhythm_catch(
+                "agent", "auto", "https://e.com", "t", ["x"], assess_top_n=0)
+
+        self.assertNotIn("assess_top_n", execute.await_args.kwargs)
+
+    async def test_value_travels_when_set(self):
+        client = _client()
+        with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+            await client.run_rhythm_catch(
+                "agent", "auto", "https://e.com", "t", ["x"], assess_top_n=5)
+
+        self.assertEqual(execute.await_args.kwargs["assess_top_n"], 5)
+
+    async def test_string_and_float_are_coerced(self):
+        for raw, expected in (("3", 3), (2.9, 2), (" 4 ", 4)):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch(
+                    "agent", "auto", "https://e.com", "t", ["x"],
+                    assess_top_n=raw)
+            self.assertEqual(execute.await_args.kwargs["assess_top_n"], expected,
+                             f"input {raw!r}")
+
+    async def test_value_is_clamped_to_the_documented_range(self):
+        for raw, expected in ((500, 50), (-3, None), (None, None)):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch(
+                    "agent", "auto", "https://e.com", "t", ["x"],
+                    assess_top_n=raw)
+            kwargs = execute.await_args.kwargs
+            if expected is None:
+                self.assertNotIn("assess_top_n", kwargs, f"input {raw!r}")
+            else:
+                self.assertEqual(kwargs["assess_top_n"], expected)
+
+    async def test_json_true_does_not_silently_enable_sharing(self):
+        # bool is an int subclass, so True would otherwise become 1 and start
+        # sending page text to a third party.
+        for raw in (True, False):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch(
+                    "agent", "auto", "https://e.com", "t", ["x"],
+                    assess_top_n=raw)
+            self.assertNotIn("assess_top_n", execute.await_args.kwargs,
+                             f"input {raw!r}")
+
+    async def test_unparseable_value_falls_back_to_off(self):
+        for raw in ("many", "", object()):
+            client = _client()
+            with patch.object(client, "execute", AsyncMock(return_value="{}")) as execute:
+                await client.run_rhythm_catch(
+                    "agent", "auto", "https://e.com", "t", ["x"],
+                    assess_top_n=raw)
+            self.assertNotIn("assess_top_n", execute.await_args.kwargs,
+                             f"input {raw!r} must not fail the call")
+
+
 if __name__ == "__main__":
     unittest.main()

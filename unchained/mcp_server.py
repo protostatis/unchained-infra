@@ -766,6 +766,7 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
 async def rhythm_catch(
     url: str, task: str, catch_terms: str,
     click_text: str = "", group_selector: str = "", limit: int = DEFAULT_CATCH_LIMIT,
+    assess_top_n: int = 0,
     tab_id: str = "auto", agent_id: str = "",
 ) -> str:
     """Scan an SPA page for specific data using event-driven interception.
@@ -788,6 +789,20 @@ async def rhythm_catch(
             needed to judge it.
         limit: Maximum results (1-200, default 20). The response reports
             caught_count (matches before the cap) and truncated.
+
+    assess_top_n: Optional experimental relevance assessment. When greater than
+        0, an external decision model is asked whether each of the first N
+        caught records matches the catch terms and the task, and each assessed
+        record gains `assessment: {verdict, probability}` where verdict is
+        "match", "nonmatch" or "uncertain".
+
+        This is ADVISORY ONLY. Records are never removed, reordered or edited,
+        and a "nonmatch" is a model opinion carrying a probability — not a fact
+        and not permission to discard a record. Setting this sends the task,
+        the catch terms and candidate text to a third-party provider; leaving it
+        at 0 sends nothing. Assessment failures never affect extraction: check
+        `assessment.status` (complete / partial / unavailable) and
+        `assessment.reason`. Unassessed records carry no verdict at all.
 
     Reading the result — do not skip this part:
         `caught_count == 0` means no matches in the scanned DOM snapshot. It is
@@ -820,6 +835,7 @@ async def rhythm_catch(
         click_text=click_text,
         group_selector=group_selector,
         limit=limit,
+        assess_top_n=assess_top_n,
     )
 
 
