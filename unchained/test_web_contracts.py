@@ -405,6 +405,12 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("codex-cli:gpt-5.3-codex-spark", web.SCHEDULER_HTML)
         self.assertNotIn("codex-cli:gpt-5.5", web.SCHEDULER_HTML)
         self.assertNotIn("codex-cli:gpt-5.4-mini", web.SCHEDULER_HTML)
+        self.assertIn("'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6 (legacy)'", web.SCHEDULER_HTML)
+        self.assertIn("'claude-opus-4-7':'Claude CLI: Opus 4.7 (legacy)'", web.SCHEDULER_HTML)
+        self.assertIn(
+            "'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5 (legacy)'",
+            web.SCHEDULER_HTML,
+        )
         self.assertIn("AbortController", web.SCHEDULER_HTML)
         self.assertIn("console.warn('OpenCode scheduler model load failed", web.SCHEDULER_HTML)
         self.assertIn("schedulerOpenCodeModelsLoaded", web.SCHEDULER_HTML)
