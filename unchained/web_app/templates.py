@@ -23607,7 +23607,7 @@ _ARCHIVE_INJECT_HTML = """<div id="archive-overlay" onclick="if(event.target===t
   </div>
 </div>"""
 
-_ARCHIVE_INJECT_JS = """
+_ARCHIVE_INJECT_JS = r"""
 let _archiveNextCursor = '';
 let _archivePageLoading = false;
 
