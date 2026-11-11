@@ -399,8 +399,29 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("codex-sdk:gpt-5.6-sol", web.SCHEDULER_HTML)
         self.assertIn("codex-sdk:gpt-5.6-luna", web.SCHEDULER_HTML)
         self.assertIn("codex-sdk:gpt-5.5", web.SCHEDULER_HTML)
-        self.assertIn("codex-cli:gpt-5.3-codex-spark", web.SCHEDULER_HTML)
+        self.assertIn("codex-cli:gpt-5.6-sol", web.SCHEDULER_HTML)
+        self.assertIn("codex-cli:gpt-5.6-terra", web.SCHEDULER_HTML)
+        self.assertIn("codex-cli:gpt-5.6-luna", web.SCHEDULER_HTML)
+        scheduler_model_options = web.SCHEDULER_HTML.split(
+            '<select id="f-model"', 1
+        )[1].split("</select>", 1)[0]
+        self.assertNotIn("codex-cli:gpt-5.3-codex-spark", scheduler_model_options)
+        self.assertNotIn("codex-cli:gpt-5.5", scheduler_model_options)
         self.assertNotIn("codex-cli:gpt-5.4-mini", web.SCHEDULER_HTML)
+        self.assertIn(
+            "'codex-cli:gpt-5.3-codex-spark':'Codex CLI: GPT-5.3 Codex Spark (legacy)'",
+            web.SCHEDULER_HTML,
+        )
+        self.assertIn(
+            "'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (legacy)'",
+            web.SCHEDULER_HTML,
+        )
+        self.assertIn("'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6 (legacy)'", web.SCHEDULER_HTML)
+        self.assertIn("'claude-opus-4-7':'Claude CLI: Opus 4.7 (legacy)'", web.SCHEDULER_HTML)
+        self.assertIn(
+            "'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5 (legacy)'",
+            web.SCHEDULER_HTML,
+        )
         self.assertIn("AbortController", web.SCHEDULER_HTML)
         self.assertIn("console.warn('OpenCode scheduler model load failed", web.SCHEDULER_HTML)
         self.assertIn("schedulerOpenCodeModelsLoaded", web.SCHEDULER_HTML)

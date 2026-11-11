@@ -206,7 +206,7 @@ class TestConsentModalText(unittest.TestCase):
                       "Should describe the Create API key click")
         self.assertIn("Capture the key from the page response", SETUP_HTML)
         self.assertIn("Terms of Service", SETUP_HTML)
-        self.assertIn("view or revoke the key", SETUP_HTML)
+        self.assertIn("view or revoke stored keys", SETUP_HTML)
 
 
 class TestKeyConfirmationUI(unittest.TestCase):
@@ -293,8 +293,8 @@ class TestCodexProvisioningHooks(unittest.TestCase):
         self.assertIn("codex-cli:gpt-5.6-sol", CHAT_CODEX_HTML)
         self.assertIn("codex-cli:gpt-5.6-terra", CHAT_CODEX_HTML)
         self.assertIn("codex-cli:gpt-5.6-luna", CHAT_CODEX_HTML)
-        self.assertIn("codex-cli:gpt-5.3-codex-spark", CHAT_CODEX_HTML)
-        self.assertIn("codex-cli:gpt-5.5", CHAT_CODEX_HTML)
+        self.assertNotIn("codex-cli:gpt-5.3-codex-spark", CHAT_CODEX_HTML)
+        self.assertNotIn("codex-cli:gpt-5.5", CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:gpt-5.6-sol", CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:gpt-5.6-luna", CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:gpt-5.5", CHAT_CODEX_HTML)

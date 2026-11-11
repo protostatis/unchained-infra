@@ -13444,9 +13444,7 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
       <option value="codex-sdk:gpt-5.5">Codex API · gpt-5.5 (previous gen)</option>
       <option value="codex-cli:gpt-5.6-sol">Codex CLI · gpt-5.6-sol</option>
       <option value="codex-cli:gpt-5.6-terra">Codex CLI · gpt-5.6-terra</option>
-      <option value="codex-cli:gpt-5.6-luna">Codex CLI · gpt-5.6-luna (fast)</option>
-      <option value="codex-cli:gpt-5.3-codex-spark">Codex CLI · gpt-5.3-codex-spark (fast preview)</option>
-      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5 (previous gen)</option>""",
+      <option value="codex-cli:gpt-5.6-luna">Codex CLI · gpt-5.6-luna (fast)</option>""",
         "Codex model options",
     ),
     TemplateReplacement("let geminiProvisioned = false;", "let codexProvisioned = false;", "Codex provisioned flag"),
@@ -16897,9 +16895,9 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)" onpointerdown="refreshOpenCodeModelOptions()" onkeydown="maybeRefreshOpenCodeModelOptionsForKey(event)">
-      <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-      <option value="claude-opus-4-7">Opus 4.7</option>
-      <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5</option>
+      <option value="claude-opus-5-5">Opus 5.5</option>
+      <option value="claude-haiku-5-5">Haiku 5.5</option>
       <option value="opencode-cli:">OpenCode CLI &middot; configured default</option>
     </select>
     <label for="profilesel">Profile</label>
@@ -27059,9 +27057,9 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
         <label for="f-model">Model</label>
         <select id="f-model" onchange="syncSchedulerModelField()">
           <option value="">Default: Claude CLI Opus</option>
-          <option value="claude-sonnet-4-6">Claude CLI: Sonnet 4.6</option>
-          <option value="claude-opus-4-7">Claude CLI: Opus 4.7</option>
-          <option value="claude-haiku-4-5-20251001">Claude CLI: Haiku 4.5</option>
+          <option value="claude-sonnet-5-5">Claude CLI: Sonnet 5.5</option>
+          <option value="claude-opus-5-5">Claude CLI: Opus 5.5</option>
+          <option value="claude-haiku-5-5">Claude CLI: Haiku 5.5</option>
           <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
           <option value="claude-sdk:claude-opus-4-7">Claude API: Opus 4.7</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
@@ -27072,8 +27070,6 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="codex-cli:gpt-5.6-sol">Codex CLI: GPT-5.6 Sol</option>
           <option value="codex-cli:gpt-5.6-terra">Codex CLI: GPT-5.6 Terra</option>
           <option value="codex-cli:gpt-5.6-luna">Codex CLI: GPT-5.6 Luna (fast)</option>
-          <option value="codex-cli:gpt-5.3-codex-spark">Codex CLI: GPT-5.3 Codex Spark (fast preview)</option>
-          <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5 (previous gen)</option>
           <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
@@ -27227,9 +27223,12 @@ function formatSchedulerModel(model){
   if(value==='opencode-cli:') return 'OpenCode CLI: configured default';
   if(schedulerOpenCodeModelLabels[value]) return schedulerOpenCodeModelLabels[value];
   const labels={
-    'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
-    'claude-opus-4-7':'Claude CLI: Opus 4.7',
-    'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5',
+    'claude-sonnet-5-5':'Claude CLI: Sonnet 5.5',
+    'claude-opus-5-5':'Claude CLI: Opus 5.5',
+    'claude-haiku-5-5':'Claude CLI: Haiku 5.5',
+    'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6 (legacy)',
+    'claude-opus-4-7':'Claude CLI: Opus 4.7 (legacy)',
+    'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5 (legacy)',
     'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
     'claude-sdk:claude-opus-4-7':'Claude API: Opus 4.7',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
@@ -27240,8 +27239,8 @@ function formatSchedulerModel(model){
     'codex-cli:gpt-5.6-sol':'Codex CLI: GPT-5.6 Sol',
     'codex-cli:gpt-5.6-terra':'Codex CLI: GPT-5.6 Terra',
     'codex-cli:gpt-5.6-luna':'Codex CLI: GPT-5.6 Luna (fast)',
-    'codex-cli:gpt-5.3-codex-spark':'Codex CLI: GPT-5.3 Codex Spark (fast preview)',
-    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (previous gen)',
+    'codex-cli:gpt-5.3-codex-spark':'Codex CLI: GPT-5.3 Codex Spark (legacy)',
+    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (legacy)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'nvidia/nemotron-3-nano-30b-a3b:free':'OpenRouter: NVIDIA Nemotron Nano',

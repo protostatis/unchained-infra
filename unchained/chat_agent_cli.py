@@ -2085,6 +2085,10 @@ def check_chrome_bridge(cdp_agent_id: str = "") -> bool:
 
 # Map Anthropic model IDs to Claude Code CLI model names
 _MODEL_CLI_MAP = {
+    "claude-opus-5-5": "opus",
+    "claude-sonnet-5-5": "sonnet",
+    "claude-haiku-5-5": "haiku",
+    # Older IDs stay mapped so saved selections still resolve to a family alias.
     "claude-opus-4-7": "opus",
     "claude-sonnet-4-6": "sonnet",
     "claude-haiku-4-5-20251001": "haiku",
