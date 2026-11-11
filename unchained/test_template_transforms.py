@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -63,6 +64,46 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('id="sidebar"', templates.CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
+
+    def test_chat_templates_inline_scripts_parse(self):
+        node = shutil.which("node")
+        if not node:
+            if os.environ.get("CI"):
+                self.fail("node is required in CI to validate inline chat scripts")
+            self.skipTest("node is required to validate inline chat scripts")
+
+        from web_app import templates
+
+        chat_templates = {
+            "Trial": templates.TRIAL_CHAT_HTML,
+            "Claude CLI": templates.CLAUDE_CHAT_HTML,
+            "Gemini": templates.CHAT_GEMINI_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+        }
+        script_re = re.compile(
+            r"<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>", re.DOTALL
+        )
+        for lane, html in chat_templates.items():
+            with self.subTest(lane=lane):
+                inline_scripts = [
+                    match.group("body")
+                    for match in script_re.finditer(html)
+                    if "src=" not in match.group("attrs")
+                    and "application/" not in match.group("attrs")
+                ]
+                self.assertTrue(inline_scripts, f"{lane} has no inline scripts")
+                result = subprocess.run(
+                    [node, "--check", "-"],
+                    input="\n;\n".join(inline_scripts),
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"{lane} inline scripts do not parse:\n{result.stderr}",
+                )
 
     def test_agent_view_workspaces_disable_page_pinch_zoom(self):
         from web_app import templates

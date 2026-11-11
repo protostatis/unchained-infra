@@ -23607,7 +23607,10 @@ _ARCHIVE_INJECT_HTML = """<div id="archive-overlay" onclick="if(event.target===t
   </div>
 </div>"""
 
-_ARCHIVE_INJECT_JS = """
+# Keep this literal raw. The JS uses \' inside single-quoted strings; a
+# non-raw Python literal strips those backslashes and breaks every chat
+# lane that receives this injection.
+_ARCHIVE_INJECT_JS = r"""
 let _archiveNextCursor = '';
 let _archivePageLoading = false;
 
