@@ -1947,9 +1947,13 @@ def test_cli_agent_model_map():
         source = f.read()
 
     assert "_MODEL_CLI_MAP" in source, "_MODEL_CLI_MAP not defined"
+    # Subset check: the map intentionally keeps legacy IDs for saved selections.
     for model_id, cli_name in expected.items():
         assert f'"{model_id}": "{cli_name}"' in source, \
             f"Missing mapping {model_id} -> {cli_name}"
+    for legacy_id in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"):
+        assert f'"{legacy_id}":' in source, \
+            f"Legacy mapping {legacy_id} missing; saved model selections would break"
 
     # Verify handle_message accepts model parameter
     assert "def handle_message(" in source and "model: str" in source, \

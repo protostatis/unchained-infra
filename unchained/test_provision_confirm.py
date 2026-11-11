@@ -206,7 +206,7 @@ class TestConsentModalText(unittest.TestCase):
                       "Should describe the Create API key click")
         self.assertIn("Capture the key from the page response", SETUP_HTML)
         self.assertIn("Terms of Service", SETUP_HTML)
-        self.assertIn("view or revoke the key", SETUP_HTML)
+        self.assertIn("view or revoke stored keys", SETUP_HTML)
 
 
 class TestKeyConfirmationUI(unittest.TestCase):
