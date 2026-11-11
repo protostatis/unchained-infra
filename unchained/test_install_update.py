@@ -1661,13 +1661,13 @@ def test_chat_html_has_model_dropdown():
     """Verify CHAT_HTML has the model selector dropdown with all 3 models."""
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
     assert 'id="modelsel"' in CHAT_HTML, "Model select element missing"
-    assert "claude-sonnet-4-6" in CHAT_HTML, "Sonnet model option missing"
-    assert "claude-opus-4-7" in CHAT_HTML, "Opus model option missing"
-    assert "claude-haiku-4-5-20251001" in CHAT_HTML, "Haiku model option missing"
+    assert "claude-sonnet-5-5" in CHAT_HTML, "Sonnet model option missing"
+    assert "claude-opus-5-5" in CHAT_HTML, "Opus model option missing"
+    assert "claude-haiku-5-5" in CHAT_HTML, "Haiku model option missing"
     # Sonnet should be the first (default) option
-    sonnet_pos = CHAT_HTML.index("claude-sonnet-4-6")
-    opus_pos = CHAT_HTML.index("claude-opus-4-7")
-    haiku_pos = CHAT_HTML.index("claude-haiku-4-5-20251001")
+    sonnet_pos = CHAT_HTML.index("claude-sonnet-5-5")
+    opus_pos = CHAT_HTML.index("claude-opus-5-5")
+    haiku_pos = CHAT_HTML.index("claude-haiku-5-5")
     assert sonnet_pos < opus_pos, "Sonnet should be first option (default)"
     assert opus_pos < haiku_pos, "Opus should be second option"
     print(f"  Model dropdown: 3 options, Sonnet default")
@@ -1936,9 +1936,9 @@ def test_cli_agent_model_map():
     # Import the map directly — chat_agent_cli has side effects but _MODEL_CLI_MAP is safe
     # since it's defined before the main() call
     expected = {
-        "claude-opus-4-7": "opus",
-        "claude-sonnet-4-6": "sonnet",
-        "claude-haiku-4-5-20251001": "haiku",
+        "claude-opus-5-5": "opus",
+        "claude-sonnet-5-5": "sonnet",
+        "claude-haiku-5-5": "haiku",
     }
     # Read the source to verify the map exists with correct values
     import ast
