@@ -27239,6 +27239,8 @@ function formatSchedulerModel(model){
     'codex-cli:gpt-5.6-sol':'Codex CLI: GPT-5.6 Sol',
     'codex-cli:gpt-5.6-terra':'Codex CLI: GPT-5.6 Terra',
     'codex-cli:gpt-5.6-luna':'Codex CLI: GPT-5.6 Luna (fast)',
+    'codex-cli:gpt-5.3-codex-spark':'Codex CLI: GPT-5.3 Codex Spark (legacy)',
+    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (legacy)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'nvidia/nemotron-3-nano-30b-a3b:free':'OpenRouter: NVIDIA Nemotron Nano',
