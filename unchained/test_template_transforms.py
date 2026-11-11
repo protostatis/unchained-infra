@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -67,6 +68,8 @@ class TestTemplateTransforms(unittest.TestCase):
     def test_chat_templates_inline_scripts_parse(self):
         node = shutil.which("node")
         if not node:
+            if os.environ.get("CI"):
+                self.fail("node is required in CI to validate inline chat scripts")
             self.skipTest("node is required to validate inline chat scripts")
 
         from web_app import templates
