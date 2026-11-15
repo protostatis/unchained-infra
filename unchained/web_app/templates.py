@@ -8401,7 +8401,7 @@ GUIDE_SCHEDULED_BROWSER_TASKS_HTML = r"""<!DOCTYPE html>
   <pre><code>unchained-scheduled init-example
 # Wrote example jobs file: scheduled_jobs.json</code></pre>
   <div class="prose">
-    <p>Then replace the jobs with your own. Three schedule shapes are supported: a wall-clock time each day, an interval, or a single timestamp.</p>
+    <p>Then replace the jobs with your own. A schedule names exactly one of four keys: a daily time, an interval in minutes, an interval in seconds, or a single timestamp.</p>
   </div>
   <pre><code>{
   "jobs": [
@@ -8429,8 +8429,9 @@ GUIDE_SCHEDULED_BROWSER_TASKS_HTML = r"""<!DOCTYPE html>
   <table class="fields">
     <tr><th>Field</th><th>What it does</th></tr>
     <tr><td><code>prompt</code></td><td>The instruction handed to the agent. Write it the way you would type it into the chat, including which sites to open.</td></tr>
-    <tr><td><code>schedule.daily_at</code></td><td>Local wall-clock time, <code>HH:MM</code>. Runs once per day.</td></tr>
+    <tr><td><code>schedule.daily_at</code></td><td><strong>UTC</strong> wall-clock time, <code>HH:MM</code>. Runs once per day. Not local time&mdash;convert before you schedule.</td></tr>
     <tr><td><code>schedule.every_minutes</code></td><td>Fixed interval in minutes from the previous run.</td></tr>
+    <tr><td><code>schedule.every_seconds</code></td><td>Same, in seconds. Only one schedule key may be present.</td></tr>
     <tr><td><code>schedule.at</code></td><td>One ISO-8601 UTC timestamp. Pair with <code>enabled: false</code> until you mean it.</td></tr>
     <tr><td><code>use_stable_session</code></td><td>Reuses one conversation across runs, keyed to the job id, so the agent keeps its context instead of starting cold each time.</td></tr>
     <tr><td><code>timeout_seconds</code></td><td>Give up on a single run after this long. Default 180.</td></tr>
@@ -8453,7 +8454,7 @@ competitor-scan          True    2026-11-16T07:30:00Z     -              0
 status-watch             True    2026-11-15T14:00:00Z     -              0
 one-off-export           False   -                        -              0</code></pre>
   <div class="prose">
-    <p>A dash under <code>next_run_utc</code> means the job is disabled or its schedule could not be read. Fix that before continuing.</p>
+    <p>A dash under <code>next_run_utc</code> means the job is disabled. A malformed schedule is not shown as a dash&mdash;<code>list</code> fails outright on the offending key, so fix the file and run it again.</p>
   </div>
 </div>
 
@@ -8485,7 +8486,7 @@ one-off-export           False   -                        -              0</code
   </div>
   <pre><code>UNCHAINED_API_KEY=uc_live_... unchained-scheduled daemon --poll-seconds 60</code></pre>
   <div class="prose">
-    <p>State lives next to the jobs file&mdash;<code>scheduled_jobs.state.json</code> for <code>scheduled_jobs.json</code>&mdash;and records the next run, the last status, the last error, and a run count. Delete the state file to force a job to re-initialise from scratch.</p>
+    <p>The state file defaults to <code>scheduled_jobs.state.json</code> in the working directory&mdash;<code>--state</code> sets it independently, and it does not follow <code>--jobs</code>. It records the next run, the last status, the last error, and a run count. Delete it to force jobs to re-initialise from scratch.</p>
     <p>Keep the daemon alive the same way you keep anything else alive on the machine: a <code>launchd</code> agent on macOS, a <code>systemd</code> unit on Linux, or a terminal multiplexer if you only need it while you work.</p>
   </div>
   <table class="fields">

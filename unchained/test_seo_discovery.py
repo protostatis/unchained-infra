@@ -441,10 +441,18 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command):
                 self.assertIn(f"unchained-scheduled {command}", page)
         # Every documented schedule key must be one the loader understands.
-        for key in ("daily_at", "every_minutes", "at", "use_stable_session"):
+        for key in ("daily_at", "every_minutes", "every_seconds", "at", "use_stable_session"):
             with self.subTest(key=key):
                 self.assertIn(key, page)
         self.assertTrue(hasattr(scheduled_tasks, "main"))
+
+    def test_guide_states_schedules_are_utc(self):
+        # daily_at is interpreted as UTC by scheduled_tasks.py; a page that
+        # says "local" would send users to the wrong hour.
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        self.assertIn("UTC", page)
+        self.assertNotIn("Local wall-clock", page)
+        self.assertNotIn("local wall-clock", page)
 
     def test_guide_links_to_related_pages(self):
         page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
