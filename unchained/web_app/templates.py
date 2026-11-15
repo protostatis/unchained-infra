@@ -7572,6 +7572,7 @@ PUBLISHED_RESULT_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__RESULT_TITLE__ &mdash; Unchained</title>
 <meta name="description" content="__RESULT_DESC__">
+<meta name="robots" content="__RESULT_ROBOTS__">
 <link rel="canonical" href="https://unchainedsky.com/r/__RESULT_SLUG__">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://unchainedsky.com/r/__RESULT_SLUG__">

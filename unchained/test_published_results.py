@@ -36,7 +36,9 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
         return {
             "messages": [
                 {"role": "user", "content": query},
-                {"role": "assistant", "content": "Detailed public result. " * 20},
+                # Substantial enough to clear the indexability gate as well as
+                # the publish gate, matching a real indexed result.
+                {"role": "assistant", "content": "Detailed public result. " * 80},
             ]
         }
 

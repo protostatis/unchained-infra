@@ -70,6 +70,8 @@ jobs:
           python test_chat_event_transport.py
           python test_sse_write_guard.py
           python test_search_console_verification.py
+          python test_seo_discovery.py
+          python test_published_results.py
           python test_bridge_helpers.py
           python test_provision_event_loop.py
           python test_provision_helpers.py

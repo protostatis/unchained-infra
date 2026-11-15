@@ -52,6 +52,7 @@ UNCHAINED_RUNTIME_FILES=(
     "overlay_js.py"
     "cdp_tool_packaged.py"
     "published_results.py"
+    "indexnow.py"
     "provision_helpers.py"
     "template_utils.py"
     "agent_package.py"
