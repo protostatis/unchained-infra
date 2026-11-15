@@ -446,6 +446,10 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
         for key in ("daily_at", "every_minutes", "every_seconds", "at", "use_stable_session"):
             with self.subTest(key=key):
                 self.assertIn(key, page)
+        # ...and every flag the flags table promises.
+        for flag in ("--jobs", "--state", "--api-url", "--api-key", "--poll-seconds"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, page)
 
     def test_documented_subcommands_exist_in_the_real_cli(self):
         # Ask the CLI itself rather than trusting the page's own strings.
@@ -460,6 +464,17 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
         for command in ("init-example", "list", "run-due", "daemon"):
             with self.subTest(command=command):
                 self.assertIn(command, help_text)
+        for flag in ("--jobs", "--state", "--api-url", "--api-key"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, help_text)
+        # Subcommand-level flags live in their own help, not the top level.
+        run_due_help = subprocess.run(
+            [sys.executable, str(module_path), "daemon", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+        self.assertIn("--poll-seconds", run_due_help)
 
     def test_console_script_entrypoint_is_wired(self):
         pyproject = (Path(scheduled_tasks.__file__).parent / "pyproject.toml").read_text()

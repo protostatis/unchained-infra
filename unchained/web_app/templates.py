@@ -8435,7 +8435,7 @@ GUIDE_SCHEDULED_BROWSER_TASKS_HTML = r"""<!DOCTYPE html>
     <tr><td><code>schedule.at</code></td><td>One ISO-8601 UTC timestamp. Pair with <code>enabled: false</code> until you mean it.</td></tr>
     <tr><td><code>use_stable_session</code></td><td>Reuses one conversation across runs, keyed to the job id, so the agent keeps its context instead of starting cold each time.</td></tr>
     <tr><td><code>timeout_seconds</code></td><td>Give up on a single run after this long. Default 180.</td></tr>
-    <tr><td><code>retry_seconds</code></td><td>Back off this long after a failed run.</td></tr>
+    <tr><td><code>retry_seconds</code></td><td>On failure, schedule the next attempt this long later instead of waiting for the normal schedule. <code>0</code> keeps the normal schedule.</td></tr>
     <tr><td><code>enabled</code></td><td>Set <code>false</code> to keep a job in the file but stop it running.</td></tr>
   </table>
   <div class="note">Write the prompt for a reader who was not there. &ldquo;Check the usual pages&rdquo; fails silently; naming the sites and the fields makes a failed run obvious instead of plausible.</div>
@@ -8466,10 +8466,10 @@ one-off-export           False   -                        -              0</code
   </div>
   <pre><code>UNCHAINED_API_KEY=uc_live_... unchained-scheduled run-due
 
-[OK] competitor-scan: <em>detail from the run</em>
-[OK] status-watch: <em>detail from the run</em></code></pre>
+[OK] competitor-scan: ...
+[OK] status-watch: ...</code></pre>
   <div class="prose">
-    <p>If nothing is due yet it prints <code>No jobs due.</code> rather than running early. To rehearse immediately, set <code>"at"</code> to a minute from now on a temporary copy of the job.</p>
+    <p>One line per job: the id, then a short detail from that run. If nothing is due yet it prints <code>No jobs due.</code> rather than running early. To rehearse immediately, set <code>"at"</code> to a minute from now on a temporary copy of the job.</p>
     <p>This is the step that earns the schedule. A prompt that returns a vague briefing is obvious when you are watching it and invisible when it lands in a log at 7am.</p>
   </div>
   <div class="callout">
