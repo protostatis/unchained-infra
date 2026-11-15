@@ -844,8 +844,10 @@ async def handle_approve_result(request: web.Request) -> web.Response:
 
 
 # In-flight IndexNow pushes. Held so the event loop does not garbage-collect
-# the task before it runs; discarded as each one completes.
+# the task before it runs; discarded as each one completes. Capped because a
+# long approval burst should not grow this without bound.
 _indexnow_tasks: set[asyncio.Task] = set()
+_MAX_INFLIGHT_INDEXNOW_TASKS = 64
 
 
 def _schedule_indexnow_push(slugs: list[str]) -> None:
@@ -855,6 +857,13 @@ def _schedule_indexnow_push(slugs: list[str]) -> None:
     endpoint must never show up as a slow approval. The push is best-effort,
     so a dropped one costs a crawl cycle, not correctness.
     """
+    if len(_indexnow_tasks) >= _MAX_INFLIGHT_INDEXNOW_TASKS:
+        log.warning(
+            "IndexNow: %d pushes already in flight; skipping %d slug(s)",
+            len(_indexnow_tasks),
+            len(slugs),
+        )
+        return
     task = asyncio.create_task(asyncio.to_thread(_submit_approved_slugs, slugs))
     _indexnow_tasks.add(task)
     task.add_done_callback(_discard_indexnow_task)

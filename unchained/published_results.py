@@ -156,6 +156,11 @@ def _passes_quality_gate(query: str, result_text: str) -> bool:
 _MIN_INDEX_CHARS = 900
 _MIN_INDEX_WORDS = 120
 
+# Upper bound on rows scanned when building the indexable list. The filter is
+# applied before the caller's limit so a burst of thin rows cannot starve the
+# sitemap of the substantial ones behind them; this cap only bounds the scan.
+_INDEX_SCAN_LIMIT = 5000
+
 # Queries whose answers expire. Their pages still render for humans; they
 # just do not get a sitemap slot or an indexable robots directive.
 _PERISHABLE_QUERY_PATTERN = re.compile(
@@ -596,9 +601,9 @@ def list_indexable_results(limit: int = 500) -> list[dict]:
                    FROM published_results
                    WHERE status = 'approved' OR status IS NULL
                    ORDER BY created_at DESC LIMIT ?""",
-                (limit,),
+                (_INDEX_SCAN_LIMIT,),
             ).fetchall()
-            return [
+            indexable = [
                 {
                     "slug": r[0],
                     "query": r[1],
@@ -608,6 +613,7 @@ def list_indexable_results(limit: int = 500) -> list[dict]:
                 for r in rows
                 if _passes_index_gate(r[1], r[2])
             ]
+            return indexable[:limit]
         finally:
             conn.close()
 

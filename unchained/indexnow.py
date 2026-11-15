@@ -61,11 +61,21 @@ def text_resource_path_to_url(path: str) -> str:
 
 
 def _is_own_url(url: object) -> bool:
-    """True only for an https URL whose host is exactly HOST."""
+    """True only for an https URL on HOST, with no port or the https default.
+
+    An explicit ``:443`` is the same origin, so it must not be treated as
+    foreign; anything else is.
+    """
     if not isinstance(url, str):
         return False
     parsed = urlparse(url)
-    return parsed.scheme == "https" and parsed.netloc == HOST
+    if parsed.scheme != "https" or parsed.hostname != HOST:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:  # invalid port literal
+        return False
+    return port in (None, 443)
 
 
 def submit_urls(urls: list[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> dict:
@@ -89,11 +99,14 @@ def submit_urls(urls: list[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -
     if not cleaned:
         return {"submitted": False, "reason": "no-urls", "count": 0}
 
+    # IndexNow accepts at most 10,000 URLs per request; report what we actually
+    # send rather than what we were handed.
+    payload_urls = cleaned[:10_000]
     payload = {
         "host": HOST,
         "key": key,
         "keyLocation": f"https://{HOST}/{key}.txt",
-        "urlList": cleaned[:10_000],
+        "urlList": payload_urls,
     }
     try:
         import httpx
@@ -114,7 +127,7 @@ def submit_urls(urls: list[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -
     return {
         "submitted": ok,
         "status": response.status_code,
-        "count": len(cleaned),
+        "count": len(payload_urls),
     }
 
 

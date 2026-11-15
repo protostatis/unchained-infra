@@ -126,6 +126,30 @@ class TestIndexNowKeyResolution(unittest.TestCase):
         self.assertFalse(result["submitted"])
         self.assertEqual(result["reason"], "error")
 
+    def test_explicit_default_port_is_still_our_host(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
+            with patch(
+                "httpx.post", return_value=type("R", (), {"status_code": 200, "text": ""})()
+            ) as post:
+                result = indexnow.submit_urls(
+                    ["https://unchainedsky.com:443/r/ok", "https://unchainedsky.com:8443/r/no"]
+                )
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            post.call_args.kwargs["json"]["urlList"],
+            ["https://unchainedsky.com:443/r/ok"],
+        )
+
+    def test_reported_count_matches_the_truncated_payload(self):
+        urls = [f"https://unchainedsky.com/r/{i}" for i in range(10_001)]
+        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
+            with patch(
+                "httpx.post", return_value=type("R", (), {"status_code": 200, "text": ""})()
+            ) as post:
+                result = indexnow.submit_urls(urls)
+        self.assertEqual(result["count"], 10_000)
+        self.assertEqual(len(post.call_args.kwargs["json"]["urlList"]), 10_000)
+
     def test_submission_success_is_reported(self):
         class _Response:
             status_code = 200
@@ -220,6 +244,15 @@ class TestSitemapIndexGate(unittest.IsolatedAsyncioTestCase):
         )
         sitemap = asyncio.run(self._sitemap_text())
         self.assertNotIn(f"https://unchainedsky.com/r/{slug}", sitemap)
+
+    def test_thin_rows_do_not_starve_substantial_ones(self):
+        # Filtering must happen before the caller's limit, otherwise a burst of
+        # newer thin results hides the indexable page behind them.
+        substantial = self._publish_approved("Compare public launch options", repeats=80)
+        for i in range(3):
+            self._publish_approved(f"Thin note number {i}", repeats=10)
+        rows = published_results.list_indexable_results(limit=1)
+        self.assertEqual([r["slug"] for r in rows], [substantial])
 
 
 class TestApprovalPushesIndexableUrls(unittest.IsolatedAsyncioTestCase):
