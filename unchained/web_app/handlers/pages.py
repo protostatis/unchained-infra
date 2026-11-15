@@ -715,7 +715,7 @@ async def handle_published_result(request: web.Request) -> web.Response:
     import re as _re
     import time as _time
     from html import escape
-    from published_results import get_result
+    from published_results import get_result, _passes_index_gate
     core = _core()
     slug = request.match_info.get("slug", "")
     # Validate slug format
@@ -727,6 +727,14 @@ async def handle_published_result(request: web.Request) -> web.Response:
     core._track_page_view(request)
     query = result["query"]
     result_text = result["result_text"]
+    # Pages that clear the indexability gate are advertised to crawlers and
+    # listed in the sitemap; the rest stay reachable but are excluded so they
+    # cannot dilute the pages that can rank.
+    robots_directive = (
+        "index,follow"
+        if _passes_index_gate(query, result_text)
+        else "noindex,follow"
+    )
     # Escape for HTML meta attributes
     title_text = escape(query[:80])
     desc_html = escape(result_text[:200]).replace("\n", " ")
@@ -746,6 +754,7 @@ async def handle_published_result(request: web.Request) -> web.Response:
         "__RESULT_HTML__": result["result_html"],
         "__RESULT_DATE__": created,
         "__RESULT_VIEWS__": str(result["view_count"]),
+        "__RESULT_ROBOTS__": robots_directive,
         "__CONTACT_EMAIL__": core.CONTACT_EMAIL,
     }
     _pattern = _re.compile("|".join(_re.escape(k) for k in _subs))
@@ -809,6 +818,8 @@ async def handle_pending_results(request: web.Request) -> web.Response:
 
 async def handle_approve_result(request: web.Request) -> web.Response:
     """POST /web/publish/approve — approve one or more pending results."""
+    import asyncio
+
     from published_results import approve_result, bulk_approve
     from web_app.handlers.auth_admin import is_admin
     if not is_admin(request):
@@ -818,11 +829,70 @@ async def handle_approve_result(request: web.Request) -> web.Response:
     slug = body.get("slug", "")
     if slug:
         ok = approve_result(slug)
+        # Approval is the moment a /r/ page becomes publicly reachable, so it
+        # is the right point to push the URL at Bing rather than waiting for
+        # a crawl.
+        if ok:
+            _schedule_indexnow_push([slug])
         return web.json_response({"approved": ok, "slug": slug})
     if slugs:
         count = bulk_approve(slugs)
+        if count:
+            _schedule_indexnow_push(list(slugs))
         return web.json_response({"approved_count": count, "slugs": slugs})
     return web.json_response({"error": "slug or slugs required"}, status=400)
+
+
+# In-flight IndexNow pushes. Held so the event loop does not garbage-collect
+# the task before it runs; discarded as each one completes.
+_indexnow_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_indexnow_push(slugs: list[str]) -> None:
+    """Queue an IndexNow push without delaying the approval response.
+
+    Approval is a database write the operator is waiting on; a slow search
+    endpoint must never show up as a slow approval. The push is best-effort,
+    so a dropped one costs a crawl cycle, not correctness.
+    """
+    task = asyncio.create_task(asyncio.to_thread(_submit_approved_slugs, slugs))
+    _indexnow_tasks.add(task)
+    task.add_done_callback(_discard_indexnow_task)
+
+
+def _discard_indexnow_task(task: asyncio.Task) -> None:
+    """Drop a finished push task and surface a failure instead of leaking it."""
+    _indexnow_tasks.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        log.warning("IndexNow push task failed: %s", error)
+
+
+def _submit_approved_slugs(slugs: list[str]) -> None:
+    """Best-effort IndexNow push for newly approved, indexable results.
+
+    Only pages that clear the indexability gate are announced: submitting a
+    URL we simultaneously mark ``noindex`` would spend crawl budget asking
+    Bing to fetch a page we do not want indexed.
+    """
+    try:
+        import indexnow
+        from published_results import _passes_index_gate, get_result
+
+        urls = []
+        for slug in slugs:
+            result = get_result(slug) or {}
+            if not _passes_index_gate(
+                str(result.get("query", "")), str(result.get("result_text", ""))
+            ):
+                continue
+            urls.append(indexnow.text_resource_path_to_url(f"r/{slug}"))
+        if urls:
+            indexnow.submit_urls(urls)
+    except Exception:
+        log.exception("IndexNow push failed for %d slug(s)", len(slugs))
 
 
 async def handle_reject_result(request: web.Request) -> web.Response:

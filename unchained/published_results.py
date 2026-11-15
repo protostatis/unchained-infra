@@ -129,6 +129,49 @@ def _passes_quality_gate(query: str, result_text: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Indexability gate
+#
+# Publishing and indexing are deliberately separate bars. A page can be worth
+# serving to a human (the publish gate above) and still not be worth a
+# sitemap slot: search engines treat thin, templated, near-duplicate pages as
+# low-value programmatic content, and a sitemap full of them dilutes the
+# pages that can actually rank.
+#
+# Two failure modes are gated here:
+#   1. Thin output — too little substance to satisfy any query.
+#   2. Perishable output — answers bound to "today"/"tomorrow" are wrong
+#      within days and leave stale facts indexed as if evergreen.
+# ---------------------------------------------------------------------------
+
+_MIN_INDEX_CHARS = 900
+_MIN_INDEX_WORDS = 120
+
+# Queries whose answers expire. Their pages still render for humans; they
+# just do not get a sitemap slot or an indexable robots directive.
+_PERISHABLE_QUERY_PATTERN = re.compile(
+    r"\b(?:"
+    r"today|tonight|tomorrow|yesterday"
+    r"|this (?:morning|afternoon|evening|week|weekend|month|friday|saturday|sunday)"
+    r"|next week|last night|right now|as of now"
+    r"|(?:current|latest|live) (?:price|prices|status|weather|news|score)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _passes_index_gate(query: str, result_text: str) -> bool:
+    """Return True when a published result is worth exposing to crawlers."""
+    text = (result_text or "").strip()
+    if len(text) < _MIN_INDEX_CHARS:
+        return False
+    if len(text.split()) < _MIN_INDEX_WORDS:
+        return False
+    if _PERISHABLE_QUERY_PATTERN.search(query or ""):
+        return False
+    return True
+
+
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _PII_GUARD_MODEL = os.environ.get(
     "PII_GUARD_MODEL", "google/gemini-2.0-flash-001"
@@ -501,6 +544,37 @@ def list_results(limit: int = 50) -> list[dict]:
                     "view_count": r[3],
                 }
                 for r in rows
+            ]
+        finally:
+            conn.close()
+
+
+def list_indexable_results(limit: int = 500) -> list[dict]:
+    """List approved results that also clear the stricter indexability gate.
+
+    Used by the sitemap and by the /r/ handler to decide whether a page
+    should carry an indexable robots directive. Results that fail the gate
+    still resolve publicly; they are simply not advertised to crawlers.
+    """
+    with _lock:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """SELECT slug, query, result_text, created_at, view_count
+                   FROM published_results
+                   WHERE status = 'approved' OR status IS NULL
+                   ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "slug": r[0],
+                    "query": r[1],
+                    "created_at": r[3],
+                    "view_count": r[4],
+                }
+                for r in rows
+                if _passes_index_gate(r[1], r[2])
             ]
         finally:
             conn.close()

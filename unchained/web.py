@@ -1804,10 +1804,13 @@ async def handle_robots_txt(request: web.Request) -> web.Response:
 async def handle_sitemap_xml(request: web.Request) -> web.Response:
     """GET /sitemap.xml — list public pages for search engines."""
     del request
-    # Include published results dynamically
+    # Include published results dynamically, but only those that clear the
+    # stricter indexability gate. Thin or perishable results still resolve
+    # at /r/<slug> for humans; advertising them here would dilute the pages
+    # that can actually rank.
     try:
-        from published_results import list_results
-        published = list_results(limit=500)
+        from published_results import list_indexable_results
+        published = list_indexable_results(limit=500)
     except Exception:
         published = []
     pages = [
@@ -1850,6 +1853,57 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
     return web.Response(
         text=xml,
         content_type="application/xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_bing_site_auth(request: web.Request) -> web.Response:
+    """GET /BingSiteAuth.xml — Bing Webmaster Tools verification.
+
+    Bing imports a property straight from Search Console, and Bing's index is
+    what ChatGPT search reads from — so this is the cheapest path to being
+    visible in AI answers, not just in Google.
+
+    The ``<user>`` token is per-account, so it is configuration, not code. Set
+    BING_SITE_AUTH_GUID to the value Bing shows under "XML file" verification.
+    While unset the route 404s, which is the correct signal that the property
+    is not verified.
+    """
+    del request
+    guid = os.environ.get("BING_SITE_AUTH_GUID", "").strip()
+    # The token is written straight into XML: refuse anything that is not a
+    # plain GUID-shaped value rather than trying to escape it.
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", guid):
+        raise web.HTTPNotFound()
+    body = (
+        '<?xml version="1.0"?>\n'
+        "<users>\n"
+        f"  <user>{guid}</user>\n"
+        "</users>\n"
+    )
+    return web.Response(
+        text=body,
+        content_type="application/xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_indexnow_key(request: web.Request) -> web.Response:
+    """GET /<key>.txt — IndexNow key ownership proof.
+
+    IndexNow fetches this path and compares the body to the submitted key.
+    Any other ``*.txt`` path falls through to a 404 rather than being served
+    as a key, so this route cannot shadow real text resources.
+    """
+    import indexnow
+
+    configured = indexnow.indexnow_key()
+    requested = request.match_info.get("indexnow_key", "")
+    if not configured or requested != configured:
+        raise web.HTTPNotFound()
+    return web.Response(
+        text=indexnow.key_file_body(),
+        content_type="text/plain",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
@@ -2300,7 +2354,36 @@ def _load_mcp_doc_markdown(filename: str) -> str:
     )
 
 
+def _render_markdown_html(markdown_text: str) -> str:
+    """Render trusted docs markdown to HTML for server-side delivery.
+
+    The /mcp-guide page previously shipped only a JS viewer, so crawlers that
+    do not execute JavaScript (Bing, GPTBot, most social unfurlers) saw an
+    empty article body. Rendering the first document into the initial HTML
+    makes the existing content crawlable without changing what humans see.
+
+    Raw HTML in the source markdown stays disabled so the rendered output
+    cannot smuggle markup into the page. Returns '' when the renderer is
+    unavailable; the client-side viewer then takes over exactly as before.
+    """
+    try:
+        from markdown_it import MarkdownIt
+    except Exception:  # optional at import time, required for crawlable docs
+        return ""
+    renderer = (
+        MarkdownIt("commonmark", {"html": False})
+        .enable("table")
+        .enable("strikethrough")
+    )
+    try:
+        return renderer.render(markdown_text)
+    except Exception:
+        return ""
+
+
 def _build_mcp_guide_html() -> str:
+    from html import escape as _escape
+
     docs_payload = [
         {
             "title": title,
@@ -2310,6 +2393,14 @@ def _build_mcp_guide_html() -> str:
         for title, filename in _MCP_DOC_SPECS
     ]
     docs_json = json.dumps(docs_payload)
+    # Server-render the first document so the page carries real crawlable
+    # content without waiting for the client-side viewer to run.
+    _first_doc = docs_payload[0] if docs_payload else {
+        "title": "",
+        "filename": "",
+        "markdown": "",
+    }
+    doc_html = _render_markdown_html(_first_doc["markdown"])
     html = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2410,9 +2501,9 @@ def _build_mcp_guide_html() -> str:
     <div class="tabs" id="doc-tabs"></div>
 
     <section class="panel">
-      <h2 id="doc-title"></h2>
-      <div class="filename" id="doc-file"></div>
-      <article class="markdown" id="doc-content"></article>
+      <h2 id="doc-title">__MCP_DOC_TITLE__</h2>
+      <div class="filename" id="doc-file">__MCP_DOC_FILE__</div>
+      <article class="markdown" id="doc-content">__MCP_DOC_HTML__</article>
     </section>
   </div>
 
@@ -2457,7 +2548,12 @@ def _build_mcp_guide_html() -> str:
   </script>
 </body>
 </html>"""
-    return html.replace("__MCP_DOCS_JSON__", docs_json)
+    return (
+        html.replace("__MCP_DOCS_JSON__", docs_json)
+        .replace("__MCP_DOC_TITLE__", _escape(_first_doc["title"]))
+        .replace("__MCP_DOC_FILE__", _escape(_first_doc["filename"]))
+        .replace("__MCP_DOC_HTML__", doc_html)
+    )
 
 
 # ---------------------------------------------------------------------------

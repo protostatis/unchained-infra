@@ -219,6 +219,10 @@ services:
       - TRIAL_AGENT_ID=${TRIAL_AGENT_ID:-}
       - HEADLESS_API_KEY=${HEADLESS_API_KEY:-}
       - PROVIDER_KEY_SALT=${PROVIDER_KEY_SALT:-}
+      # Search discovery. Both optional: unset means /BingSiteAuth.xml 404s and
+      # IndexNow stays disabled, which is the correct unverified state.
+      - BING_SITE_AUTH_GUID=${BING_SITE_AUTH_GUID:-}
+      - INDEXNOW_KEY=${INDEXNOW_KEY:-}
       - FACEBOOK_APP_ID=${FACEBOOK_APP_ID:-}
       - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET:-}
       - FACEBOOK_OAUTH_DIALOG_URL=${FACEBOOK_OAUTH_DIALOG_URL:-}

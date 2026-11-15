@@ -35,6 +35,7 @@ COPY unchained/overlay_js.py .
 COPY unchained/cdp_tool_packaged.py .
 COPY unchained/analytics.py .
 COPY unchained/published_results.py .
+COPY unchained/indexnow.py .
 COPY unchained/provision_helpers.py .
 COPY unchained/template_utils.py .
 COPY unchained/agent_package.py .
@@ -77,6 +78,7 @@ RUN pip install --no-cache-dir \
     "cryptography>=42.0" \
     "boto3>=1.34,<2.0" \
     "pypdf>=4.0" \
+    "markdown-it-py>=3.0" \
     "pyunbrowser==0.0.21"
 
 # Rhythm — event-driven SPA automation (copied by deploy.sh when available)

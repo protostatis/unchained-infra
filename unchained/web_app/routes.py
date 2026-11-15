@@ -22,6 +22,8 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/og-image.png", "handle_og_image"),
     ("GET", "/robots.txt", "handle_robots_txt"),
     ("GET", "/sitemap.xml", "handle_sitemap_xml"),
+    ("GET", "/BingSiteAuth.xml", "handle_bing_site_auth"),
+    ("GET", "/{indexnow_key}.txt", "handle_indexnow_key"),
     ("GET", "/google83c650022d8db556.html", "handle_google_verification"),
     (
         "GET",
