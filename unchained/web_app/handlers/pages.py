@@ -710,6 +710,17 @@ async def handle_use_case_price_tracking(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_guide_scheduled_browser_tasks(request: web.Request) -> web.Response:
+    """Serve the scheduled-browser-task guide (public, no auth)."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.GUIDE_SCHEDULED_BROWSER_TASKS_HTML.replace(
+        "__CONTACT_EMAIL__", core.CONTACT_EMAIL
+    )
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
 async def handle_published_result(request: web.Request) -> web.Response:
     """Serve a published result page (public, no auth)."""
     import re as _re

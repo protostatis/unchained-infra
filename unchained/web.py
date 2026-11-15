@@ -56,6 +56,7 @@ from web_app.templates import (
     USE_CASE_FLIGHTS_HTML,
     USE_CASE_COMPETITOR_HTML,
     USE_CASE_PRICE_TRACKING_HTML,
+    GUIDE_SCHEDULED_BROWSER_TASKS_HTML,
     PUBLISHED_RESULT_HTML,
     CHAT_CLAUDE_SDK_HTML,
     CHAT_CODEX_HTML,
@@ -1827,6 +1828,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/mcp", "0.7", "monthly"),
         ("https://unchainedsky.com/mcp-guide", "0.7", "monthly"),
         ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
+        ("https://unchainedsky.com/guides/scheduled-browser-tasks", "0.7", "monthly"),
         ("https://unchainedsky.com/privacy", "0.3", "yearly"),
     ]
     # Append published result pages

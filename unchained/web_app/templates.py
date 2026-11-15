@@ -7356,7 +7356,7 @@ a:hover{text-decoration:underline}
   text-align:center;padding:0 24px 48px;
   color:var(--muted);font-size:12px;letter-spacing:1px;
 }
-.footer-links{display:flex;gap:24px;justify-content:center;margin-bottom:16px}
+.footer-links{display:flex;flex-wrap:wrap;gap:24px;justify-content:center;margin-bottom:16px}
 .footer-links a{color:var(--muted);text-decoration:none;font-size:13px;letter-spacing:0.5px;transition:color 0.15s}
 .footer-links a:hover{color:var(--accent)}
 
@@ -7871,7 +7871,7 @@ a:hover{text-decoration:underline}
   text-align:center;padding:0 24px 48px;
   color:var(--muted);font-size:12px;letter-spacing:1px;
 }
-.footer-links{display:flex;gap:24px;justify-content:center;margin-bottom:16px}
+.footer-links{display:flex;flex-wrap:wrap;gap:24px;justify-content:center;margin-bottom:16px}
 .footer-links a{color:var(--muted);text-decoration:none;font-size:13px;letter-spacing:0.5px;transition:color 0.15s}
 .footer-links a:hover{color:var(--accent)}
 @media(max-width:640px){
@@ -7902,6 +7902,7 @@ _USE_CASE_FOOTER = r"""
     <a href="/use/competitor-monitoring">Competitors</a>
     <a href="/use/price-tracking">Prices</a>
     <a href="/case-study/zillow-rental">Case Study</a>
+    <a href="/guides/scheduled-browser-tasks">Scheduling</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -8220,6 +8221,10 @@ USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
     <div class="callout-icon">&#128260;</div>
     <div class="callout-text">Set it and forget it. The agent runs on a schedule&mdash;no manual check-ins needed.</div>
   </div>
+  <div class="callout">
+    <div class="callout-icon">&#128295;</div>
+    <div class="callout-text">Want the actual commands? <a href="/guides/scheduled-browser-tasks">Schedule a recurring browser task</a> walks through the local scheduler end to end.</div>
+  </div>
 </div>
 
 """ + _use_case_footer()
@@ -8315,6 +8320,207 @@ USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
 </div>
 
 """ + _use_case_footer()
+
+
+# ---------------------------------------------------------------------------
+# Guide: Schedule a Recurring Browser Task
+# ---------------------------------------------------------------------------
+
+_GUIDE_CSS = r"""
+.prose{max-width:760px;margin:0 auto 8px;padding:0 4px;overflow-wrap:break-word}
+.prose p{font-size:15px;line-height:1.75;color:#b9b9c6;margin:0 0 14px}
+.prose ul,.prose ol{margin:0 0 16px 22px}
+.prose li{font-size:15px;line-height:1.7;color:#b9b9c6;margin:6px 0}
+.prose strong{color:var(--text);font-weight:600}
+pre{max-width:100%;margin:0 auto 18px;background:#0c0c13;border:1px solid #24242f;border-radius:12px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6}
+pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#dcdce6;background:none;border:0;padding:0}
+p code,li code,td code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.88em;background:#191922;border:1px solid #2a2a36;border-radius:5px;padding:1px 5px;color:#e8e8ec;overflow-wrap:break-word}
+table.fields{width:100%;max-width:760px;margin:0 auto 20px;border-collapse:collapse;table-layout:fixed;font-size:14px}
+table.fields th,table.fields td{border-bottom:1px solid #24242f;padding:10px 12px;text-align:left;vertical-align:top}
+table.fields th{color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+table.fields td{color:#b9b9c6;line-height:1.6;overflow-wrap:break-word}
+table.fields td:first-child{color:var(--text);width:38%}
+.note{max-width:760px;margin:0 auto 18px;padding:14px 16px;border-left:3px solid var(--accent);background:rgba(233,69,96,0.06);border-radius:0 10px 10px 0;font-size:14px;line-height:1.7;color:#c9c9d4;overflow-wrap:break-word}
+@media(max-width:640px){pre{font-size:12px}}
+"""
+
+
+GUIDE_SCHEDULED_BROWSER_TASKS_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule a Recurring Browser Task | Unchained</title>
+<meta name="description" content="Run a browser prompt on a schedule against your own Chrome session: write a jobs file, check next run times, then run it as a daemon.">
+<link rel="canonical" href="https://unchainedsky.com/guides/scheduled-browser-tasks">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://unchainedsky.com/guides/scheduled-browser-tasks">
+<meta property="og:title" content="Schedule a Recurring Browser Task | Unchained">
+<meta property="og:description" content="Write a jobs file, check next run times, then run a browser task as a daemon against your own Chrome session.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Schedule a Recurring Browser Task | Unchained">
+<meta name="twitter:description" content="Write a jobs file, check next run times, then run a browser task as a daemon against your own Chrome session.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HowTo","name":"Schedule a recurring browser task","description":"Run a browser prompt on a schedule against your own Chrome session using the local scheduler CLI that ships with Unchained.","step":[{"@type":"HowToStep","name":"Write the jobs file","text":"Generate a starter jobs file and describe which prompt runs on which schedule."},{"@type":"HowToStep","name":"Check the schedule","text":"Read the jobs file back to confirm the next run time for each job."},{"@type":"HowToStep","name":"Run it once by hand","text":"Trigger the job immediately so an ambiguous prompt fails now rather than at 7am."},{"@type":"HowToStep","name":"Run the daemon","text":"Poll for due jobs continuously, recording state beside the jobs file."}]}
+</script>
+<style>""" + _USE_CASE_CSS + _GUIDE_CSS + r"""</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>Schedule a <span>Recurring Browser Task</span></h1>
+  <p class="subtitle">A scheduled task is a prompt plus a time. Wire one up with the local scheduler that ships with Unchained&mdash;then let it run against the browser you are already signed in to.</p>
+  <div class="sample-disclosure">
+    Commands and output below come from the shipping scheduler CLI. The run steps assume an agent is already connected.
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Before you start</div>
+  <h2>Two things must already be true</h2>
+  <div class="prose">
+    <p>The scheduler does not open a browser itself. It sends a prompt to your running agent, which drives the Chrome session you already have. So:</p>
+    <ul>
+      <li>Your agent is installed and running, and reports a connected browser.</li>
+      <li>You have an API key (<code>uc_live_...</code>). The scheduler reads it from <code>UNCHAINED_API_KEY</code>.</li>
+    </ul>
+    <p>If either is missing, see <a href="/mcp-guide">the setup reference</a> first. Everything below is a no-op without them.</p>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Write the jobs file</h2>
+  <div class="prose">
+    <p>Start from the example rather than a blank file. The schema is small, but the schedule keys are easy to get subtly wrong:</p>
+  </div>
+  <pre><code>unchained-scheduled init-example
+# Wrote example jobs file: scheduled_jobs.json</code></pre>
+  <div class="prose">
+    <p>Then replace the jobs with your own. Three schedule shapes are supported: a wall-clock time each day, an interval, or a single timestamp.</p>
+  </div>
+  <pre><code>{
+  "jobs": [
+    {
+      "id": "competitor-scan",
+      "prompt": "Check Westlake, Skin Laundry, and Ever Clinic for price changes.",
+      "schedule": { "daily_at": "07:30" },
+      "use_stable_session": true,
+      "timeout_seconds": 300,
+      "retry_seconds": 600
+    },
+    {
+      "id": "status-watch",
+      "prompt": "Open the status page and report any active incidents.",
+      "schedule": { "every_minutes": 60 }
+    },
+    {
+      "id": "one-off-export",
+      "prompt": "Export last week's report as CSV and confirm where it saved.",
+      "schedule": { "at": "2026-12-01T18:00:00Z" },
+      "enabled": false
+    }
+  ]
+}</code></pre>
+  <table class="fields">
+    <tr><th>Field</th><th>What it does</th></tr>
+    <tr><td><code>prompt</code></td><td>The instruction handed to the agent. Write it the way you would type it into the chat, including which sites to open.</td></tr>
+    <tr><td><code>schedule.daily_at</code></td><td>Local wall-clock time, <code>HH:MM</code>. Runs once per day.</td></tr>
+    <tr><td><code>schedule.every_minutes</code></td><td>Fixed interval in minutes from the previous run.</td></tr>
+    <tr><td><code>schedule.at</code></td><td>One ISO-8601 UTC timestamp. Pair with <code>enabled: false</code> until you mean it.</td></tr>
+    <tr><td><code>use_stable_session</code></td><td>Reuses one conversation across runs, keyed to the job id, so the agent keeps its context instead of starting cold each time.</td></tr>
+    <tr><td><code>timeout_seconds</code></td><td>Give up on a single run after this long. Default 180.</td></tr>
+    <tr><td><code>retry_seconds</code></td><td>Back off this long after a failed run.</td></tr>
+    <tr><td><code>enabled</code></td><td>Set <code>false</code> to keep a job in the file but stop it running.</td></tr>
+  </table>
+  <div class="note">Write the prompt for a reader who was not there. &ldquo;Check the usual pages&rdquo; fails silently; naming the sites and the fields makes a failed run obvious instead of plausible.</div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Read it back before trusting it</h2>
+  <div class="prose">
+    <p><code>list</code> parses the file, initialises any missing state, and prints the next run time for each job. This is where a typo in a schedule key shows up as a job that never runs:</p>
+  </div>
+  <pre><code>UNCHAINED_API_KEY=uc_live_... unchained-scheduled list
+
+job_id                   enabled next_run_utc             last_status runs
+competitor-scan          True    2026-11-16T07:30:00Z     -              0
+status-watch             True    2026-11-15T14:00:00Z     -              0
+one-off-export           False   -                        -              0</code></pre>
+  <div class="prose">
+    <p>A dash under <code>next_run_utc</code> means the job is disabled or its schedule could not be read. Fix that before continuing.</p>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Run it once by hand</h2>
+  <div class="prose">
+    <p>Do not hand an unrehearsed prompt to a schedule. <code>run-due</code> triggers every job that is currently due and prints one line per job:</p>
+  </div>
+  <pre><code>UNCHAINED_API_KEY=uc_live_... unchained-scheduled run-due
+
+[OK] competitor-scan: <em>detail from the run</em>
+[OK] status-watch: <em>detail from the run</em></code></pre>
+  <div class="prose">
+    <p>If nothing is due yet it prints <code>No jobs due.</code> rather than running early. To rehearse immediately, set <code>"at"</code> to a minute from now on a temporary copy of the job.</p>
+    <p>This is the step that earns the schedule. A prompt that returns a vague briefing is obvious when you are watching it and invisible when it lands in a log at 7am.</p>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128269;</div>
+    <div class="callout-text">Rehearse once, read the output properly, then schedule it. The failure you catch here is the one you never see later.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 4</div>
+  <h2>Let it run</h2>
+  <div class="prose">
+    <p>The daemon polls for due jobs on an interval and keeps going:</p>
+  </div>
+  <pre><code>UNCHAINED_API_KEY=uc_live_... unchained-scheduled daemon --poll-seconds 60</code></pre>
+  <div class="prose">
+    <p>State lives next to the jobs file&mdash;<code>scheduled_jobs.state.json</code> for <code>scheduled_jobs.json</code>&mdash;and records the next run, the last status, the last error, and a run count. Delete the state file to force a job to re-initialise from scratch.</p>
+    <p>Keep the daemon alive the same way you keep anything else alive on the machine: a <code>launchd</code> agent on macOS, a <code>systemd</code> unit on Linux, or a terminal multiplexer if you only need it while you work.</p>
+  </div>
+  <table class="fields">
+    <tr><th>Flag</th><th>Default</th></tr>
+    <tr><td><code>--jobs</code></td><td><code>scheduled_jobs.json</code></td></tr>
+    <tr><td><code>--state</code></td><td>Derived from the jobs filename</td></tr>
+    <tr><td><code>--api-url</code></td><td><code>UNCHAINED_API_URL</code></td></tr>
+    <tr><td><code>--api-key</code></td><td><code>UNCHAINED_API_KEY</code></td></tr>
+    <tr><td><code>--poll-seconds</code></td><td>30</td></tr>
+  </table>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Limits</div>
+  <h2>What this is not</h2>
+  <div class="prose">
+    <ul>
+      <li><strong>Not a cloud scheduler.</strong> Jobs run where the agent runs. If the machine sleeps or the agent disconnects, the job fails and retries on <code>retry_seconds</code>.</li>
+      <li><strong>Not a headless fleet.</strong> Jobs drive the browser you are signed in to. That is the point&mdash;it is the only way to read a page behind a login&mdash;but it also means a job can collide with you using that machine.</li>
+      <li><strong>Not a session keeper.</strong> If a login expires, the run fails. It does not quietly return last week&rsquo;s numbers and call it a success.</li>
+      <li><strong>Not unattended for 2FA.</strong> A run that trips a challenge needs a human at the browser, so schedule those tasks when someone can answer.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="cta-section">
+  <h2>Next</h2>
+  <p>Schedule something you already do by hand every Monday.</p>
+  <div class="cta-buttons">
+    <a class="cta-btn primary" href="/use/competitor-monitoring">Competitor monitoring</a>
+    <a class="cta-btn secondary" href="/mcp-guide">Read the MCP setup reference</a>
+  </div>
+</div>
+
+""" + _use_case_footer(demo_label="See a Live Run")
 
 
 # ---------------------------------------------------------------------------

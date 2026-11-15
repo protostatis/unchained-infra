@@ -45,3 +45,7 @@ rhythm/
 
 # Deployment runtime lock
 .deploy.lock
+
+# Local scheduler runtime state (scheduled_tasks.py)
+unchained/scheduled_jobs.state.json
+*/*.jobs.state.json

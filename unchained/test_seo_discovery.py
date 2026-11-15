@@ -392,6 +392,67 @@ class TestPublishedResultRobotsDirective(unittest.IsolatedAsyncioTestCase):
         self.assertIn('<meta name="robots" content="noindex,follow">', body)
 
 
+class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
+    """The guide is only worth publishing if it is reachable and self-contained."""
+
+    async def asyncSetUp(self):
+        app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    def test_route_is_registered(self):
+        self.assertIn(
+            (
+                "GET",
+                "/guides/scheduled-browser-tasks",
+                "web_app.handlers.pages:handle_guide_scheduled_browser_tasks",
+            ),
+            ROUTE_SPECS,
+        )
+
+    def test_guide_is_in_the_sitemap(self):
+        sitemap = asyncio.run(web.handle_sitemap_xml(None)).text
+        self.assertIn(
+            "https://unchainedsky.com/guides/scheduled-browser-tasks", sitemap
+        )
+
+    async def test_guide_serves_with_contact_email_substituted(self):
+        response = await self.client.get("/guides/scheduled-browser-tasks")
+        self.assertEqual(response.status, 200)
+        body = await response.text()
+        self.assertNotIn("__CONTACT_EMAIL__", body)
+        self.assertIn(
+            '<link rel="canonical" href="https://unchainedsky.com/guides/scheduled-browser-tasks">',
+            body,
+        )
+
+    def test_guide_documents_the_shipping_cli(self):
+        # The page claims reproducibility, so its commands must be the real
+        # subcommands of scheduled_tasks.py rather than illustrative ones.
+        import scheduled_tasks
+
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        for command in ("init-example", "list", "run-due", "daemon"):
+            with self.subTest(command=command):
+                self.assertIn(f"unchained-scheduled {command}", page)
+        # Every documented schedule key must be one the loader understands.
+        for key in ("daily_at", "every_minutes", "at", "use_stable_session"):
+            with self.subTest(key=key):
+                self.assertIn(key, page)
+        self.assertTrue(hasattr(scheduled_tasks, "main"))
+
+    def test_guide_links_to_related_pages(self):
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        for href in ("/mcp-guide", "/use/competitor-monitoring"):
+            with self.subTest(href=href):
+                self.assertIn(f'href="{href}"', page)
+
+
 class TestDiscoveryRoutesHttp(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The IndexNow key route is registered at app creation, so the key must
