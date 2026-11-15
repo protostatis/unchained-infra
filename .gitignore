@@ -46,6 +46,6 @@ rhythm/
 # Deployment runtime lock
 .deploy.lock
 
-# Local scheduler runtime state (scheduled_tasks.py)
-unchained/scheduled_jobs.state.json
-*/*.jobs.state.json
+# Local scheduler runtime state written next to a jobs file by
+# scheduled_tasks.py (<jobs-stem>.state.json). Never commit it.
+unchained/*.state.json

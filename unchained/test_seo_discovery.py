@@ -12,6 +12,8 @@ import html as html_module
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +25,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import indexnow
 import published_results
+import scheduled_tasks
 import web
 from web_routes import ROUTE_SPECS
 
@@ -415,10 +418,11 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
             ROUTE_SPECS,
         )
 
-    def test_guide_is_in_the_sitemap(self):
-        sitemap = asyncio.run(web.handle_sitemap_xml(None)).text
+    async def test_guide_is_in_the_sitemap(self):
+        response = await web.handle_sitemap_xml(None)
         self.assertIn(
-            "https://unchainedsky.com/guides/scheduled-browser-tasks", sitemap
+            "https://unchainedsky.com/guides/scheduled-browser-tasks",
+            response.text,
         )
 
     async def test_guide_serves_with_contact_email_substituted(self):
@@ -434,8 +438,6 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
     def test_guide_documents_the_shipping_cli(self):
         # The page claims reproducibility, so its commands must be the real
         # subcommands of scheduled_tasks.py rather than illustrative ones.
-        import scheduled_tasks
-
         page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
         for command in ("init-example", "list", "run-due", "daemon"):
             with self.subTest(command=command):
@@ -444,7 +446,32 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
         for key in ("daily_at", "every_minutes", "every_seconds", "at", "use_stable_session"):
             with self.subTest(key=key):
                 self.assertIn(key, page)
-        self.assertTrue(hasattr(scheduled_tasks, "main"))
+
+    def test_documented_subcommands_exist_in_the_real_cli(self):
+        # Ask the CLI itself rather than trusting the page's own strings.
+        module_path = Path(scheduled_tasks.__file__)
+        help_text = subprocess.run(
+            [sys.executable, str(module_path), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+        self.assertIn("usage:", help_text)
+        for command in ("init-example", "list", "run-due", "daemon"):
+            with self.subTest(command=command):
+                self.assertIn(command, help_text)
+
+    def test_console_script_entrypoint_is_wired(self):
+        pyproject = (Path(scheduled_tasks.__file__).parent / "pyproject.toml").read_text()
+        self.assertIn('unchained-scheduled = "scheduled_tasks:main"', pyproject)
+
+    def test_documented_timeout_default_matches_the_cli(self):
+        # The page states "Default 180"; that must track the dataclass, not
+        # a number someone typed once.
+        default = scheduled_tasks.ScheduledJob.__dataclass_fields__[
+            "timeout_seconds"
+        ].default
+        self.assertIn(f"Default {default}", web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML)
 
     def test_guide_states_schedules_are_utc(self):
         # daily_at is interpreted as UTC by scheduled_tasks.py; a page that
