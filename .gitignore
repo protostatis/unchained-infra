@@ -45,3 +45,10 @@ rhythm/
 
 # Deployment runtime lock
 .deploy.lock
+
+# Local scheduler runtime files for the two places the CLI is normally run
+# from in this repo: the root and unchained/. A jobs file created elsewhere is
+# the user's to ignore. Never commit either file.
+/scheduled_jobs.json
+/scheduled_jobs.state.json
+unchained/*.state.json

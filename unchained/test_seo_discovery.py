@@ -12,6 +12,8 @@ import html as html_module
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +25,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import indexnow
 import published_results
+import scheduled_tasks
 import web
 from web_routes import ROUTE_SPECS
 
@@ -390,6 +393,123 @@ class TestPublishedResultRobotsDirective(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         body = await response.text()
         self.assertIn('<meta name="robots" content="noindex,follow">', body)
+
+
+class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
+    """The guide is only worth publishing if it is reachable and self-contained."""
+
+    async def asyncSetUp(self):
+        app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    def test_route_is_registered(self):
+        self.assertIn(
+            (
+                "GET",
+                "/guides/scheduled-browser-tasks",
+                "web_app.handlers.pages:handle_guide_scheduled_browser_tasks",
+            ),
+            ROUTE_SPECS,
+        )
+
+    async def test_guide_is_in_the_sitemap(self):
+        response = await web.handle_sitemap_xml(None)
+        self.assertIn(
+            "https://unchainedsky.com/guides/scheduled-browser-tasks",
+            response.text,
+        )
+
+    async def test_guide_serves_with_contact_email_substituted(self):
+        response = await self.client.get("/guides/scheduled-browser-tasks")
+        self.assertEqual(response.status, 200)
+        body = await response.text()
+        self.assertNotIn("__CONTACT_EMAIL__", body)
+        self.assertIn(
+            '<link rel="canonical" href="https://unchainedsky.com/guides/scheduled-browser-tasks">',
+            body,
+        )
+
+    def test_guide_documents_the_shipping_cli(self):
+        # The page claims reproducibility, so its commands must be the real
+        # subcommands of scheduled_tasks.py rather than illustrative ones.
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        for command in ("init-example", "list", "run-due", "daemon"):
+            with self.subTest(command=command):
+                self.assertIn(f"unchained-scheduled {command}", page)
+        # Every documented schedule key must be one the loader understands.
+        for key in ("daily_at", "every_minutes", "every_seconds", "at", "use_stable_session"):
+            with self.subTest(key=key):
+                self.assertIn(key, page)
+        # ...and every flag the flags table promises.
+        for flag in ("--jobs", "--state", "--api-url", "--api-key", "--poll-seconds"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, page)
+
+    def test_documented_subcommands_exist_in_the_real_cli(self):
+        # Ask the CLI itself rather than trusting the page's own strings.
+        module_path = Path(scheduled_tasks.__file__)
+        help_text = subprocess.run(
+            [sys.executable, str(module_path), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+        self.assertIn("usage:", help_text)
+        for command in ("init-example", "list", "run-due", "daemon"):
+            with self.subTest(command=command):
+                self.assertIn(command, help_text)
+        for flag in ("--jobs", "--state", "--api-url", "--api-key"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, help_text)
+        # Subcommand-level flags live in their own help, not the top level.
+        daemon_help = subprocess.run(
+            [sys.executable, str(module_path), "daemon", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+        self.assertIn("--poll-seconds", daemon_help)
+
+    def test_console_script_entrypoint_is_wired(self):
+        pyproject = (Path(scheduled_tasks.__file__).parent / "pyproject.toml").read_text()
+        self.assertIn('unchained-scheduled = "scheduled_tasks:main"', pyproject)
+
+    def test_documented_timeout_default_matches_the_cli(self):
+        # The page states "Default 180"; that must track the dataclass, not
+        # a number someone typed once.
+        default = scheduled_tasks.ScheduledJob.__dataclass_fields__[
+            "timeout_seconds"
+        ].default
+        self.assertIn(f"Default {default}", web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML)
+
+    def test_guide_states_schedules_are_utc(self):
+        # daily_at is interpreted as UTC by scheduled_tasks.py; a page that
+        # says "local" would send users to the wrong hour. Assert the claim is
+        # attached to the daily_at row, not merely present somewhere on a page
+        # that also mentions UTC timestamps for `at`.
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        self.assertRegex(
+            page,
+            r"<code>schedule\.daily_at</code></td><td><strong>UTC</strong>",
+        )
+        for wrong in ("Local wall-clock", "local wall-clock"):
+            with self.subTest(wrong=wrong):
+                self.assertNotIn(wrong, page)
+        # The corrective sentence is allowed to name local time; nothing may
+        # claim daily_at *is* local.
+        self.assertNotIn("local time, <code>HH:MM</code>", page)
+
+    def test_guide_links_to_related_pages(self):
+        page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
+        for href in ("/mcp-guide", "/use/competitor-monitoring"):
+            with self.subTest(href=href):
+                self.assertIn(f'href="{href}"', page)
 
 
 class TestDiscoveryRoutesHttp(unittest.IsolatedAsyncioTestCase):

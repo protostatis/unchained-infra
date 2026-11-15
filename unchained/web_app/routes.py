@@ -118,6 +118,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/use/flight-comparison", "web_app.handlers.pages:handle_use_case_flights"),
     ("GET", "/use/competitor-monitoring", "web_app.handlers.pages:handle_use_case_competitor"),
     ("GET", "/use/price-tracking", "web_app.handlers.pages:handle_use_case_price_tracking"),
+    (
+        "GET",
+        "/guides/scheduled-browser-tasks",
+        "web_app.handlers.pages:handle_guide_scheduled_browser_tasks",
+    ),
     ("GET", "/labs/research-desk", "web_app.handlers.pages:handle_research_desk_page"),
     ("GET", "/labs/you-navigate", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
     ("GET", "/labs/x-manager", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
