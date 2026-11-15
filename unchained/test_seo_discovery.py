@@ -47,11 +47,30 @@ class TestDiscoveryRoutesAreRegistered(unittest.TestCase):
             ROUTE_SPECS,
         )
 
-    def test_indexnow_key_route_is_registered(self):
-        self.assertIn(
-            ("GET", "/{indexnow_key}.txt", "handle_indexnow_key"),
-            ROUTE_SPECS,
+    def test_no_txt_wildcard_route_is_registered(self):
+        # A /{key}.txt wildcard would capture /security.txt, /ads.txt and any
+        # future root-level text resource. The key is registered literally.
+        paths = [spec[1] for spec in ROUTE_SPECS]
+        self.assertNotIn("/{indexnow_key}.txt", paths)
+        self.assertFalse(
+            [p for p in paths if p.endswith(".txt}")], f"wildcard txt route: {paths}"
         )
+
+    def test_configured_key_registers_a_literal_route(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
+            app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        paths = {r.get_info().get("path") for r in app.router.resources()}
+        self.assertIn(f"/{_INDEXNOW_KEY}.txt", paths)
+
+    def test_unconfigured_key_registers_no_route(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": ""}, clear=False):
+            app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        paths = {r.get_info().get("path") for r in app.router.resources()}
+        self.assertFalse([p for p in paths if p and p.endswith(".txt") and "robots" not in p])
 
 
 class TestIndexNowKeyResolution(unittest.TestCase):
@@ -75,14 +94,35 @@ class TestIndexNowKeyResolution(unittest.TestCase):
             self.assertEqual(indexnow.key_file_path(), f"/{_INDEXNOW_KEY}.txt")
             self.assertEqual(indexnow.key_file_body(), _INDEXNOW_KEY)
 
-    def test_submission_filters_non_https_urls(self):
+    def test_submission_rejects_urls_outside_our_host(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
+            with patch("httpx.post", return_value=type("R", (), {"status_code": 200, "text": ""})()) as post:
+                result = indexnow.submit_urls(
+                    [
+                        "https://evil.example/r/x",
+                        "https://unchainedsky.com.evil.example/r/x",
+                        "http://unchainedsky.com/r/x",
+                        "https://unchainedsky.com/r/ok",
+                    ]
+                )
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            post.call_args.kwargs["json"]["urlList"],
+            ["https://unchainedsky.com/r/ok"],
+        )
+
+    def test_submission_with_only_foreign_urls_is_a_noop(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
+            with patch("httpx.post") as post:
+                result = indexnow.submit_urls(["https://evil.example/r/x"])
+        self.assertFalse(result["submitted"])
+        self.assertEqual(result["reason"], "no-urls")
+        post.assert_not_called()
+
+    def test_submission_failure_is_non_raising(self):
         with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
             with patch("httpx.post", side_effect=RuntimeError("network down")):
-                result = indexnow.submit_urls(
-                    ["http://insecure.example", "https://unchainedsky.com/desktop"]
-                )
-        # httpx.post is patched to raise, so this exercises the failure path
-        # rather than the URL filter; both must stay non-raising.
+                result = indexnow.submit_urls(["https://unchainedsky.com/desktop"])
         self.assertFalse(result["submitted"])
         self.assertEqual(result["reason"], "error")
 
@@ -249,6 +289,24 @@ class TestApprovalPushesIndexableUrls(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome["body"]["approved"])
         outcome["submit"].assert_not_called()
 
+    async def test_approval_does_not_inflate_the_view_count(self):
+        # The IndexNow filter must not read the page through get_result(), which
+        # records a page view as a side effect.
+        slug = self._pending("Compare public launch options", repeats=80)
+        with patch.object(
+            published_results, "get_result", side_effect=AssertionError("counted a view")
+        ):
+            outcome = await self._approve(slug)
+        self.assertTrue(outcome["body"]["approved"])
+        conn = sqlite3.connect(self.db_path)
+        try:
+            views = conn.execute(
+                "SELECT view_count FROM published_results WHERE slug = ?", (slug,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(views, 0)
+
 
 class TestPublishedResultRobotsDirective(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -303,6 +361,12 @@ class TestPublishedResultRobotsDirective(unittest.IsolatedAsyncioTestCase):
 
 class TestDiscoveryRoutesHttp(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # The IndexNow key route is registered at app creation, so the key must
+        # be present before create_app() for these requests to reach it.
+        self._env = patch.dict(
+            os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False
+        )
+        self._env.start()
         app = web.create_app()
         app.on_startup.clear()
         app.on_cleanup.clear()
@@ -311,9 +375,18 @@ class TestDiscoveryRoutesHttp(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.client.close()
+        self._env.stop()
+
+    async def _client_without_key(self):
+        with patch.dict(os.environ, {"INDEXNOW_KEY": ""}, clear=False):
+            app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        return client
 
     async def test_existing_discovery_routes_still_win(self):
-        # The /{indexnow_key}.txt pattern must not shadow real resources.
         robots = await self.client.get("/robots.txt")
         self.assertEqual(robots.status, 200)
         self.assertIn("Sitemap: https://unchainedsky.com/sitemap.xml", await robots.text())
@@ -321,42 +394,53 @@ class TestDiscoveryRoutesHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sitemap.status, 200)
         self.assertIn("<urlset", await sitemap.text())
 
+    async def test_other_txt_resources_are_not_captured(self):
+        # No wildcard route exists, so these are plain 404s and adding a real
+        # /security.txt later cannot be shadowed.
+        for path in ("/security.txt", "/ads.txt", "/humans.txt"):
+            with self.subTest(path=path):
+                response = await self.client.get(path)
+                self.assertEqual(response.status, 404)
+
     async def test_bing_file_is_absent_until_configured(self):
         with patch.dict(os.environ, {"BING_SITE_AUTH_GUID": ""}, clear=False):
             response = await self.client.get(_BING_PATH)
         self.assertEqual(response.status, 404)
 
-    async def test_bing_file_serves_configured_guid(self):
-        guid = "11111111-2222-3333-4444-555555555555"
-        with patch.dict(os.environ, {"BING_SITE_AUTH_GUID": guid}, clear=False):
+    async def test_bing_file_serves_configured_token(self):
+        token = "11111111-2222-3333-4444-555555555555"
+        with patch.dict(os.environ, {"BING_SITE_AUTH_GUID": token}, clear=False):
             response = await self.client.get(_BING_PATH)
             body = await response.text()
         self.assertEqual(response.status, 200)
-        self.assertIn(f"<user>{guid}</user>", body)
+        self.assertIn(f"<user>{token}</user>", body)
         self.assertEqual(response.headers["Cache-Control"], "public, max-age=86400")
 
-    async def test_bing_file_refuses_non_guid_configuration(self):
-        with patch.dict(
-            os.environ, {"BING_SITE_AUTH_GUID": "</user><oops>"}, clear=False
-        ):
-            response = await self.client.get(_BING_PATH)
-        self.assertEqual(response.status, 404)
+    async def test_bing_file_refuses_values_unsafe_for_xml(self):
+        for bad in ("</user><oops>", "abc", "-", "a b", "a" * 65):
+            with self.subTest(value=bad):
+                with patch.dict(
+                    os.environ, {"BING_SITE_AUTH_GUID": bad}, clear=False
+                ):
+                    response = await self.client.get(_BING_PATH)
+                self.assertEqual(response.status, 404)
 
     async def test_indexnow_key_file_serves_configured_key(self):
-        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
-            response = await self.client.get(f"/{_INDEXNOW_KEY}.txt")
-            body = await response.text()
+        response = await self.client.get(f"/{_INDEXNOW_KEY}.txt")
+        body = await response.text()
         self.assertEqual(response.status, 200)
         self.assertEqual(body, _INDEXNOW_KEY)
 
     async def test_indexnow_key_file_rejects_wrong_key(self):
-        with patch.dict(os.environ, {"INDEXNOW_KEY": _INDEXNOW_KEY}, clear=False):
-            response = await self.client.get("/ffffffffffffffffffffffffffffffff.txt")
+        response = await self.client.get("/ffffffffffffffffffffffffffffffff.txt")
         self.assertEqual(response.status, 404)
 
     async def test_indexnow_key_file_is_absent_when_unconfigured(self):
-        with patch.dict(os.environ, {"INDEXNOW_KEY": ""}, clear=False):
-            response = await self.client.get("/sitemap.txt")
+        client = await self._client_without_key()
+        try:
+            response = await client.get(f"/{_INDEXNOW_KEY}.txt")
+        finally:
+            await client.close()
         self.assertEqual(response.status, 404)
 
 

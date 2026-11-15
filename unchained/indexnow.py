@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +60,20 @@ def text_resource_path_to_url(path: str) -> str:
     return f"https://{HOST}/{path.lstrip('/')}"
 
 
+def _is_own_url(url: object) -> bool:
+    """True only for an https URL whose host is exactly HOST."""
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and parsed.netloc == HOST
+
+
 def submit_urls(urls: list[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> dict:
     """Submit absolute URLs to IndexNow.
+
+    Only URLs on our own host are accepted. The key proves ownership of one
+    host, so submitting anyone else's URL would at best be rejected and at
+    worst look like abuse on our behalf.
 
     Never raises: a failed submission must not break the request that
     triggered it. Returns a small result dict for logging and tests.
@@ -69,7 +82,10 @@ def submit_urls(urls: list[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -
     if not key:
         return {"submitted": False, "reason": "unconfigured", "count": 0}
 
-    cleaned = [u for u in urls if isinstance(u, str) and u.startswith("https://")]
+    cleaned = [u for u in urls if _is_own_url(u)]
+    rejected = len([u for u in urls if isinstance(u, str)]) - len(cleaned)
+    if rejected:
+        log.warning("IndexNow: dropped %d URL(s) outside %s", rejected, HOST)
     if not cleaned:
         return {"submitted": False, "reason": "no-urls", "count": 0}
 

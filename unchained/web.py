@@ -1870,15 +1870,16 @@ async def handle_bing_site_auth(request: web.Request) -> web.Response:
     is not verified.
     """
     del request
-    guid = os.environ.get("BING_SITE_AUTH_GUID", "").strip()
-    # The token is written straight into XML: refuse anything that is not a
-    # plain GUID-shaped value rather than trying to escape it.
-    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", guid):
+    token = os.environ.get("BING_SITE_AUTH_GUID", "").strip()
+    # The token is written straight into XML, so it is validated as a plain
+    # identifier rather than escaped: starts alphanumeric, 8-64 chars of
+    # [A-Za-z0-9-]. Bing's own token is a 36-char GUID, which this accepts.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{7,63}", token):
         raise web.HTTPNotFound()
     body = (
         '<?xml version="1.0"?>\n'
         "<users>\n"
-        f"  <user>{guid}</user>\n"
+        f"  <user>{token}</user>\n"
         "</users>\n"
     )
     return web.Response(
@@ -1891,15 +1892,15 @@ async def handle_bing_site_auth(request: web.Request) -> web.Response:
 async def handle_indexnow_key(request: web.Request) -> web.Response:
     """GET /<key>.txt — IndexNow key ownership proof.
 
-    IndexNow fetches this path and compares the body to the submitted key.
-    Any other ``*.txt`` path falls through to a 404 rather than being served
-    as a key, so this route cannot shadow real text resources.
+    Registered as a literal path only when INDEXNOW_KEY is configured, so no
+    dynamic /{...}.txt route exists to capture /security.txt, /ads.txt or any
+    other root-level text resource now or later.
     """
+    del request
     import indexnow
 
     configured = indexnow.indexnow_key()
-    requested = request.match_info.get("indexnow_key", "")
-    if not configured or requested != configured:
+    if not configured:
         raise web.HTTPNotFound()
     return web.Response(
         text=indexnow.key_file_body(),
@@ -2626,6 +2627,16 @@ def _register_routes(app: web.Application):
         include_dev_auth=not GOOGLE_CLIENT_ID,
         dev_auth_handler=handle_dev_auth,
     )
+    # IndexNow proves key ownership by fetching /<key>.txt. Registering the
+    # literal key path (rather than a /{key}.txt wildcard) keeps every other
+    # root-level text resource — /security.txt, /ads.txt — out of reach of a
+    # catch-all that would 404 them. No key configured, no route: that is the
+    # correct "not verified" state.
+    import indexnow
+
+    indexnow_key = indexnow.indexnow_key()
+    if indexnow_key:
+        app.router.add_get(f"/{indexnow_key}.txt", handle_indexnow_key)
 
 
 # ---------------------------------------------------------------------------

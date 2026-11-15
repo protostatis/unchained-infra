@@ -501,6 +501,29 @@ def publish_result(
             conn.close()
 
 
+def get_index_metadata(slug: str) -> dict | None:
+    """Read an approved result's query/text without recording a page view.
+
+    ``get_result`` increments ``view_count`` because every call is a real page
+    view. The IndexNow filter is not a visit, so it must not inflate that
+    counter — otherwise approving a page looks like traffic.
+    """
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                """SELECT slug, query, result_text
+                   FROM published_results
+                   WHERE slug = ? AND (status = 'approved' OR status IS NULL)""",
+                (slug,),
+            ).fetchone()
+            if not row:
+                return None
+            return {"slug": row[0], "query": row[1], "result_text": row[2]}
+        finally:
+            conn.close()
+
+
 def get_result(slug: str) -> dict | None:
     """Load an approved published result by slug. Returns dict or None."""
     with _lock:

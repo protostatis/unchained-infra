@@ -879,11 +879,11 @@ def _submit_approved_slugs(slugs: list[str]) -> None:
     """
     try:
         import indexnow
-        from published_results import _passes_index_gate, get_result
+        from published_results import _passes_index_gate, get_index_metadata
 
         urls = []
         for slug in slugs:
-            result = get_result(slug) or {}
+            result = get_index_metadata(slug) or {}
             if not _passes_index_gate(
                 str(result.get("query", "")), str(result.get("result_text", ""))
             ):
