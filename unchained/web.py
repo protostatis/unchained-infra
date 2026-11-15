@@ -2406,7 +2406,7 @@ def _build_mcp_guide_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MCP Docs | Unchained</title>
+  <title>MCP Browser Automation Docs: Local Chrome Setup | Unchained</title>
   <meta name="description" content="Connect AI agents to Unchained browser automation over MCP with local-browser setup and integration guidance.">
   <link rel="canonical" href="https://unchainedsky.com/mcp-guide">
   <meta property="og:type" content="website">

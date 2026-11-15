@@ -142,6 +142,15 @@ def _passes_quality_gate(query: str, result_text: str) -> bool:
 #   1. Thin output — too little substance to satisfy any query.
 #   2. Perishable output — answers bound to "today"/"tomorrow" are wrong
 #      within days and leave stale facts indexed as if evergreen.
+#
+# This is a conservative default for an automated pipeline, not a quality
+# judgement. Clearing the PII guard and the human publish review says a page
+# is safe to show; it says nothing about whether the page answers a search
+# worth ranking for. These thresholds are length and freshness proxies, so
+# long garbage can still pass them — treat a failure here as "review this
+# one", not as verified low quality. Note also that ``noindex`` is a crawl
+# directive, not a privacy control: it keeps a page out of results, and
+# anything that must stay private belongs behind auth.
 # ---------------------------------------------------------------------------
 
 _MIN_INDEX_CHARS = 900
