@@ -8364,7 +8364,7 @@ GUIDE_SCHEDULED_BROWSER_TASKS_HTML = r"""<!DOCTYPE html>
 <meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"HowTo","name":"Schedule a recurring browser task","description":"Run a browser prompt on a schedule against your own Chrome session using the local scheduler CLI that ships with Unchained.","step":[{"@type":"HowToStep","name":"Write the jobs file","text":"Generate a starter jobs file and describe which prompt runs on which schedule."},{"@type":"HowToStep","name":"Check the schedule","text":"Read the jobs file back to confirm the next run time for each job."},{"@type":"HowToStep","name":"Run it once by hand","text":"Trigger the job immediately so an ambiguous prompt fails now rather than at 7am."},{"@type":"HowToStep","name":"Run the daemon","text":"Poll for due jobs continuously, recording state beside the jobs file."}]}
+{"@context":"https://schema.org","@type":"HowTo","name":"Schedule a recurring browser task","description":"Run a browser prompt on a schedule against your own Chrome session using the local scheduler CLI that ships with Unchained.","step":[{"@type":"HowToStep","name":"Write the jobs file","text":"Generate a starter jobs file and describe which prompt runs on which schedule."},{"@type":"HowToStep","name":"Check the schedule","text":"Read the jobs file back to confirm the next run time for each job."},{"@type":"HowToStep","name":"Run it once by hand","text":"Trigger the job immediately so an ambiguous prompt fails now rather than at 7am."},{"@type":"HowToStep","name":"Run the daemon","text":"Poll for due jobs continuously and record run state in the scheduler's state file."}]}
 </script>
 <style>""" + _USE_CASE_CSS + _GUIDE_CSS + r"""</style>
 </head>
@@ -8492,7 +8492,7 @@ one-off-export           False   -                        -              0</code
   <table class="fields">
     <tr><th>Flag</th><th>Default</th></tr>
     <tr><td><code>--jobs</code></td><td><code>scheduled_jobs.json</code></td></tr>
-    <tr><td><code>--state</code></td><td>Derived from the jobs filename</td></tr>
+    <tr><td><code>--state</code></td><td><code>scheduled_jobs.state.json</code> in the working directory</td></tr>
     <tr><td><code>--api-url</code></td><td><code>UNCHAINED_API_URL</code></td></tr>
     <tr><td><code>--api-key</code></td><td><code>UNCHAINED_API_KEY</code></td></tr>
     <tr><td><code>--poll-seconds</code></td><td>30</td></tr>
@@ -8506,7 +8506,7 @@ one-off-export           False   -                        -              0</code
     <ul>
       <li><strong>Not a cloud scheduler.</strong> Jobs run where the agent runs. If the machine sleeps or the agent disconnects, the job fails and retries on <code>retry_seconds</code>.</li>
       <li><strong>Not a headless fleet.</strong> Jobs drive the browser you are signed in to. That is the point&mdash;it is the only way to read a page behind a login&mdash;but it also means a job can collide with you using that machine.</li>
-      <li><strong>Not a session keeper.</strong> If a login expires, the run fails. It does not quietly return last week&rsquo;s numbers and call it a success.</li>
+      <li><strong>Not a session keeper.</strong> An HTTP or stream error is recorded as a failed run and rescheduled. But a run that emits text without ever sending its completion event is still marked <code>OK</code>&mdash;so read the output, not just the status column.</li>
       <li><strong>Not unattended for 2FA.</strong> A run that trips a challenge needs a human at the browser, so schedule those tasks when someone can answer.</li>
     </ul>
   </div>

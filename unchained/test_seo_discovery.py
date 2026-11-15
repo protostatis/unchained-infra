@@ -468,13 +468,13 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
             with self.subTest(flag=flag):
                 self.assertIn(flag, help_text)
         # Subcommand-level flags live in their own help, not the top level.
-        run_due_help = subprocess.run(
+        daemon_help = subprocess.run(
             [sys.executable, str(module_path), "daemon", "--help"],
             capture_output=True,
             text=True,
             timeout=60,
         ).stdout
-        self.assertIn("--poll-seconds", run_due_help)
+        self.assertIn("--poll-seconds", daemon_help)
 
     def test_console_script_entrypoint_is_wired(self):
         pyproject = (Path(scheduled_tasks.__file__).parent / "pyproject.toml").read_text()
@@ -490,11 +490,20 @@ class TestScheduledBrowserTasksGuide(unittest.IsolatedAsyncioTestCase):
 
     def test_guide_states_schedules_are_utc(self):
         # daily_at is interpreted as UTC by scheduled_tasks.py; a page that
-        # says "local" would send users to the wrong hour.
+        # says "local" would send users to the wrong hour. Assert the claim is
+        # attached to the daily_at row, not merely present somewhere on a page
+        # that also mentions UTC timestamps for `at`.
         page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
-        self.assertIn("UTC", page)
-        self.assertNotIn("Local wall-clock", page)
-        self.assertNotIn("local wall-clock", page)
+        self.assertRegex(
+            page,
+            r"<code>schedule\.daily_at</code></td><td><strong>UTC</strong>",
+        )
+        for wrong in ("Local wall-clock", "local wall-clock"):
+            with self.subTest(wrong=wrong):
+                self.assertNotIn(wrong, page)
+        # The corrective sentence is allowed to name local time; nothing may
+        # claim daily_at *is* local.
+        self.assertNotIn("local time, <code>HH:MM</code>", page)
 
     def test_guide_links_to_related_pages(self):
         page = web.GUIDE_SCHEDULED_BROWSER_TASKS_HTML
