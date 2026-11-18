@@ -2036,6 +2036,7 @@ class TrialAgent:
                     await asyncio.sleep(3)
                 except Exception as e:
                     print(f"Error: {e}. Reconnecting in 5s...")
+                    await asyncio.sleep(5)
         finally:
             task = getattr(self, "_balance_task", None)
             if task and not task.done():

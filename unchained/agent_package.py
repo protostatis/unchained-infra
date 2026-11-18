@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.132"  # map Claude 5.5 model IDs to CLI family aliases
+VERSION = "0.3.133"  # honour reconnect delays and keep reconnect logs to one line
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

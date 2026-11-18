@@ -4053,6 +4053,16 @@ async def main():
             # through the closed socket.
             _current_agent_ws = None
 
+        except websockets.ConnectionClosed as e:
+            _current_agent_ws = None
+            log.warning("Connection lost (%s). Reconnecting in 3s...", e)
+            await asyncio.sleep(3)
+        except OSError as e:
+            # A stopped or absent server is the normal dev case. Logging a full
+            # traceback here cost ~70 MB/day of this log while the stack was down.
+            _current_agent_ws = None
+            log.warning("Server unreachable (%s). Reconnecting in 3s...", e)
+            await asyncio.sleep(3)
         except Exception as e:
             _current_agent_ws = None
             log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
