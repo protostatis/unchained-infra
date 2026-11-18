@@ -67,6 +67,18 @@ if [ "${1:-}" = "smoke-hosted-trial" ]; then
     chmod 700 "$PIDDIR"
 fi
 
+collect_tree() {
+    # `uv run` starts the real interpreter as a child, so the PID we record is
+    # the wrapper. Killing only the wrapper orphans the worker: it reparents to
+    # launchd and keeps reconnecting to a server that is already gone. Walk the
+    # tree so `./dev.sh stop` actually stops the workers it started.
+    local pid="$1" child
+    echo "$pid"
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        collect_tree "$child"
+    done
+}
+
 stop_servers() {
     for svc in scheduler trial-agent chat-agent bridge web private-core relay; do
         pidfile="$PIDDIR/$svc.pid"
@@ -74,9 +86,10 @@ stop_servers() {
             pid=$(cat "$pidfile")
             if kill -0 "$pid" 2>/dev/null; then
                 echo "[dev] Stopping $svc (pid $pid)"
-                kill "$pid" 2>/dev/null || true
+                tree=$(collect_tree "$pid" 2>/dev/null || true)
+                for p in $tree; do kill "$p" 2>/dev/null || true; done
                 sleep 1
-                kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+                for p in $tree; do kill -9 "$p" 2>/dev/null || true; done
             fi
             rm -f "$pidfile"
         fi

@@ -36,6 +36,14 @@ class TestDevScript(unittest.TestCase):
         self.assertIn('"$PIDDIR/scheduler.pid"', self.script)
         self.assertIn('"$PIDDIR/trial-agent.pid"', self.script)
 
+    def test_stop_kills_the_wrapped_worker_not_just_uv(self):
+        # `uv run` puts the interpreter in a child process. Killing only the
+        # wrapper orphans the worker, which then reconnects to a dead server
+        # forever (an orphaned trial worker grew a 1 TB dev log this way).
+        self.assertIn("collect_tree() {", self.script)
+        self.assertIn("pgrep -P \"$pid\"", self.script)
+        self.assertIn('tree=$(collect_tree "$pid"', self.script)
+
     # ---- hosted-trial mode contract tests ----
 
     def test_hosted_trial_requires_openrouter_key(self):
