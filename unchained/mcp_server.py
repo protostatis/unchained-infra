@@ -22,11 +22,18 @@ import sys
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.middleware import Middleware
 from fastmcp.utilities.types import Image
 
 import cloud_tools
 from auth import Auth
-from mcp_identity import IdentityError, Principal, resolve_principal, target_agent
+from mcp_identity import (
+    IdentityError,
+    Principal,
+    oauth_tool_target_error,
+    resolve_principal,
+    target_agent,
+)
 from private_core_client import DEFAULT_CATCH_LIMIT, PrivateCoreError
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -109,10 +116,22 @@ def _principal_or_error() -> tuple[Principal | None, str]:
         return None, "Authorization: Bearer <api_key> header is required."
     if not header:
         return None, "Authorization: Bearer <api_key> header is required."
+    is_oauth = header.lower().startswith("bearer uco_at_")
+    if is_oauth and not _oauth_enabled():
+        return None, "OAuth connectors are disabled on this server."
     principal = resolve_principal(header, auth=_auth, store=_oauth_store())
     if principal is None:
+        if is_oauth:
+            return None, (
+                "This connector is no longer valid (its API key was revoked or "
+                "the grant expired). Reconnect it from your assistant."
+            )
         return None, "Invalid API key."
     return principal, ""
+
+
+def _oauth_enabled() -> bool:
+    return os.environ.get("MCP_OAUTH_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _require_principal() -> Principal:
@@ -132,6 +151,33 @@ def _oauth_store():
 
         _OAUTH_STORE.append(OAuthStore())
     return _OAUTH_STORE[0]
+
+
+# ---------------------------------------------------------------------------
+# OAuth callers may only drive the browser they consented to
+# ---------------------------------------------------------------------------
+
+
+class OAuthToolScopeMiddleware(Middleware):
+    """Reject provisioned-browser access for OAuth principals.
+
+    Registered on the server so a new tool that accepts ``tab_id`` is covered
+    without another call-site check.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        principal, _error = _principal_or_error()
+        arguments = getattr(context.message, "arguments", None) or {}
+        name = str(getattr(context.message, "name", "") or "")
+        denial = oauth_tool_target_error(principal, name, arguments)
+        if denial:
+            from fastmcp.exceptions import ToolError
+
+            raise ToolError(denial)
+        return await call_next(context)
+
+
+mcp.add_middleware(OAuthToolScopeMiddleware())
 
 
 # ---------------------------------------------------------------------------

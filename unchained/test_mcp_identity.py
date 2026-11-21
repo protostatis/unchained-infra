@@ -10,6 +10,7 @@ from mcp_identity import (
     Principal,
     KIND_API_KEY,
     KIND_OAUTH,
+    oauth_tool_target_error,
     resolve_principal,
     target_agent,
 )
@@ -96,7 +97,7 @@ class ResolvePrincipalTests(unittest.TestCase):
         self.assertEqual(principal.agent_id, "claude-deadbeef-facebook")
         self.assertEqual(principal.grant_id, grant_id)
 
-    def test_revoked_oauth_token_resolves_to_nothing(self):
+    def _issue_token(self, key_fingerprint, key_hash="deadbeef"):
         self.store.save_client(
             client_id="c1",
             client_name="C",
@@ -116,19 +117,38 @@ class ResolvePrincipalTests(unittest.TestCase):
             request_id=request_id,
             user_id="user-1",
             agent_id="claude-deadbeef",
-            key_hash="deadbeef",
-            key_fingerprint="f" * 64,
+            key_hash=key_hash,
+            key_fingerprint=key_fingerprint,
             scopes=["mcp:browser"],
             resource=None,
         )
         issued = self.store.issue_tokens(
             grant_id=grant_id, client_id="c1", scopes=["mcp:browser"], resource=None
         )
+        return grant_id, issued["access_token"]
+
+    def test_revoked_grant_resolves_to_nothing(self):
+        grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
         self.store.revoke_grant(grant_id)
         self.assertIsNone(
-            resolve_principal(
-                f"Bearer {issued['access_token']}", auth=self.auth, store=self.store
-            )
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_revoked_api_key_kills_the_connector_token(self):
+        """A live access token must die with the key the grant was pinned to."""
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.assertIsNotNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+        self.auth._keys["user-1"] = []  # key revoked
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_grant_for_unknown_key_resolves_to_nothing(self):
+        _grant_id, token = self._issue_token("f" * 64)
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
         )
 
 
@@ -218,6 +238,58 @@ class TargetAgentTests(unittest.TestCase):
         )
         with self.assertRaises(IdentityError):
             target_agent(oauth, "")
+
+
+class ToolScopeTests(unittest.TestCase):
+    """An OAuth grant covers one browser, never a provisioned Chrome."""
+
+    def setUp(self):
+        self.oauth = Principal(
+            kind=KIND_OAUTH,
+            user_id="user-1",
+            caller_tag="tag",
+            agent_id="claude-deadbeef",
+            grant_id="g1",
+            scopes=("mcp:browser",),
+        )
+        self.api_key = Principal(
+            kind=KIND_API_KEY,
+            user_id="user-1",
+            caller_tag="tag",
+            api_key="uc_live_a",
+        )
+
+    def test_oauth_cannot_list_provisioned_tabs(self):
+        self.assertIsNotNone(
+            oauth_tool_target_error(self.oauth, "list_provisioned_tabs", {})
+        )
+
+    def test_oauth_cannot_launch_provisioned_chrome(self):
+        self.assertIsNotNone(
+            oauth_tool_target_error(
+                self.oauth, "cdp_provision_launch", {"profile_path": "/x"}
+            )
+        )
+
+    def test_oauth_cannot_target_prov_tab(self):
+        self.assertIsNotNone(
+            oauth_tool_target_error(
+                self.oauth, "js_eval", {"tab_id": "prov-dc31-ABC", "expr": "1"}
+            )
+        )
+
+    def test_oauth_can_target_normal_tab(self):
+        self.assertIsNone(
+            oauth_tool_target_error(self.oauth, "js_eval", {"tab_id": "ABC123"})
+        )
+        self.assertIsNone(oauth_tool_target_error(self.oauth, "js_eval", {}))
+
+    def test_api_key_keeps_provisioning_access(self):
+        for name in ("list_provisioned_tabs", "cdp_provision_launch"):
+            self.assertIsNone(oauth_tool_target_error(self.api_key, name, {}))
+        self.assertIsNone(
+            oauth_tool_target_error(self.api_key, "js_eval", {"tab_id": "prov-x-1"})
+        )
 
 
 class RealAuthIntegrationTests(unittest.TestCase):

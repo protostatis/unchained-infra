@@ -51,10 +51,11 @@ def _escape(value) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
-def _page(title: str, body: str) -> web.Response:
+def _page(title: str, body: str, status: int = 200) -> web.Response:
     return web.Response(
         text=_PAGE.format(title=_escape(title), body=body),
         content_type="text/html",
+        status=status,
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
 
@@ -97,7 +98,7 @@ def _login_page(request: web.Request) -> web.Response:
     )
 
 
-def _agent_options(core, user_id: str) -> list[dict]:
+def _agent_options(user_id: str) -> list[dict]:
     """Browsers this user may hand to a connector.
 
     Live agents come from the relay and carry the profile name the user sees in
@@ -106,6 +107,7 @@ def _agent_options(core, user_id: str) -> list[dict]:
     """
     from mcp_oauth_store import agent_id_for_key
 
+    core = _core()
     keys = core._auth.get_keys_for_user(user_id)
     options: dict[str, dict] = {}
 
@@ -172,7 +174,11 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 
     request_id = (request.query.get("request") or "").strip()
     if not request_id:
-        return _page("Invalid link", "<p class='muted'>This link is missing its request id.</p>")
+        return _page(
+            "Invalid link",
+            "<p class='muted'>This link is missing its request id.</p>",
+            status=400,
+        )
 
     store = _store()
     pending = store.pending_request(request_id)
@@ -181,6 +187,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
             "Link expired",
             "<p class='muted'>This authorization request expired or was already used. "
             "Return to your assistant and try connecting again.</p>",
+            status=400,
         )
 
     user = _signed_in(request)
@@ -188,7 +195,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
         return _login_page(request)
 
     client = store.get_client(pending["client_id"]) or {}
-    options = _agent_options(_core(), user["user_id"])
+    options = _agent_options(user["user_id"])
     if not options:
         return _page(
             "Connect a browser first",
@@ -262,6 +269,7 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
         return _page(
             "Session expired",
             "<p class='muted'>This page expired. Return to your assistant and try again.</p>",
+            status=400,
         )
 
     store = _store()
@@ -270,18 +278,20 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
         return _page(
             "Link expired",
             "<p class='muted'>This authorization request expired or was already used.</p>",
+            status=400,
         )
 
     if decision != "approve":
         store.deny_request(request_id, user["user_id"])
         return _redirect_denied(pending)
 
-    options = {opt["agent_id"]: opt for opt in _agent_options(_core(), user["user_id"])}
+    options = {opt["agent_id"]: opt for opt in _agent_options(user["user_id"])}
     chosen = options.get(agent_id)
     if chosen is None:
         return _page(
             "Unknown browser",
             "<p class='muted'>That browser is not available on this account. Try again.</p>",
+            status=400,
         )
 
     from mcp_oauth_store import fingerprint_key
@@ -351,6 +361,7 @@ async def handle_mcp_oauth_connections_revoke(request: web.Request) -> web.Respo
         return _page(
             "Session expired",
             "<p class='muted'>This page expired. Open Connected apps again.</p>",
+            status=400,
         )
     if grant_id:
         _store().revoke_grant(grant_id, user_id=user["user_id"])

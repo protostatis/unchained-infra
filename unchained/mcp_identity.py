@@ -78,6 +78,11 @@ def resolve_principal(
         row = store.load_access_token(token)
         if row is None:
             return None
+        # A grant is only as valid as the API key it was pinned to.  Checking
+        # here (not just at refresh time) means revoking a key cuts connector
+        # access immediately instead of waiting out the access-token TTL.
+        if not _grant_key_active(auth, row["user_id"], row["key_fingerprint"]):
+            return None
         # Cheap constant-time-ish tag so provisioning cleanup can never collide
         # with an API-key caller's tag.
         tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:8]
@@ -99,6 +104,53 @@ def resolve_principal(
         caller_tag=hashlib.sha256(token.encode()).hexdigest()[:12],
         api_key=token,
     )
+
+
+def _grant_key_active(auth, user_id: str, key_fingerprint: str) -> bool:
+    if not key_fingerprint:
+        return False
+    try:
+        keys = auth.get_keys_for_user(user_id)
+    except Exception:
+        return False
+    for key in keys:
+        if hashlib.sha256(key.encode()).hexdigest() == key_fingerprint:
+            return True
+    return False
+
+
+# Provisioned Chromes are temporary browsers launched with an arbitrary local
+# profile. A connector approved for one browser must not reach them.
+PROVISION_ONLY_TOOLS = frozenset(
+    {
+        "cdp_provision_launch",
+        "cdp_provision_cleanup",
+        "list_provisioned_tabs",
+    }
+)
+
+OAUTH_SCOPE_DENIED = (
+    "OAuth connectors can only drive the browser granted at consent. "
+    "Provisioned Chrome instances require an API-key MCP client."
+)
+
+
+def oauth_tool_target_error(
+    principal: Principal | None, tool_name: str, arguments: dict | None
+) -> str | None:
+    """Return a denial message when an OAuth caller reaches outside its grant.
+
+    Applied to every tool call so a newly added tool that accepts ``tab_id`` is
+    covered without another call-site check.
+    """
+    if principal is None or not principal.is_oauth:
+        return None
+    if tool_name in PROVISION_ONLY_TOOLS:
+        return OAUTH_SCOPE_DENIED
+    tab_id = str((arguments or {}).get("tab_id") or "")
+    if tab_id.startswith("prov-"):
+        return OAUTH_SCOPE_DENIED
+    return None
 
 
 def target_agent(principal: Principal, requested: str, *, auth=None) -> str:

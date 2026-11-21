@@ -55,8 +55,17 @@ Key properties:
 - **One grant, one browser.** The consent screen pins the exact `agent_id`.
   Every tool call re-checks the pin; another profile of the same key is a
   different browser and is refused.
+- **Provisioned Chromes are out of scope.** A connector cannot list, launch or
+  target `prov-` tabs; a middleware applies that to every tool call, so a new
+  tool is covered without another call-site check.
+- **Key revocation is immediate.** Each OAuth call confirms the grant's backing
+  API key is still active, so revoking a key cuts connector access at once
+  rather than waiting out the 15-minute access token.
 - **No bearer upgrade.** Only a real browser session can approve; an API key
   sent to `/oauth/consent` cannot mint a grant.
+- **The master switch gates credentials, not just routes.** With
+  `MCP_OAUTH_ENABLED=0`, previously issued `uco_at_` tokens are refused by the
+  tool layer as well.
 - **Legacy keys unchanged.** `load_access_token` accepts both `uco_at_` tokens
   and existing `uc_...` API keys, so nothing changes for current MCP users.
 
@@ -151,8 +160,10 @@ the 401 challenge it needs. `/mcp/setup` is a stable alias for the install page.
 
 ```bash
 cd unchained
-python test_mcp_oauth_store.py   # storage, atomicity, rotation, replay
-python test_mcp_oauth_flow.py    # discovery -> consent -> code -> token -> /mcp
-python test_mcp_identity.py      # credential -> principal -> pinned agent
-python test_mcp_server.py        # existing tool behaviour unchanged
+python test_mcp_oauth_store.py     # storage, atomicity, rotation, replay
+python test_mcp_oauth_flow.py      # discovery -> consent -> code -> token -> /mcp
+python test_mcp_oauth_consent.py   # the handler a browser actually hits
+python test_mcp_identity.py        # credential -> principal -> pinned agent
+python test_mcp_oauth_gate.py      # the master switch gates credentials
+python test_mcp_server.py          # existing tool behaviour unchanged
 ```
