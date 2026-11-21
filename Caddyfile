@@ -86,6 +86,18 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	@fin_terminal_browser_alias path /fin-terminal-browser /fin-terminal-browser/*
 	redir @fin_terminal_browser_alias https://unbrowser.unchainedsky.com{uri} 308
 
+	# MCP OAuth — authorization-server endpoints live in the MCP process.
+	# Connectors (Claude, ChatGPT, Gemini) discover these from /mcp and from
+	# the well-known documents, so they must be same-origin.
+	@mcp_oauth path /authorize /token /register /revoke /oauth/complete
+	handle @mcp_oauth {
+		reverse_proxy mcp:8766
+	}
+	@mcp_oauth_metadata path /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+	handle @mcp_oauth_metadata {
+		reverse_proxy mcp:8766
+	}
+
 	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server
 	@mcp_sse {
 		method GET
@@ -96,10 +108,15 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy mcp:8766
 	}
 
-	# MCP install page — GET /mcp from browsers → web UI setup page
+	# MCP install page — a browser navigation to /mcp → web UI setup page.
+	# Scoped to Accept: text/html so an MCP client's unauthenticated GET
+	# (Accept: application/json) reaches the transport and gets its 401 with a
+	# WWW-Authenticate challenge instead of an HTML 200.
 	@mcp_page {
 		method GET
 		path /mcp
+		header Accept *text/html*
+		not header Accept *text/event-stream*
 	}
 	handle @mcp_page {
 		reverse_proxy web:8080 {
@@ -107,6 +124,13 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 			# recreated. Caddy only retries non-idempotent requests after a
 			# failed connection, so a request already accepted by web is not
 			# replayed.
+			lb_try_duration 5s
+		}
+	}
+	# Stable alias for the install page, so the page stays reachable if a
+	# client sends an unexpected Accept header to /mcp.
+	handle /mcp/setup {
+		reverse_proxy web:8080 {
 			lb_try_duration 5s
 		}
 	}
