@@ -10,7 +10,8 @@ from mcp_identity import (
     Principal,
     KIND_API_KEY,
     KIND_OAUTH,
-    oauth_tool_target_error,
+    oauth_prov_tab_allowed,
+    provision_slot_from_tab_id,
     resolve_principal,
     target_agent,
 )
@@ -368,13 +369,13 @@ class TargetAgentTests(unittest.TestCase):
 
 
 class ToolScopeTests(unittest.TestCase):
-    """An OAuth grant covers one browser, never a provisioned Chrome."""
+    """A grant may drive only the provisioned slots its own grant launched."""
 
     def setUp(self):
         self.oauth = Principal(
             kind=KIND_OAUTH,
             user_id="user-1",
-            caller_tag="tag",
+            caller_tag="oauth-deadbeef",
             agent_id="claude-deadbeef",
             grant_id="g1",
             scopes=("mcp:browser",),
@@ -382,47 +383,50 @@ class ToolScopeTests(unittest.TestCase):
         self.api_key = Principal(
             kind=KIND_API_KEY,
             user_id="user-1",
-            caller_tag="tag",
+            caller_tag="abc123",
             api_key="uc_live_a",
         )
+        self.slots = {
+            "dc31": {"caller_tag": "oauth-deadbeef", "tabs": []},
+            "ab12": {"caller_tag": "abc123", "tabs": []},
+        }
 
-    def test_oauth_cannot_list_provisioned_tabs(self):
-        self.assertIsNotNone(
-            oauth_tool_target_error(self.oauth, "list_provisioned_tabs", {})
+    def test_parses_provision_slot(self):
+        self.assertEqual(provision_slot_from_tab_id("prov-dc31-AABB"), "dc31")
+        self.assertEqual(provision_slot_from_tab_id("prov-x-1"), "x")
+        self.assertEqual(provision_slot_from_tab_id("ABC123"), "")
+        self.assertEqual(provision_slot_from_tab_id(""), "")
+
+    def test_oauth_can_drive_its_own_slot(self):
+        self.assertIs(
+            oauth_prov_tab_allowed(self.oauth, "prov-dc31-AABB", self.slots), True
         )
 
-    def test_oauth_cannot_list_chrome_profiles(self):
-        self.assertIsNotNone(
-            oauth_tool_target_error(self.oauth, "list_chrome_profiles", {})
+    def test_oauth_cannot_drive_an_api_key_slot(self):
+        self.assertIs(
+            oauth_prov_tab_allowed(self.oauth, "prov-ab12-AABB", self.slots), False
         )
 
-    def test_oauth_cannot_launch_provisioned_chrome(self):
-        self.assertIsNotNone(
-            oauth_tool_target_error(
-                self.oauth, "cdp_provision_launch", {"profile_path": "/x"}
-            )
+    def test_oauth_cannot_drive_unknown_slot(self):
+        self.assertIs(
+            oauth_prov_tab_allowed(self.oauth, "prov-zzzz-AABB", self.slots), False
         )
 
-    def test_oauth_cannot_target_prov_tab(self):
-        self.assertIsNotNone(
-            oauth_tool_target_error(
-                self.oauth, "js_eval", {"tab_id": "prov-dc31-ABC", "expr": "1"}
-            )
-        )
-
-    def test_oauth_can_target_normal_tab(self):
+    def test_unavailable_status_is_unknown(self):
         self.assertIsNone(
-            oauth_tool_target_error(self.oauth, "js_eval", {"tab_id": "ABC123"})
+            oauth_prov_tab_allowed(self.oauth, "prov-dc31-AABB", None)
         )
-        self.assertIsNone(oauth_tool_target_error(self.oauth, "js_eval", {}))
+        self.assertIsNone(
+            oauth_prov_tab_allowed(self.oauth, "prov-dc31-AABB", "bad-payload")
+        )
+
+    def test_oauth_can_target_normal_tab_without_a_lookup(self):
+        self.assertIs(oauth_prov_tab_allowed(self.oauth, "ABC123", None), True)
+        self.assertIs(oauth_prov_tab_allowed(self.oauth, "auto", None), True)
 
     def test_api_key_keeps_provisioning_access(self):
-        for name in ("list_provisioned_tabs", "cdp_provision_launch",
-                     "list_chrome_profiles"):
-            self.assertIsNone(oauth_tool_target_error(self.api_key, name, {}))
-        self.assertIsNone(
-            oauth_tool_target_error(self.api_key, "js_eval", {"tab_id": "prov-x-1"})
-        )
+        for tab in ("prov-dc31-AABB", "prov-ab12-AABB", "ABC123"):
+            self.assertIs(oauth_prov_tab_allowed(self.api_key, tab, self.slots), True)
 
 
 class RealAuthIntegrationTests(unittest.TestCase):

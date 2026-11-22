@@ -115,8 +115,9 @@ cdp_navigate  url=https://slickdeals.net  bring_to_front=true
 ## Tool Surface
 
 Browser tools accept `agent_id`; tab-aware tools also accept `tab_id`
-(`"auto"`, a tab ID, an alias, or a `prov-<slot>-<id>`). Tools marked
-API-key only reject OAuth connectors.
+(`"auto"`, a tab ID, an alias, or a `prov-<slot>-<id>`). Provisioning tools
+are scoped by caller: an OAuth connector can launch a temporary copy from a
+local profile, but it only sees and drives slots its own grant launched.
 
 ### Page understanding and extraction
 
@@ -170,10 +171,10 @@ API-key only reject OAuth connectors.
 | Tool | Purpose |
 |------|---------|
 | `list_connected_agents` | List connected browsers and their profiles |
-| `list_chrome_profiles` API-key only | List local Chrome profiles (Google sign-in) and their paths for `cdp_provision_launch` |
-| `cdp_provision_launch` API-key only | Launch a temporary Chrome from a profile copy |
-| `list_provisioned_tabs` API-key only | List tabs, including OAuth popups, in provisioned Chromes |
-| `cdp_provision_cleanup` API-key only | Kill provisioned Chrome(s) and remove temp dirs |
+| `list_chrome_profiles` | List local Chrome profiles (Google sign-in) and their paths for `cdp_provision_launch` |
+| `cdp_provision_launch` | Launch a temporary Chrome from a profile copy |
+| `list_provisioned_tabs` | List tabs, including OAuth popups, in provisioned Chromes (own slots for OAuth callers) |
+| `cdp_provision_cleanup` | Kill provisioned Chrome(s) and remove temp dirs (own slots for OAuth callers) |
 
 ## Provisioned Chrome Tabs And OAuth Popups
 
@@ -332,7 +333,7 @@ cdp_provision_cleanup                 # all slots
 - Provisioned Chrome runs as a separate process with a copy of the profile
 - The original Chrome profile is not modified
 - `list_chrome_profiles` reads the same inventory as the web app: profiles signed into a Google account
-- `list_chrome_profiles` and the provisioning tools require an API-key MCP client; OAuth connectors cannot copy local profiles
+- OAuth connectors may list profiles and launch their own provisioned Chromes; they only see slots their grant launched, and never another caller's
 - Tab IDs use `prov-{slot}-{chrome_id}` format — pass these to any MCP tool's `tab_id` parameter
 - `ddm --tabs` with a prov-prefixed `tab_id` auto-prefixes tab IDs in the output
 

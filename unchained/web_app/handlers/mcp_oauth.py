@@ -260,7 +260,10 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 {"" if status == "manual" else "<p class='note warn'>Unverified connector. Its name was supplied by the app, and this callback does not tell Unchained which account will receive access. Only continue if you started this connection yourself in the app.</p>"}
 <p class='note'>
   While connected it can read pages, click, type, run script and read cookies in
-  the browser you choose below. You can disconnect it any time from
+  the browser you choose below. It can also list the Chrome profiles saved on
+  this computer and launch a temporary copy of one — with its saved sign-ins —
+  when it needs an authenticated session; the original profile is not modified.
+  You can disconnect it any time from
   <a href="/oauth/connections">Connected apps</a>.
 </p>
 <div class='account'>

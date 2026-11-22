@@ -136,6 +136,11 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertIn("protostatis.dev@gmail.com", response.text)
         self.assertIn("Switch account", response.text)
 
+    def test_consent_discloses_profile_copying(self):
+        response = self._get(self.request_id)
+        self.assertIn("launch a temporary copy", response.text)
+        self.assertIn("original profile is not modified", response.text)
+
     def test_switch_account_clears_the_session_and_returns_to_the_same_request(self):
         request = _post(
             {"request": self.request_id, "decision": "switch", "agent_id": ""}

@@ -165,39 +165,52 @@ def revoke_if_detached(store, grant_id: str | None, state: str) -> None:
 
 
 # Provisioned Chromes are temporary browsers launched with an arbitrary local
-# profile. A connector approved for one browser must not reach them, and it
-# must not enumerate every Google account saved on the host either.
-PROVISION_ONLY_TOOLS = frozenset(
-    {
-        "cdp_provision_launch",
-        "cdp_provision_cleanup",
-        "list_chrome_profiles",
-        "list_provisioned_tabs",
-    }
+# profile. A connector may launch its own, but it must never drive or enumerate
+# another caller's slots. Ownership travels as the caller tag the bridge stored
+# at launch time; provisioning tools pass ``principal.caller_tag`` and this
+# module decides whether a ``prov-`` tab belongs to the grant.
+OAUTH_PROV_TAB_DENIED = (
+    "That provisioned browser belongs to another client. "
+    "Launch your own with cdp_provision_launch."
 )
 
-OAUTH_SCOPE_DENIED = (
-    "OAuth connectors can only drive the browser granted at consent. "
-    "Provisioned Chrome instances require an API-key MCP client."
+OAUTH_PROV_TAB_UNVERIFIED = (
+    "Could not verify that the provisioned browser belongs to this connector. "
+    "Retry in a moment."
 )
 
 
-def oauth_tool_target_error(
-    principal: Principal | None, tool_name: str, arguments: dict | None
-) -> str | None:
-    """Return a denial message when an OAuth caller reaches outside its grant.
+def provision_slot_from_tab_id(tab_id: str) -> str:
+    """Return the slot portion of a ``prov-{slot}-{id}`` tab ID, or ""."""
+    parts = str(tab_id or "").split("-", 2)
+    if len(parts) == 3 and parts[0] == "prov":
+        return parts[1]
+    return ""
 
-    Applied to every tool call so a newly added tool that accepts ``tab_id`` is
-    covered without another call-site check.
+
+def oauth_prov_tab_allowed(
+    principal: Principal | None,
+    tab_id: str,
+    slots: dict | None,
+) -> bool | None:
+    """Decide whether an OAuth caller may drive ``tab_id``.
+
+    ``slots`` is the ``provision_status`` payload for the browser pinned to the
+    grant. Returns True when the caller is not OAuth (API keys keep their
+    existing behaviour), False when the slot belongs to someone else, and None
+    when the status payload cannot answer the question.
     """
     if principal is None or not principal.is_oauth:
+        return True
+    slot = provision_slot_from_tab_id(tab_id)
+    if not slot:
+        return True
+    if not isinstance(slots, dict):
         return None
-    if tool_name in PROVISION_ONLY_TOOLS:
-        return OAUTH_SCOPE_DENIED
-    tab_id = str((arguments or {}).get("tab_id") or "")
-    if tab_id.startswith("prov-"):
-        return OAUTH_SCOPE_DENIED
-    return None
+    info = slots.get(slot)
+    if not isinstance(info, dict):
+        return False
+    return info.get("caller_tag") == principal.caller_tag
 
 
 def target_agent(principal: Principal, requested: str, *, auth=None) -> str:

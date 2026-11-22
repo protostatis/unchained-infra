@@ -33,8 +33,11 @@ import cloud_tools
 from auth import Auth
 from mcp_identity import (
     IdentityError,
+    OAUTH_PROV_TAB_DENIED,
+    OAUTH_PROV_TAB_UNVERIFIED,
     Principal,
-    oauth_tool_target_error,
+    oauth_prov_tab_allowed,
+    provision_slot_from_tab_id,
     resolve_principal,
     target_agent,
 )
@@ -203,26 +206,85 @@ def _oauth_store():
 
 
 # ---------------------------------------------------------------------------
-# OAuth callers may only drive the browser they consented to
+# OAuth callers may drive the browser they consented to, plus any provisioned
+# Chrome their grant launched. Another caller's slot stays out of reach.
 # ---------------------------------------------------------------------------
 
 
+async def _oauth_prov_tab_verdict(principal: Principal, tab_id: str) -> bool | None:
+    """Return True/False/None for an OAuth caller's target prov tab."""
+    if not provision_slot_from_tab_id(tab_id):
+        return True
+    if not principal.agent_id:
+        return False
+    try:
+        result = await cloud_tools.provision_status(principal.agent_id)
+    except Exception as exc:
+        print(
+            "[mcp] provision ownership lookup failed "
+            f"({type(exc).__name__}): {exc}"
+        )
+        return None
+    slots = result.get("slots") if isinstance(result, dict) else None
+    return oauth_prov_tab_allowed(principal, tab_id, slots)
+
+
+async def _oauth_alias_prov_target(principal: Principal, tab_id: str) -> str | None:
+    """Return the prov tab an OAuth caller's alias resolves to, if any.
+
+    Aliases live per browser agent, not per caller, so an alias set by an
+    API-key client would otherwise let a connector reach that client's
+    provisioned Chrome without ever passing a ``prov-`` tab id.
+    """
+    if not principal.agent_id:
+        return None
+    try:
+        raw = await cloud_tools.list_tab_aliases(principal.agent_id)
+    except Exception as exc:
+        print(
+            "[mcp] alias ownership lookup failed "
+            f"({type(exc).__name__}): {exc}"
+        )
+        return None
+    try:
+        aliases = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(aliases, dict):
+        return None
+    target = aliases.get(str(tab_id).lower())
+    target = target if target is not None else aliases.get(str(tab_id))
+    if isinstance(target, str) and target.startswith("prov-"):
+        return target
+    return None
+
+
 class OAuthToolScopeMiddleware(Middleware):
-    """Reject provisioned-browser access for OAuth principals.
+    """Hold OAuth callers to their granted browser and their own provisions.
 
     Registered on the server so a new tool that accepts ``tab_id`` is covered
-    without another call-site check.
+    without another call-site check. Provisioning tools stay available to
+    connectors; the bridge scopes launch, cleanup and status by the grant's
+    caller tag.
     """
 
     async def on_call_tool(self, context, call_next):
         principal, _error = _principal_or_error()
         arguments = getattr(context.message, "arguments", None) or {}
-        name = str(getattr(context.message, "name", "") or "")
-        denial = oauth_tool_target_error(principal, name, arguments)
-        if denial:
-            from fastmcp.exceptions import ToolError
+        tab_id = str(arguments.get("tab_id") or "")
+        if principal is not None and principal.is_oauth and tab_id not in ("", "auto"):
+            target = tab_id
+            if not tab_id.startswith("prov-"):
+                target = await _oauth_alias_prov_target(principal, tab_id) or ""
+            if target.startswith("prov-"):
+                verdict = await _oauth_prov_tab_verdict(principal, target)
+                if verdict is not True:
+                    from fastmcp.exceptions import ToolError
 
-            raise ToolError(denial)
+                    raise ToolError(
+                        OAUTH_PROV_TAB_DENIED if verdict is False
+                        else OAUTH_PROV_TAB_UNVERIFIED
+                    )
         return await call_next(context)
 
 
@@ -643,9 +705,44 @@ async def cdp_set_tab_alias(alias: str, tab_id: str,
 
 @mcp.tool()
 async def cdp_list_tab_aliases(agent_id: str = "") -> str:
-    """List all named tab aliases."""
+    """List all named tab aliases.
+
+    An OAuth connector sees only aliases that do not point at another
+    caller's provisioned Chrome.
+    """
+    principal = _require_principal()
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.list_tab_aliases(aid)
+    raw = await cloud_tools.list_tab_aliases(aid)
+    if not principal.is_oauth:
+        return raw
+    try:
+        aliases = json.loads(raw)
+    except Exception:
+        return raw
+    if not isinstance(aliases, dict):
+        return raw
+    try:
+        status = await cloud_tools.provision_status(aid)
+    except Exception:
+        status = {}
+    slots = status.get("slots") if isinstance(status, dict) else {}
+    own = {
+        slot
+        for slot, info in (slots or {}).items()
+        if isinstance(info, dict) and info.get("caller_tag") == principal.caller_tag
+    }
+    visible = {
+        alias: target
+        for alias, target in aliases.items()
+        if not (
+            isinstance(target, str)
+            and target.startswith("prov-")
+            and provision_slot_from_tab_id(target) not in own
+        )
+    }
+    if not visible:
+        return "No tab aliases set"
+    return json.dumps(visible, indent=2)
 
 
 @mcp.tool()
@@ -774,18 +871,17 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             connected; a profile name such as "facebook" also works.
     """
     principal = _require_principal()
-    if principal.is_oauth:
-        # Profiles exist only to be copied by cdp_provision_launch, which
-        # OAuth connectors may not call. Refuse rather than expose the
-        # machine's full Google account list to a one-browser grant.
-        raise ValueError(
-            "Listing Chrome profiles requires an API-key MCP client; "
-            "OAuth connectors can only drive the browser granted at consent."
-        )
     # Auth and ownership failures stay tool errors here, like every other
     # tool: an invalid key must not look like a successful text result.
     aid = _resolve_agent(profile=agent_id)
-    api_key = principal.api_key or ""
+    if principal.is_oauth:
+        # The relay only knows API keys. Use the key the grant is pinned to
+        # for this lookup; it is never returned to the caller.
+        api_key = _key_for_grant(principal)
+        if not api_key:
+            return "The API key linked to this connector was revoked. Reconnect it."
+    else:
+        api_key = principal.api_key or ""
     if not api_key:
         raise ValueError("Authorization: Bearer <api_key> header is required.")
 
@@ -868,16 +964,11 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
 
     Returns the provisioned slot ID and initial tab ID. Use the returned
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
+
+    The browser runs on a copy of the profile. An OAuth connector may only
+    drive slots its own grant launched.
     """
     principal = _require_principal()
-    if principal.is_oauth:
-        # Consent promises one already-connected browser.  Launching a new
-        # Chrome from another profile would widen that promise behind the
-        # user's back, so connectors must use an API-key client to provision.
-        raise ValueError(
-            "Browser provisioning requires an API-key MCP client; "
-            "OAuth connectors can only drive the browser granted at consent."
-        )
     aid = _resolve_agent(profile=agent_id)
     caller_tag = principal.caller_tag
     result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
@@ -935,12 +1026,22 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
     Use this after provisioning Chrome with a profile to discover
     new tabs (e.g., OAuth popups). Returns prov-prefixed tab IDs
     that can be passed to ddm, cdp_click, cdp_type, etc.
+
+    An OAuth connector sees only the slots its own grant launched.
     """
+    principal = _require_principal()
     aid = _resolve_agent(profile=agent_id)
     result = await cloud_tools.provision_status(aid)
     if "error" in result:
         return f"Error: {result['error']}"
     slots = result.get("slots", {})
+    if principal.is_oauth and isinstance(slots, dict):
+        slots = {
+            slot: info
+            for slot, info in slots.items()
+            if isinstance(info, dict)
+            and info.get("caller_tag") == principal.caller_tag
+        }
     if not slots:
         return "No provisioned Chrome instances."
     lines = []

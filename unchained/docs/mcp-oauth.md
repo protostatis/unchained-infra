@@ -218,11 +218,12 @@ loopback allowed only for native clients an operator registered.
   `Referrer-Policy: no-referrer`.
 - Client-supplied names are HTML-escaped and marked unverified; nothing fetched
   from a client is rendered.
-- Browser provisioning (`cdp_provision_launch`, `cdp_provision_cleanup`,
-  `list_provisioned_tabs`) and the local profile inventory
-  (`list_chrome_profiles`) are denied for OAuth callers: a new Chrome from
-  another profile would widen what consent promised, and the inventory would
-  enumerate every Google account saved on the host.
+- Browser provisioning is scoped to the caller. An OAuth connector may
+  list local Chrome profiles and launch a temporary copy for an authenticated
+  session, but the bridge tags each slot with the grant and the MCP server
+  refuses `prov-` tabs from another caller's slot. Disconnecting the app
+  revokes the grant; slots are cleaned up with `cdp_provision_cleanup`, which
+  also only touches the caller's slots.
 
 ## Account lifecycle
 
