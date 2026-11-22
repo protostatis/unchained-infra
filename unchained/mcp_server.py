@@ -16,20 +16,25 @@ Claude Code connects:
 """
 
 import base64
-import hashlib
 import json
 import os
-import re
 import sys
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.middleware import Middleware
 from fastmcp.utilities.types import Image
 
 import cloud_tools
 from auth import Auth
+from mcp_identity import (
+    IdentityError,
+    Principal,
+    oauth_tool_target_error,
+    resolve_principal,
+    target_agent,
+)
 from private_core_client import DEFAULT_CATCH_LIMIT, PrivateCoreError
-
 # ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
@@ -85,69 +90,94 @@ mcp = FastMCP(
 _auth = Auth()
 
 
-def _extract_api_key() -> str:
-    """Extract the Bearer API key from the current HTTP request headers."""
-    try:
-        request = get_http_request()
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            return auth_header[7:].strip()
-    except RuntimeError:
-        pass
-    return ""
-
-
-def _user_owns_agent(user_id: str, agent_id: str) -> bool:
-    """Check if a full agent_id belongs to any active key owned by this user."""
-    for key in _auth.get_keys_for_user(user_id):
-        key_hash = hashlib.sha256(key.encode()).hexdigest()[:8]
-        if agent_id.startswith(f"claude-{key_hash}") or agent_id.startswith(f"headless-{key_hash}"):
-            return True
-    return False
-
-
-def _agent_id_from_key(api_key: str, profile: str = "") -> str:
-    """Derive the agent_id from an API key and optional profile name."""
-    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
-    if profile and profile != "default":
-        if not re.match(r'^[a-zA-Z0-9_-]{1,32}$', profile):
-            raise ValueError(f"Invalid profile name: {profile!r}")
-        return f"claude-{key_hash}-{profile}"
-    return f"claude-{key_hash}"
-
-
 def _resolve_agent(profile: str = "") -> str:
     """Authenticate the caller and resolve the target agent_id.
 
-    Accepts either:
-    - A profile name (e.g. "facebook") → derives claude-<hash>-facebook
-    - A full agent ID from list_connected_agents (e.g. "claude-abc12345-facebook")
-      → validates ownership and uses it directly
-    - Empty string → default agent (claude-<hash>)
+    Accepts either an API key (the original behaviour: profile name, full agent
+    id, or empty for the default agent) or an OAuth connector token, which is
+    pinned to the single agent chosen on the consent screen.
     """
-    api_key = _extract_api_key()
-    if not api_key:
-        raise ValueError(
-            "Authorization: Bearer <api_key> header is required."
-        )
-    info = _auth.validate_key(api_key)
-    if info is None:
-        raise ValueError("Invalid API key.")
+    principal, error = _principal_or_error()
+    if principal is None:
+        raise ValueError(error)
+    try:
+        return target_agent(principal, profile, auth=_auth)
+    except IdentityError as exc:
+        raise ValueError(str(exc)) from exc
 
-    if not profile:
-        return _agent_id_from_key(api_key)
 
-    # If caller passed a full agent ID (from list_connected_agents), validate
-    # ownership by checking it matches a key hash belonging to this user.
-    # This is necessary because private-core uses an internal token that
-    # bypasses relay per-user ownership checks.
-    if re.match(r'^(?:claude|headless)-[0-9a-f]{8}', profile):
-        if _user_owns_agent(info["user_id"], profile):
-            return profile
-        raise ValueError(f"Agent {profile} does not belong to you.")
+def _principal_or_error() -> tuple[Principal | None, str]:
+    """Resolve the request principal without raising."""
+    header = ""
+    try:
+        request = get_http_request()
+        header = request.headers.get("authorization", "")
+    except RuntimeError:
+        return None, "Authorization: Bearer <api_key> header is required."
+    if not header:
+        return None, "Authorization: Bearer <api_key> header is required."
+    is_oauth = header.lower().startswith("bearer uco_at_")
+    if is_oauth and not _oauth_enabled():
+        return None, "OAuth connectors are disabled on this server."
+    principal = resolve_principal(header, auth=_auth, store=_oauth_store())
+    if principal is None:
+        if is_oauth:
+            return None, (
+                "This connector is no longer valid (its API key was revoked or "
+                "the grant expired). Reconnect it from your assistant."
+            )
+        return None, "Invalid API key."
+    return principal, ""
 
-    # Otherwise treat as a profile name suffix
-    return _agent_id_from_key(api_key, profile)
+
+def _oauth_enabled() -> bool:
+    return os.environ.get("MCP_OAUTH_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _require_principal() -> Principal:
+    principal, error = _principal_or_error()
+    if principal is None:
+        raise ValueError(error)
+    return principal
+
+
+_OAUTH_STORE: list = []
+
+
+def _oauth_store():
+    """Lazily build the OAuth store (it also owns schema creation)."""
+    if not _OAUTH_STORE:
+        from mcp_oauth_store import OAuthStore
+
+        _OAUTH_STORE.append(OAuthStore())
+    return _OAUTH_STORE[0]
+
+
+# ---------------------------------------------------------------------------
+# OAuth callers may only drive the browser they consented to
+# ---------------------------------------------------------------------------
+
+
+class OAuthToolScopeMiddleware(Middleware):
+    """Reject provisioned-browser access for OAuth principals.
+
+    Registered on the server so a new tool that accepts ``tab_id`` is covered
+    without another call-site check.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        principal, _error = _principal_or_error()
+        arguments = getattr(context.message, "arguments", None) or {}
+        name = str(getattr(context.message, "name", "") or "")
+        denial = oauth_tool_target_error(principal, name, arguments)
+        if denial:
+            from fastmcp.exceptions import ToolError
+
+            raise ToolError(denial)
+        return await call_next(context)
+
+
+mcp.add_middleware(OAuthToolScopeMiddleware())
 
 
 # ---------------------------------------------------------------------------
@@ -619,16 +649,24 @@ async def list_connected_agents(agent_id: str = "") -> str:
     Chrome profiles connected. To target a specific profile in other
     tools, pass either the full agent_id (e.g. claude-abc12345-facebook)
     or just the profile name (e.g. facebook) in the agent_id parameter.
+
+    An OAuth connector always reports only the browser it was granted.
     """
-    api_key = _extract_api_key()
-    if not api_key:
-        raise ValueError("Authorization: Bearer <api_key> header is required.")
-    info = _auth.validate_key(api_key)
-    if info is None:
-        raise ValueError("Invalid API key.")
+    principal = _require_principal()
 
     from urllib.parse import urlparse
     import httpx
+
+    # The relay only knows API keys, so an OAuth caller borrows the key its
+    # grant is bound to.  It is used solely for this lookup and never returned.
+    if principal.is_oauth:
+        api_key = _key_for_grant(principal)
+        if not api_key:
+            return "The API key linked to this connector was revoked. Reconnect it."
+    else:
+        api_key = principal.api_key or ""
+    if not api_key:
+        raise ValueError("Authorization: Bearer <api_key> header is required.")
 
     relay_url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
     parsed = urlparse(relay_url)
@@ -647,6 +685,9 @@ async def list_connected_agents(agent_id: str = "") -> str:
     except Exception as e:
         return f"Error querying agents: {e}"
 
+    if principal.is_oauth:
+        agents = [a for a in agents if a.get("agent_id") == principal.agent_id]
+
     if not agents:
         return "No agents connected."
     lines = ["Connected agents:"]
@@ -654,6 +695,21 @@ async def list_connected_agents(agent_id: str = "") -> str:
         profile = a.get("profile", "default")
         lines.append(f"  {a['agent_id']} (profile: {profile})")
     return "\n".join(lines)
+
+
+def _key_for_grant(principal: Principal) -> str:
+    """Return the raw API key a grant is pinned to, if it is still active."""
+    if not principal.grant_id:
+        return ""
+    grant = _oauth_store().get_grant(principal.grant_id)
+    if grant is None:
+        return ""
+    from mcp_oauth_store import fingerprint_key
+
+    for key in _auth.get_keys_for_user(grant["user_id"]):
+        if fingerprint_key(key) == grant["key_fingerprint"]:
+            return key
+    return ""
 
 
 @mcp.tool()
@@ -671,11 +727,17 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
     Returns the provisioned slot ID and initial tab ID. Use the returned
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
     """
+    principal = _require_principal()
+    if principal.is_oauth:
+        # Consent promises one already-connected browser.  Launching a new
+        # Chrome from another profile would widen that promise behind the
+        # user's back, so connectors must use an API-key client to provision.
+        raise ValueError(
+            "Browser provisioning requires an API-key MCP client; "
+            "OAuth connectors can only drive the browser granted at consent."
+        )
     aid = _resolve_agent(profile=agent_id)
-    # Generate a caller_tag from the API key so cleanup-all only affects
-    # this caller's provisioned Chromes, not other MCP clients'.
-    api_key = _extract_api_key()
-    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else ""
+    caller_tag = principal.caller_tag
     result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
     if not result or "error" in result:
         err = result.get("error", "Unknown error") if result else "No response"
@@ -701,13 +763,11 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
-    aid = _resolve_agent(profile=agent_id)  # raises if no API key
+    aid = _resolve_agent(profile=agent_id)  # raises if no credential
     # Pass caller_tag so cleanup-all only kills this caller's provisions.
-    # _resolve_agent already validated the key, so _extract_api_key is safe.
-    api_key = _extract_api_key()
-    if not api_key:
-        raise ValueError("Authorization: Bearer <api_key> header is required.")
-    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+    # OAuth callers get a grant-scoped tag, which owns no provisioned slots.
+    principal = _require_principal()
+    caller_tag = principal.caller_tag
     result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
@@ -927,6 +987,17 @@ Options:
             i += 1
 
     print(f"[mcp] Starting MCP server on {host}:{port}")
+
+    from mcp_oauth_provider import build_provider, install_complete_route
+
+    provider = build_provider(_oauth_store())
+    if provider is not None:
+        install_complete_route(mcp, _oauth_store())
+        mcp.auth = provider
+        print(f"[mcp] OAuth enabled: issuer={provider.issuer} resource={provider.resource}")
+    else:
+        print("[mcp] OAuth disabled (MCP_OAUTH_ENABLED not set)")
+
     mcp.run(transport="streamable-http", host=host, port=port)
 
 

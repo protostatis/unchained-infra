@@ -1,0 +1,237 @@
+"""Consent-handler tests: the step that actually grants access.
+
+The protocol flow is covered in ``test_mcp_oauth_flow.py`` by approving through
+the store.  This file drives the handler that a real browser hits, so a broken
+session check, CSRF check, or agent check fails a test instead of silently
+falling back to the store.
+"""
+
+import asyncio
+import os
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from unittest.mock import AsyncMock
+
+from aiohttp.test_utils import make_mocked_request
+from multidict import CIMultiDict
+
+from mcp_oauth_store import fingerprint_key
+from web_app.handlers import mcp_oauth
+
+USER = {"user_id": "user-1", "auth_method": "session", "status": "approved"}
+AGENTS = [
+    {
+        "agent_id": "claude-deadbeef-facebook",
+        "profile": "facebook",
+        "key": "uc_live_a",
+        "connected": True,
+    }
+]
+
+
+def _post(fields, *, cookie="csrf-value", csrf_field="csrf-value"):
+    """A POST request whose parsed form is the given fields."""
+    headers = CIMultiDict({"Cookie": f"{mcp_oauth._CSRF_COOKIE}={cookie}"})
+    request = make_mocked_request("POST", "/oauth/consent", headers=headers)
+    request.post = AsyncMock(return_value={**fields, "csrf": csrf_field})
+    return request
+
+
+class ConsentHandlerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["UNCHAINED_DB_PATH"] = os.path.join(self.tmp.name, "auth.db")
+        os.environ["MCP_OAUTH_ENABLED"] = "1"
+        os.environ["MCP_OAUTH_ISSUER"] = "https://unchainedsky.com"
+        mcp_oauth._STORE.clear()
+        self.store = mcp_oauth._store()
+        self.store.save_client(
+            client_id="client-1",
+            client_name="Test Connector",
+            redirect_uris=["https://connector.test/cb"],
+            source="manual",
+        )
+        self.request_id = self.store.create_request(
+            client_id="client-1",
+            redirect_uri="https://connector.test/cb",
+            state="state-1",
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource="https://unchainedsky.com/mcp",
+        )
+
+    def tearDown(self):
+        os.environ.pop("MCP_OAUTH_ENABLED", None)
+        self.tmp.cleanup()
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _approve(self, request, *, user=USER, agents=AGENTS):
+        with patch.object(mcp_oauth, "_signed_in", return_value=user), patch.object(
+            mcp_oauth, "_agent_options", return_value=agents
+        ):
+            return self._run(mcp_oauth.handle_mcp_oauth_consent_post(request))
+
+    # -- rejection paths ---------------------------------------------------
+
+    def test_missing_session_is_rejected(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        response = self._approve(request, user=None)
+        self.assertEqual(response.status, 401)
+        self.assertIsNone(self.store.get_grant("anything"))
+        self.assertEqual(
+            self.store.get_request(self.request_id)["status"], "pending"
+        )
+
+    def test_bearer_key_cannot_approve(self):
+        """Only a browser session may mint a grant, never an API key."""
+        from types import SimpleNamespace
+
+        fake_core = SimpleNamespace(
+            _authenticate=lambda request: {
+                "auth_method": "bearer",
+                "user_id": "user-1",
+                "status": "approved",
+            }
+        )
+        with patch.object(mcp_oauth, "_core", return_value=fake_core):
+            self.assertIsNone(mcp_oauth._signed_in(object()))
+
+    def test_admin_pending_user_cannot_approve(self):
+        from types import SimpleNamespace
+
+        fake_core = SimpleNamespace(
+            _authenticate=lambda request: {
+                "auth_method": "session",
+                "user_id": "user-1",
+                "status": "pending",
+            }
+        )
+        with patch.object(mcp_oauth, "_core", return_value=fake_core):
+            self.assertIsNone(mcp_oauth._signed_in(object()))
+
+    def test_session_user_can_approve(self):
+        from types import SimpleNamespace
+
+        fake_core = SimpleNamespace(
+            _authenticate=lambda request: {
+                "auth_method": "session",
+                "user_id": "user-1",
+                "status": "approved",
+            }
+        )
+        with patch.object(mcp_oauth, "_core", return_value=fake_core):
+            self.assertEqual(mcp_oauth._signed_in(object())["user_id"], "user-1")
+
+    def test_wrong_csrf_is_rejected(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"},
+            csrf_field="attacker",
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+        self.assertEqual(
+            self.store.get_request(self.request_id)["status"], "pending"
+        )
+
+    def test_missing_csrf_cookie_is_rejected(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"},
+            cookie="",
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+        self.assertEqual(
+            self.store.get_request(self.request_id)["status"], "pending"
+        )
+
+    def test_agent_outside_the_list_is_rejected(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-work"}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+        self.assertEqual(
+            self.store.get_request(self.request_id)["status"], "pending"
+        )
+
+    def test_expired_request_is_rejected(self):
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = 1 WHERE id = ?",
+                (self.request_id,),
+            )
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+
+    # -- approval ----------------------------------------------------------
+
+    def test_approve_creates_pinned_grant_and_ticket(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 302)
+        location = response.headers["Location"]
+        self.assertTrue(location.startswith("https://unchainedsky.com/oauth/complete?ticket="))
+
+        ticket = location.split("ticket=", 1)[1]
+        payload = self.store.complete_request(ticket)
+        self.assertEqual(payload["state"], "state-1")
+        self.assertEqual(payload["redirect_uri"], "https://connector.test/cb")
+
+        grant = self.store.get_grant(payload["grant_id"])
+        self.assertEqual(grant["agent_id"], "claude-deadbeef-facebook")
+        self.assertEqual(grant["user_id"], "user-1")
+        self.assertEqual(grant["key_fingerprint"], fingerprint_key("uc_live_a"))
+
+    def test_approve_is_single_use(self):
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        self.assertEqual(self._approve(request).status, 302)
+        again = self._approve(request)
+        self.assertEqual(again.status, 400)
+
+    # -- denial ------------------------------------------------------------
+
+    def test_deny_redirects_with_access_denied(self):
+        request = _post(
+            {"request": self.request_id, "decision": "deny", "agent_id": ""}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 302)
+        location = response.headers["Location"]
+        self.assertIn("error=access_denied", location)
+        self.assertIn("state=state-1", location)
+        self.assertEqual(
+            self.store.get_request(self.request_id)["status"], "denied"
+        )
+
+    # -- feature switch ----------------------------------------------------
+
+    def test_handler_is_404_when_feature_is_off(self):
+        os.environ["MCP_OAUTH_ENABLED"] = "0"
+        request = make_mocked_request("GET", f"/oauth/consent?request={self.request_id}")
+        response = self._run(mcp_oauth.handle_mcp_oauth_consent(request))
+        self.assertEqual(response.status, 404)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

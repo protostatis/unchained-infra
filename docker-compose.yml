@@ -103,6 +103,12 @@ services:
       - RELAY_INTERNAL_URL=ws://relay:8765
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+      # OAuth for remote MCP connectors (Claude, ChatGPT, Gemini). Off by
+      # default; enabling it adds /authorize, /token, /register, /revoke and
+      # the /.well-known/oauth-* documents to this service.
+      - MCP_OAUTH_ENABLED=${MCP_OAUTH_ENABLED:-0}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-https://unchainedsky.com}
+      - MCP_OAUTH_DCR_ENABLED=${MCP_OAUTH_DCR_ENABLED:-0}
     depends_on:
       relay:
         condition: service_healthy
@@ -256,6 +262,10 @@ services:
       - UNCHAINED_HOSTED_DATA_DIR=/data/hosted-conversations
       - UNCHAINED_SESSIONS_DIR=${UNCHAINED_SESSIONS_DIR:-/data/sessions}
       - UNCHAINED_TRUSTED_PROXIES=${UNCHAINED_TRUSTED_PROXIES:-172.16.0.0/12}
+      # The consent screen is web-owned; it must agree with the MCP service on
+      # whether the connector flow is live and which issuer URL to name.
+      - MCP_OAUTH_ENABLED=${MCP_OAUTH_ENABLED:-0}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-https://unchainedsky.com}
     depends_on:
       - relay
       - private-core
