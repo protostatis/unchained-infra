@@ -23,6 +23,7 @@ MCP SDK; this module owns policy and storage:
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 from urllib.parse import urlencode
@@ -52,6 +53,8 @@ from mcp_oauth_policy import (
     match_policy,
     validate_redirect_uri,
 )
+
+logger = logging.getLogger("unchained.mcp_oauth")
 
 SUPPORTED_SCOPE = "mcp:browser"
 DEFAULT_SCOPES = [SUPPORTED_SCOPE]
@@ -162,11 +165,19 @@ class MCPOAuthProvider(OAuthProvider):
             try:
                 validate_redirect_uri(uri, issuer=self.issuer, allow_loopback=False)
             except RedirectURIError as exc:
+                logger.warning(
+                    "registration rejected: invalid redirect %r: %s", uri, exc
+                )
                 raise RegistrationError(
                     error="invalid_redirect_uri",
                     error_description=f"{exc}: {uri}",
                 ) from None
             if not any(match_policy(uri, policy) for policy in policies):
+                logger.warning(
+                    "registration rejected: no policy for %r (client %r)",
+                    uri,
+                    client_info.client_name,
+                )
                 raise RegistrationError(
                     error="invalid_redirect_uri",
                     error_description=(
@@ -183,6 +194,7 @@ class MCPOAuthProvider(OAuthProvider):
         # The secret the console believes it has is ignored by get_client().
         method = client_info.token_endpoint_auth_method or "none"
         if method not in ("none", "client_secret_post", "client_secret_basic"):
+            logger.warning("registration rejected: auth method %r", method)
             raise RegistrationError(
                 error="invalid_client_metadata",
                 error_description=f"unsupported token_endpoint_auth_method: {method}",
@@ -194,6 +206,9 @@ class MCPOAuthProvider(OAuthProvider):
         client_info.client_secret = None
         client_info.client_secret_expires_at = None
 
+        logger.info(
+            "registration accepted: %s method=%s", redirect_uris, method
+        )
         try:
             self.store.register_dynamic_client(
                 client_id=client_info.client_id,
