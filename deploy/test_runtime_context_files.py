@@ -64,6 +64,25 @@ class RuntimeContextFilesTests(unittest.TestCase):
 
         self.assertEqual(required - runtime_files, set())
 
+    def test_runtime_manifest_entries_are_flat(self) -> None:
+        # The module upload scps each entry into unchained/ without creating
+        # subdirectories, so a path with "/" silently lands in the wrong place.
+        for relative in _manifest_array("UNCHAINED_RUNTIME_FILES"):
+            self.assertNotIn(
+                "/",
+                relative,
+                f"{relative} would be flattened by the module upload",
+            )
+
+    def test_operator_scripts_keep_their_subdirectory(self) -> None:
+        # Structural, not textual: the upload must glob the scripts and target
+        # their own directory. Wording and variable names may change.
+        text = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+        # Allow variable renames: match the glob and a scp destination that
+        # ends in the scripts directory, without pinning identifier names.
+        self.assertRegex(text, r"for \w+ in unchained/scripts/\*\.py")
+        self.assertIn("/unchained/scripts/", text)
+
     def test_manifest_runtime_files_exist(self) -> None:
         missing = {
             relative
