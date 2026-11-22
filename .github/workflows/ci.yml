@@ -102,7 +102,15 @@ jobs:
             test_web_routes \
             test_trial_new_chat \
             test_web_contracts \
-            test_workbench_shell_regression
+            test_workbench_shell_regression \
+            test_mcp_oauth_policy \
+            test_mcp_oauth_store \
+            test_mcp_oauth_flow \
+            test_mcp_oauth_consent \
+            test_mcp_identity \
+            test_mcp_oauth_gate \
+            test_auth_lifecycle \
+            test_mcp_server
 
       - name: Run JS chat recovery test
         run: |
