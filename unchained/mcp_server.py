@@ -180,7 +180,8 @@ def _relay_host_port() -> tuple[str, int]:
 
     Mirrors ``web._parse_relay`` so the MCP tools and the web app address the
     same relay in every deployment (``ws://relay:8765`` in Docker,
-    ``ws://127.0.0.1:<port>`` under dev.sh).
+    ``ws://127.0.0.1:<port>`` under dev.sh). Callers derive the scheme from
+    the port: 443 means https, everything else stays http.
     """
     from urllib.parse import urlparse
 
@@ -781,6 +782,8 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             "Listing Chrome profiles requires an API-key MCP client; "
             "OAuth connectors can only drive the browser granted at consent."
         )
+    # Auth and ownership failures stay tool errors here, like every other
+    # tool: an invalid key must not look like a successful text result.
     aid = _resolve_agent(profile=agent_id)
     api_key = principal.api_key or ""
     if not api_key:
@@ -797,7 +800,9 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             relay_host=relay_host,
             relay_port=relay_port,
             headers={"Authorization": f"Bearer {api_key}"},
-            # The relay waits up to 10s on the bridge before its own 504.
+            # The relay gives the bridge 10s before its own 504. Keep client
+            # headroom above that so the relay's specific status arrives
+            # instead of a bare client read timeout.
             timeout=15.0,
         )
     except httpx.HTTPStatusError as exc:
@@ -810,11 +815,22 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             )
         if status == 504:
             return "The browser agent did not answer in time. Retry in a moment."
+        print(f"[mcp] list_chrome_profiles relay error: HTTP {status}")
         return f"Error listing Chrome profiles (HTTP {status})."
     except ValueError as exc:
-        return f"Error: {exc}"
+        # fetch_relay_profiles raises ValueError for a malformed inventory. Its
+        # text can name relay internals, so keep the detail in the server log.
+        print(f"[mcp] list_chrome_profiles invalid inventory: {exc}")
+        return (
+            "Error listing Chrome profiles: the relay returned an invalid "
+            "profile inventory."
+        )
     except Exception as exc:
-        return f"Error listing Chrome profiles: {exc}"
+        print(
+            "[mcp] list_chrome_profiles failed "
+            f"({type(exc).__name__}): {exc}"
+        )
+        return "Error listing Chrome profiles: the browser service is unavailable."
 
     lines: list[str] = []
     for profile in profiles:

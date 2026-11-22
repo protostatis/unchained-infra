@@ -323,6 +323,27 @@ class TestListChromeProfilesTool(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No browser is connected", text)
         self.assertIn("list_connected_agents", text)
 
+    async def test_unexpected_error_text_is_not_forwarded(self):
+        result = await self._call(
+            AsyncMock(side_effect=RuntimeError("bridge at 10.9.9.9 refused"))
+        )
+        text = result.content[0].text
+        self.assertEqual(
+            text,
+            "Error listing Chrome profiles: the browser service is unavailable.",
+        )
+        self.assertNotIn("10.9.9.9", text)
+
+    async def test_invalid_inventory_is_reported_without_internals(self):
+        result = await self._call(
+            AsyncMock(
+                side_effect=ValueError("bad payload from relay.internal:8765")
+            )
+        )
+        text = result.content[0].text
+        self.assertIn("invalid profile inventory", text)
+        self.assertNotIn("relay.internal", text)
+
     async def test_oauth_principal_is_refused(self):
         oauth = mcp_server.Principal(
             kind="oauth", user_id="user-1", caller_tag="tag"
