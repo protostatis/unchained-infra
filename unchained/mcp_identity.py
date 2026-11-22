@@ -207,7 +207,7 @@ def oauth_can_provision(principal: Principal | None) -> bool:
     return principal.allows(PROVISION_SCOPE)
 
 
-_PROV_TAB_RE = re.compile(r"^prov-([A-Za-z0-9]+)-([A-Za-z0-9]+)$")
+_PROV_TAB_RE = re.compile(r"^prov-([A-Za-z0-9]+)-([A-Za-z0-9]+)\Z")
 
 
 def provision_slot_from_tab_id(tab_id: str) -> str:

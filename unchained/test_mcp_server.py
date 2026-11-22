@@ -554,7 +554,12 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
             await middleware.on_call_tool(
                 self._ctx({"tab_id": "A" * 32}), call_next
             )
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "A" * 32 + "\n"}), call_next
+                )
         self.assertEqual(seen[0]["tab_id"], "A" * 32)
+        self.assertIn("aliases are not available", str(ctx.exception))
 
     async def test_middleware_fails_closed_when_status_is_unreadable(self):
         middleware = mcp_server.OAuthToolScopeMiddleware()

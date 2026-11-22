@@ -190,7 +190,7 @@ def _require_provision_capability(principal: Principal) -> None:
 
 # CDP target ids are 32 hex characters. An alias with that shape could shadow
 # a concrete target and redirect an already-authorized call.
-_CONCRETE_TAB_ID_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
+_CONCRETE_TAB_ID_RE = re.compile(r"^[0-9A-Fa-f]{32}\Z")
 
 
 def _relay_host_port() -> tuple[str, int]:
