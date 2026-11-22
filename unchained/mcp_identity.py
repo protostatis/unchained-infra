@@ -165,11 +165,13 @@ def revoke_if_detached(store, grant_id: str | None, state: str) -> None:
 
 
 # Provisioned Chromes are temporary browsers launched with an arbitrary local
-# profile. A connector approved for one browser must not reach them.
+# profile. A connector approved for one browser must not reach them, and it
+# must not enumerate every Google account saved on the host either.
 PROVISION_ONLY_TOOLS = frozenset(
     {
         "cdp_provision_launch",
         "cdp_provision_cleanup",
+        "list_chrome_profiles",
         "list_provisioned_tabs",
     }
 )

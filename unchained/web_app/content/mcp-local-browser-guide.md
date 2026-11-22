@@ -176,6 +176,25 @@ ddm agent_id=facebook
 
 When `agent_id` is empty (the default), tools target the default profile.
 
+## Local Chrome Profiles To Copy
+
+`list_chrome_profiles` returns the Chrome profiles on the agent's machine that
+you can copy into a temporary browser, matching the web app's profile picker.
+Only profiles signed into a Google account are listed.
+
+```text
+list_chrome_profiles
+
+Chrome profiles available to copy (pass path to cdp_provision_launch):
+  Profile 5 (you@example.com)
+    path: /Users/you/Library/Application Support/Google/Chrome/Profile 5
+The original profile is not modified; Chrome runs on a copy.
+```
+
+Pass one of those `path` values to `cdp_provision_launch` as `profile_path`.
+Both tools require an API-key MCP client; OAuth connectors cannot copy local
+profiles.
+
 ## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
 
 Use this subsection in your agent instruction file so tool behavior stays
@@ -188,6 +207,7 @@ consistent:
 - `agent_id` is auto-detected from your API key — you do not need to pass it.
 - To target a specific Chrome profile, pass the profile name in `agent_id` (e.g. `agent_id=facebook`).
 - Use `list_connected_agents` to discover all connected profiles.
+- Use `list_chrome_profiles` to find local profile paths for `cdp_provision_launch`.
 - Use `list_provisioned_tabs` after profile provisioning or OAuth flows to discover `prov-<slot>-<tab_id>` values for new tabs and popups.
 
 #### DDM-First Methodology

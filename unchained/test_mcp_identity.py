@@ -391,6 +391,11 @@ class ToolScopeTests(unittest.TestCase):
             oauth_tool_target_error(self.oauth, "list_provisioned_tabs", {})
         )
 
+    def test_oauth_cannot_list_chrome_profiles(self):
+        self.assertIsNotNone(
+            oauth_tool_target_error(self.oauth, "list_chrome_profiles", {})
+        )
+
     def test_oauth_cannot_launch_provisioned_chrome(self):
         self.assertIsNotNone(
             oauth_tool_target_error(
@@ -412,7 +417,8 @@ class ToolScopeTests(unittest.TestCase):
         self.assertIsNone(oauth_tool_target_error(self.oauth, "js_eval", {}))
 
     def test_api_key_keeps_provisioning_access(self):
-        for name in ("list_provisioned_tabs", "cdp_provision_launch"):
+        for name in ("list_provisioned_tabs", "cdp_provision_launch",
+                     "list_chrome_profiles"):
             self.assertIsNone(oauth_tool_target_error(self.api_key, name, {}))
         self.assertIsNone(
             oauth_tool_target_error(self.api_key, "js_eval", {"tab_id": "prov-x-1"})

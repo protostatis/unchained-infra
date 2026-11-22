@@ -175,6 +175,20 @@ def _require_principal() -> Principal:
     return principal
 
 
+def _relay_host_port() -> tuple[str, int]:
+    """Return the relay's internal host and port for direct HTTP queries.
+
+    Mirrors ``web._parse_relay`` so the MCP tools and the web app address the
+    same relay in every deployment (``ws://relay:8765`` in Docker,
+    ``ws://127.0.0.1:<port>`` under dev.sh).
+    """
+    from urllib.parse import urlparse
+
+    relay_url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
+    parsed = urlparse(relay_url)
+    return parsed.hostname or "relay", parsed.port or 8765
+
+
 _OAUTH_STORE: list = []
 
 
@@ -688,7 +702,6 @@ async def list_connected_agents(agent_id: str = "") -> str:
     """
     principal = _require_principal()
 
-    from urllib.parse import urlparse
     import httpx
 
     # The relay only knows API keys, so an OAuth caller borrows the key its
@@ -702,10 +715,7 @@ async def list_connected_agents(agent_id: str = "") -> str:
     if not api_key:
         raise ValueError("Authorization: Bearer <api_key> header is required.")
 
-    relay_url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
-    parsed = urlparse(relay_url)
-    host = parsed.hostname or "relay"
-    port = parsed.port or 8765
+    host, port = _relay_host_port()
     scheme = "https" if port == 443 else "http"
     port_part = "" if port in (443, 80) else f":{port}"
     api_url = f"{scheme}://{host}{port_part}/api/agents"
@@ -744,6 +754,88 @@ def _key_for_grant(principal: Principal) -> str:
         if fingerprint_key(key) == grant["key_fingerprint"]:
             return key
     return ""
+
+
+@mcp.tool()
+async def list_chrome_profiles(agent_id: str = "") -> str:
+    """List the local Chrome profiles that cdp_provision_launch can copy.
+
+    Shows the same inventory as the web app's profile picker: profiles
+    directory paths on the user's machine, plus their display name and
+    Google account email (only profiles signed into Google are listed).
+
+    Run this before cdp_provision_launch so you can pass a real
+    ``profile_path`` instead of guessing one.
+
+    Args:
+        agent_id: Browser agent to ask (default: auto-detected). Pass the
+            agent_id from list_connected_agents when several browsers are
+            connected; a profile name such as "facebook" also works.
+    """
+    principal = _require_principal()
+    if principal.is_oauth:
+        # Profiles exist only to be copied by cdp_provision_launch, which
+        # OAuth connectors may not call. Refuse rather than expose the
+        # machine's full Google account list to a one-browser grant.
+        raise ValueError(
+            "Listing Chrome profiles requires an API-key MCP client; "
+            "OAuth connectors can only drive the browser granted at consent."
+        )
+    aid = _resolve_agent(profile=agent_id)
+    api_key = principal.api_key or ""
+    if not api_key:
+        raise ValueError("Authorization: Bearer <api_key> header is required.")
+
+    import httpx
+
+    import provision_helpers
+
+    relay_host, relay_port = _relay_host_port()
+    try:
+        profiles = await provision_helpers.fetch_relay_profiles(
+            agent_id=aid,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            headers={"Authorization": f"Bearer {api_key}"},
+            # The relay waits up to 10s on the bridge before its own 504.
+            timeout=15.0,
+        )
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status == 404:
+            return (
+                "No browser is connected for this agent. Start the agent on the "
+                "machine with Chrome, then retry — list_connected_agents shows "
+                "what is currently connected."
+            )
+        if status == 504:
+            return "The browser agent did not answer in time. Retry in a moment."
+        return f"Error listing Chrome profiles (HTTP {status})."
+    except ValueError as exc:
+        return f"Error: {exc}"
+    except Exception as exc:
+        return f"Error listing Chrome profiles: {exc}"
+
+    lines: list[str] = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        path = str(profile.get("path") or profile.get("profile_path") or "").strip()
+        if not path:
+            continue
+        name = str(profile.get("name") or profile.get("dir_name") or "Chrome profile").strip()
+        email = str(profile.get("email") or "").strip()
+        label = f"{name} ({email})" if email else name
+        lines.append(f"  {label}\n    path: {path}")
+
+    if not lines:
+        return "No Chrome profiles with a Google sign-in were found on this machine."
+    lines.insert(
+        0,
+        "Chrome profiles available to copy (pass path to cdp_provision_launch):",
+    )
+    lines.append("The original profile is not modified; Chrome runs on a copy.")
+    return "\n".join(lines)
 
 
 @mcp.tool()

@@ -9,7 +9,8 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 
 - Keep your real browser session (cookies, extensions, 2FA state, IP)
 - Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`,
-  `cdp_provision_launch`, `list_provisioned_tabs`) from any MCP-compatible client
+  `list_chrome_profiles`, `cdp_provision_launch`, `list_provisioned_tabs`) from
+  any MCP-compatible client
 - Run multiple Chrome profiles simultaneously (e.g. personal + work + social)
 - Discover tabs opened by provisioned Chrome flows, including OAuth popups
 - Zero-config path if you already installed the agent via `curl | bash`
@@ -193,7 +194,25 @@ profile (with saved passwords, cookies, 2FA state) through the MCP tools.
 
 ### Workflow
 
-1. **Launch** a temporary Chrome with the user's profile:
+1. **List** the local Chrome profiles you can copy:
+
+```text
+list_chrome_profiles
+```
+
+Response:
+
+```text
+Chrome profiles available to copy (pass path to cdp_provision_launch):
+  Profile 5 (you@example.com)
+    path: /Users/you/Library/Application Support/Google/Chrome/Profile 5
+The original profile is not modified; Chrome runs on a copy.
+```
+
+Only profiles signed into a Google account are listed, matching the web app's
+profile picker. Skip this step if you already know the profile's absolute path.
+
+2. **Launch** a temporary Chrome with the user's profile:
 
 ```text
 cdp_provision_launch  profile_path="/Users/you/Library/Application Support/Google/Chrome/Profile 5"
@@ -208,13 +227,13 @@ Provisioned Chrome launched.
   Debug port: 9600
 ```
 
-2. **Use** the returned `tab_id` with any MCP tool:
+3. **Use** the returned `tab_id` with any MCP tool:
 
 ```text
 cdp_navigate  url=https://x.com  tab_id=prov-a1b2-AABB11CC22DD33EE44FF55667788990A
 ```
 
-3. **Discover new tabs** (e.g., OAuth popups) with `list_provisioned_tabs`:
+4. **Discover new tabs** (e.g., OAuth popups) with `list_provisioned_tabs`:
 
 ```text
 Slot a1b2 (profile: Profile 5, 2 tabs):
@@ -222,14 +241,14 @@ Slot a1b2 (profile: Profile 5, 2 tabs):
   prov-a1b2-E914E9D4B944AABB  Sign in - Google  https://accounts.google.com/...
 ```
 
-4. **Switch** to the popup tab using its prov-prefixed ID:
+5. **Switch** to the popup tab using its prov-prefixed ID:
 
 ```text
 ddm  tab_id=prov-a1b2-E914E9D4B944AABB
 cdp_click  x=780  y=377  tab_id=prov-a1b2-E914E9D4B944AABB
 ```
 
-5. **Clean up** when done:
+6. **Clean up** when done:
 
 ```text
 cdp_provision_cleanup  slot=a1b2     # specific slot
@@ -240,6 +259,7 @@ cdp_provision_cleanup                 # all slots
 
 | Tool | Purpose |
 |------|---------|
+| `list_chrome_profiles` | List local Chrome profiles (with Google sign-in) and their paths |
 | `cdp_provision_launch` | Launch temp Chrome with a profile. Returns slot + prov-prefixed tab ID |
 | `list_provisioned_tabs` | List all tabs across provisioned Chrome instances |
 | `cdp_provision_cleanup` | Kill provisioned Chrome(s) and clean up temp dirs |
@@ -248,6 +268,8 @@ cdp_provision_cleanup                 # all slots
 
 - Provisioned Chrome runs as a separate process with a copy of the profile
 - The original Chrome profile is not modified
+- `list_chrome_profiles` reads the same inventory as the web app: profiles signed into a Google account
+- `list_chrome_profiles` and the provisioning tools require an API-key MCP client; OAuth connectors cannot copy local profiles
 - Tab IDs use `prov-{slot}-{chrome_id}` format — pass these to any MCP tool's `tab_id` parameter
 - `ddm --tabs` with a prov-prefixed `tab_id` auto-prefixes tab IDs in the output
 
@@ -263,6 +285,7 @@ consistent:
 - `agent_id` is auto-detected from your API key — you do not need to pass it.
 - To target a specific Chrome profile, pass the profile name in `agent_id` (e.g. `agent_id=facebook`).
 - Use `list_connected_agents` to discover all connected profiles.
+- Use `list_chrome_profiles` to find the local profile paths `cdp_provision_launch` can copy.
 - Use `cdp_provision_launch` to launch a temp Chrome with a user profile for OAuth flows.
 - Use `list_provisioned_tabs` to discover tabs (including popups) in provisioned Chrome.
 - Use `cdp_provision_cleanup` to clean up provisioned Chrome instances when done.
