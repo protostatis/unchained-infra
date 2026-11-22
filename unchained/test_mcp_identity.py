@@ -10,6 +10,8 @@ from mcp_identity import (
     Principal,
     KIND_API_KEY,
     KIND_OAUTH,
+    PROVISION_SCOPE,
+    oauth_can_provision,
     oauth_prov_tab_allowed,
     provision_slot_from_tab_id,
     resolve_principal,
@@ -411,6 +413,33 @@ class ToolScopeTests(unittest.TestCase):
         self.assertIs(
             oauth_prov_tab_allowed(self.oauth, "prov-zzzz-AABB", self.slots), False
         )
+
+    def test_legacy_prov_ids_are_unverifiable_and_denied(self):
+        for tab in ("prov-auto", "prov-ABC123", "prov--auto", "prov-"):
+            self.assertIs(
+                oauth_prov_tab_allowed(self.oauth, tab, self.slots), False, tab
+            )
+
+    def test_scope_gate_requires_the_new_consent(self):
+        self.assertTrue(oauth_can_provision(self.api_key))
+        scoped = Principal(
+            kind=KIND_OAUTH,
+            user_id="user-1",
+            caller_tag="oauth-deadbeef",
+            agent_id="claude-deadbeef",
+            grant_id="g1",
+            scopes=("mcp:browser", PROVISION_SCOPE),
+        )
+        old = Principal(
+            kind=KIND_OAUTH,
+            user_id="user-1",
+            caller_tag="oauth-deadbeef",
+            agent_id="claude-deadbeef",
+            grant_id="g1",
+            scopes=("mcp:browser",),
+        )
+        self.assertTrue(oauth_can_provision(scoped))
+        self.assertFalse(oauth_can_provision(old))
 
     def test_unavailable_status_is_unknown(self):
         self.assertIsNone(

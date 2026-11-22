@@ -138,8 +138,10 @@ class ConsentHandlerTests(unittest.TestCase):
 
     def test_consent_discloses_profile_copying(self):
         response = self._get(self.request_id)
-        self.assertIn("launch a temporary copy", response.text)
+        self.assertIn("Google account email", response.text)
+        self.assertIn("launch a copy", response.text)
         self.assertIn("original profile is not modified", response.text)
+        self.assertIn("assistant provider", response.text)
 
     def test_switch_account_clears_the_session_and_returns_to_the_same_request(self):
         request = _post(
@@ -310,6 +312,7 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertEqual(grant["agent_id"], "claude-deadbeef-facebook")
         self.assertEqual(grant["user_id"], "user-1")
         self.assertEqual(grant["key_fingerprint"], fingerprint_key("uc_live_a"))
+        self.assertIn("mcp:provision", grant["scopes"])
 
     def test_approve_is_single_use(self):
         request = _post(

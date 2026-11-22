@@ -260,11 +260,13 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 {"" if status == "manual" else "<p class='note warn'>Unverified connector. Its name was supplied by the app, and this callback does not tell Unchained which account will receive access. Only continue if you started this connection yourself in the app.</p>"}
 <p class='note'>
   While connected it can read pages, click, type, run script and read cookies in
-  the browser you choose below. It can also list the Chrome profiles saved on
-  this computer and launch a temporary copy of one — with its saved sign-ins —
-  when it needs an authenticated session; the original profile is not modified.
-  You can disconnect it any time from
-  <a href="/oauth/connections">Connected apps</a>.
+  the browser you choose below. It can also list the Chrome profiles available
+  to that browser's computer — each profile's name, Google account email and
+  path — and launch a copy of any of them using saved sign-ins, then act in
+  those signed-in accounts. The original profile is not modified, but actions
+  through the connector can change online account data, and anything it returns
+  may be processed by the assistant provider. You can disconnect it any time
+  from <a href="/oauth/connections">Connected apps</a>.
 </p>
 <div class='account'>
   Signed in as <strong>{_escape(user.get("email") or user.get("user_id") or "")}</strong>
@@ -370,7 +372,10 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
         agent_id=chosen["agent_id"],
         key_hash=hashlib.sha256(chosen["key"].encode()).hexdigest()[:8],
         key_fingerprint=fingerprint_key(chosen["key"]),
-        scopes=pending["scopes"],
+        # The consent copy covers the full provisioning lane, so the grant
+        # carries the scope that unlocks it. Grants approved before that copy
+        # existed lack this and must reconnect.
+        scopes=list(dict.fromkeys([*pending["scopes"], "mcp:provision"])),
         resource=pending["resource"],
     )
 

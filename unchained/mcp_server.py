@@ -35,7 +35,9 @@ from mcp_identity import (
     IdentityError,
     OAUTH_PROV_TAB_DENIED,
     OAUTH_PROV_TAB_UNVERIFIED,
+    PROVISION_RECONSENT_REQUIRED,
     Principal,
+    oauth_can_provision,
     oauth_prov_tab_allowed,
     provision_slot_from_tab_id,
     resolve_principal,
@@ -178,6 +180,12 @@ def _require_principal() -> Principal:
     return principal
 
 
+def _require_provision_capability(principal: Principal) -> None:
+    """Reject grants approved before profile access was part of consent."""
+    if not oauth_can_provision(principal):
+        raise ValueError(PROVISION_RECONSENT_REQUIRED)
+
+
 def _relay_host_port() -> tuple[str, int]:
     """Return the relay's internal host and port for direct HTTP queries.
 
@@ -213,8 +221,12 @@ def _oauth_store():
 
 async def _oauth_prov_tab_verdict(principal: Principal, tab_id: str) -> bool | None:
     """Return True/False/None for an OAuth caller's target prov tab."""
-    if not provision_slot_from_tab_id(tab_id):
+    if not str(tab_id or "").startswith("prov-"):
         return True
+    if not provision_slot_from_tab_id(tab_id):
+        # Legacy ``prov-{id}`` / ``prov-auto`` select the sole provisioned
+        # browser without a slot, so their owner cannot be established.
+        return False
     if not principal.agent_id:
         return False
     try:
@@ -229,13 +241,8 @@ async def _oauth_prov_tab_verdict(principal: Principal, tab_id: str) -> bool | N
     return oauth_prov_tab_allowed(principal, tab_id, slots)
 
 
-async def _oauth_alias_prov_target(principal: Principal, tab_id: str) -> str | None:
-    """Return the prov tab an OAuth caller's alias resolves to, if any.
-
-    Aliases live per browser agent, not per caller, so an alias set by an
-    API-key client would otherwise let a connector reach that client's
-    provisioned Chrome without ever passing a ``prov-`` tab id.
-    """
+async def _oauth_alias_map(principal: Principal) -> dict | None:
+    """Return the alias map for the grant's browser, or None if unreadable."""
     if not principal.agent_id:
         return None
     try:
@@ -246,17 +253,37 @@ async def _oauth_alias_prov_target(principal: Principal, tab_id: str) -> str | N
             f"({type(exc).__name__}): {exc}"
         )
         return None
+    if str(raw or "").strip() == "No tab aliases set":
+        return {}
     try:
         aliases = json.loads(raw)
     except Exception:
         return None
-    if not isinstance(aliases, dict):
-        return None
-    target = aliases.get(str(tab_id).lower())
-    target = target if target is not None else aliases.get(str(tab_id))
-    if isinstance(target, str) and target.startswith("prov-"):
-        return target
-    return None
+    return aliases if isinstance(aliases, dict) else None
+
+
+async def _oauth_tab_target(principal: Principal, tab_id: str) -> tuple[bool | None, str]:
+    """Authorize an OAuth tab target and return the id to execute against.
+
+    Aliases live per browser agent, not per caller, so the alias map is
+    consulted first: an alias set by an API-key client could otherwise point
+    at its provisioned Chrome and bypass the ``prov-`` check. The resolved
+    target, not the alias name, is what gets authorized and forwarded.
+    """
+    raw = str(tab_id or "")
+    if raw in ("", "auto"):
+        return True, raw
+    aliases = await _oauth_alias_map(principal)
+    if aliases is None:
+        return None, raw
+    resolved = aliases.get(raw.lower())
+    if isinstance(resolved, str) and resolved and resolved != raw:
+        # The private core would follow this alias, so authorize and use the
+        # target it points to. Refuse chains that would resolve again.
+        if aliases.get(resolved.lower()) not in (None, resolved):
+            return False, raw
+        return await _oauth_prov_tab_verdict(principal, resolved), resolved
+    return await _oauth_prov_tab_verdict(principal, raw), raw
 
 
 class OAuthToolScopeMiddleware(Middleware):
@@ -273,18 +300,18 @@ class OAuthToolScopeMiddleware(Middleware):
         arguments = getattr(context.message, "arguments", None) or {}
         tab_id = str(arguments.get("tab_id") or "")
         if principal is not None and principal.is_oauth and tab_id not in ("", "auto"):
-            target = tab_id
-            if not tab_id.startswith("prov-"):
-                target = await _oauth_alias_prov_target(principal, tab_id) or ""
-            if target.startswith("prov-"):
-                verdict = await _oauth_prov_tab_verdict(principal, target)
-                if verdict is not True:
-                    from fastmcp.exceptions import ToolError
+            verdict, canonical = await _oauth_tab_target(principal, tab_id)
+            if verdict is not True:
+                from fastmcp.exceptions import ToolError
 
-                    raise ToolError(
-                        OAUTH_PROV_TAB_DENIED if verdict is False
-                        else OAUTH_PROV_TAB_UNVERIFIED
-                    )
+                raise ToolError(
+                    OAUTH_PROV_TAB_DENIED if verdict is False
+                    else OAUTH_PROV_TAB_UNVERIFIED
+                )
+            if canonical != tab_id:
+                # Bind execution to the target that was authorized instead of
+                # letting the tool resolve the alias again.
+                context.message.arguments = {**arguments, "tab_id": canonical}
         return await call_next(context)
 
 
@@ -715,12 +742,14 @@ async def cdp_list_tab_aliases(agent_id: str = "") -> str:
     raw = await cloud_tools.list_tab_aliases(aid)
     if not principal.is_oauth:
         return raw
+    if str(raw or "").strip() == "No tab aliases set":
+        return raw
     try:
         aliases = json.loads(raw)
     except Exception:
-        return raw
+        return "Could not read tab aliases; retry in a moment."
     if not isinstance(aliases, dict):
-        return raw
+        return "Could not read tab aliases; retry in a moment."
     try:
         status = await cloud_tools.provision_status(aid)
     except Exception:
@@ -871,6 +900,7 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             connected; a profile name such as "facebook" also works.
     """
     principal = _require_principal()
+    _require_provision_capability(principal)
     # Auth and ownership failures stay tool errors here, like every other
     # tool: an invalid key must not look like a successful text result.
     aid = _resolve_agent(profile=agent_id)
@@ -969,6 +999,7 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
     drive slots its own grant launched.
     """
     principal = _require_principal()
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)
     caller_tag = principal.caller_tag
     result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
@@ -998,9 +1029,18 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
     """
     aid = _resolve_agent(profile=agent_id)  # raises if no credential
     # Pass caller_tag so cleanup-all only kills this caller's provisions.
-    # OAuth callers get a grant-scoped tag, which owns no provisioned slots.
+    # OAuth grants are tagged oauth-<grant hash>.
     principal = _require_principal()
+    _require_provision_capability(principal)
     caller_tag = principal.caller_tag
+    if principal.is_oauth and slot:
+        # The bridge cannot reject an unowned legacy slot that has no stored
+        # tag, so verify positive ownership before asking it to delete.
+        status = await cloud_tools.provision_status(aid)
+        slots = status.get("slots") if isinstance(status, dict) else None
+        info = slots.get(slot) if isinstance(slots, dict) else None
+        if not isinstance(info, dict) or info.get("caller_tag") != caller_tag:
+            return f"Slot {slot} not found — nothing cleaned."
     result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
@@ -1030,6 +1070,7 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
     An OAuth connector sees only the slots its own grant launched.
     """
     principal = _require_principal()
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)
     result = await cloud_tools.provision_status(aid)
     if "error" in result:

@@ -86,8 +86,9 @@ def resolve_principal(
             revoke_if_detached(store, row["grant_id"], state)
             return None
         # Cheap constant-time-ish tag so provisioning cleanup can never collide
-        # with an API-key caller's tag.
-        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:8]
+        # with an API-key caller's tag. 64 bits: this tag is the ownership
+        # authority for provisioned browsers.
+        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:16]
         return Principal(
             kind=KIND_OAUTH,
             user_id=row["user_id"],
@@ -179,6 +180,27 @@ OAUTH_PROV_TAB_UNVERIFIED = (
     "Retry in a moment."
 )
 
+# New consent grants this scope. Grants approved before profile access existed
+# do not have it, so they must reconnect instead of silently gaining the
+# ability to copy local Chrome profiles.
+PROVISION_SCOPE = "mcp:provision"
+
+PROVISION_RECONSENT_REQUIRED = (
+    "This connector was approved before Chrome profile access existed. "
+    "Reconnect it to review and approve the new permission."
+)
+
+
+def oauth_can_provision(principal: Principal | None) -> bool:
+    """Return True when this caller may use the provisioning tools.
+
+    API keys keep their existing access. OAuth grants need the scope added by
+    the updated consent screen, which existing grants do not carry.
+    """
+    if principal is None or not principal.is_oauth:
+        return True
+    return principal.allows(PROVISION_SCOPE)
+
 
 def provision_slot_from_tab_id(tab_id: str) -> str:
     """Return the slot portion of a ``prov-{slot}-{id}`` tab ID, or ""."""
@@ -202,9 +224,13 @@ def oauth_prov_tab_allowed(
     """
     if principal is None or not principal.is_oauth:
         return True
+    if not str(tab_id or "").startswith("prov-"):
+        return True
     slot = provision_slot_from_tab_id(tab_id)
     if not slot:
-        return True
+        # Legacy ``prov-{id}`` and ``prov-auto`` reach the sole provisioned
+        # browser without naming a slot, so ownership cannot be established.
+        return False
     if not isinstance(slots, dict):
         return None
     info = slots.get(slot)

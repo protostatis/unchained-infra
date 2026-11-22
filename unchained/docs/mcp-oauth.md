@@ -224,6 +224,9 @@ loopback allowed only for native clients an operator registered.
   refuses `prov-` tabs from another caller's slot. Disconnecting the app
   revokes the grant; slots are cleaned up with `cdp_provision_cleanup`, which
   also only touches the caller's slots.
+- New grants carry the `mcp:provision` scope that unlocks the provisioning
+  tools. Grants approved before profile access was added do not have it and
+  receive a reconnect error until the user approves the updated consent.
 
 ## Account lifecycle
 
