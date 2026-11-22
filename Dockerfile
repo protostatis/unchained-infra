@@ -29,6 +29,8 @@ COPY unchained/mcp_identity.py .
 COPY unchained/mcp_oauth_policy.py .
 COPY unchained/mcp_oauth_store.py .
 COPY unchained/mcp_oauth_provider.py .
+COPY unchained/scripts/register_mcp_oauth_client.py scripts/register_mcp_oauth_client.py
+COPY unchained/scripts/manage_mcp_oauth_policy.py scripts/manage_mcp_oauth_policy.py
 COPY unchained/orchestrator.py .
 COPY unchained/cdp.py .
 COPY unchained/ddm.py .

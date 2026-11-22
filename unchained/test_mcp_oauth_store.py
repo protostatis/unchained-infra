@@ -543,6 +543,29 @@ class PolicySeedTests(StoreTestBase):
         self.assertIn("claude.ai", hosts)
         self.assertIn("vertexaisearch.cloud.google.com", hosts)
 
+    def test_static_providers_are_seeded(self):
+        hosts = {p["host"] for p in self.store.list_policies()}
+        for host in ("claude.ai", "vertexaisearch.cloud.google.com",
+                     "chatgpt.com", "agent.meta.ai"):
+            self.assertIn(host, hosts)
+
+    def test_v1_database_receives_only_the_new_static_policies(self):
+        with self.store._conn() as conn:
+            conn.execute(
+                "DELETE FROM mcp_oauth_policies WHERE host IN ('chatgpt.com', 'agent.meta.ai')"
+            )
+            # An operator removed Claude's policy on this v1 database.
+            conn.execute("DELETE FROM mcp_oauth_policies WHERE host = 'claude.ai'")
+            conn.execute(
+                "UPDATE mcp_oauth_meta SET value = '1' WHERE key = 'policy_seed_version'"
+            )
+        fresh = OAuthStore(self.db_path)
+        hosts = {p["host"] for p in fresh.list_policies()}
+        self.assertIn("chatgpt.com", hosts)
+        self.assertIn("agent.meta.ai", hosts)
+        self.assertNotIn("claude.ai", hosts)  # removal is sticky across a seed bump
+        self.assertIn("vertexaisearch.cloud.google.com", hosts)
+
     def test_removed_policy_is_not_resurrected(self):
         policy_id = self.store.list_policies()[0]["id"]
         self.assertTrue(self.store.remove_policy(policy_id))

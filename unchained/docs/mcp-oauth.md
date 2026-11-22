@@ -139,16 +139,29 @@ the 401 challenge it needs. `/mcp/setup` is a stable alias for the install page.
 A callback URL is where the authorization code lands, so automatic
 registration only accepts destinations an operator has approved.  Policies live
 in `mcp_oauth_callback_policies` and name an exact scheme, host, port and path
-(optionally a path prefix) plus whether a query string is allowed.  Two are
-seeded — Claude's and Gemini Enterprise's — and the seed is versioned, so a
-policy an operator removes stays removed.
+(optionally a path prefix) plus whether a query string is allowed.
+
+Policy provenance is split:
+
+* **Static provider callbacks** (Claude, Gemini Enterprise, ChatGPT, Muse) live
+  in `mcp_oauth_policy.py` and are seeded from code with a version marker. A
+  fresh database gets all of them; an existing one receives only the entries
+  added in newer seed versions, so a policy an operator removed stays removed.
+* **Per-user callbacks** — the six `user_bound_custom-mcp-<hash>` paths a Gemini
+  account registers — are environment-specific and live only in the database.
+  Snapshot them with `export` and restore with `import`.
 
 ```bash
 uv run scripts/manage_mcp_oauth_policy.py list
 uv run scripts/manage_mcp_oauth_policy.py add \
-    --host chatgpt.com --path /connector_platform_oauth_redirect \
-    --note "ChatGPT custom MCP server"
+    --host example.com --path /oauth/callback \
+    --note "operator-added provider"
+uv run scripts/manage_mcp_oauth_policy.py export --file policies.json
+uv run scripts/manage_mcp_oauth_policy.py import --file policies.json --apply
 ```
+
+`export` writes every policy; `import` reports what is missing and only adds,
+so a restore never deletes an operator's newer entries.
 
 Removing a policy takes effect **immediately for admission**: an automatic
 client whose stored callbacks no longer match is refused at `get_client`, so
