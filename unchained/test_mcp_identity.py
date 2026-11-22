@@ -18,8 +18,10 @@ from mcp_oauth_store import OAuthStore, agent_id_for_key, fingerprint_key
 
 
 class _FakeAuth:
-    def __init__(self, keys_by_user):
+    def __init__(self, keys_by_user, status="approved"):
         self._keys = keys_by_user
+        self.status = status
+        self.missing_users = set()
 
     def validate_key(self, key):
         for user_id, keys in self._keys.items():
@@ -29,6 +31,11 @@ class _FakeAuth:
 
     def get_keys_for_user(self, user_id):
         return list(self._keys.get(user_id, []))
+
+    def find_user_by_id(self, user_id):
+        if user_id in self.missing_users or self.status is None:
+            return None
+        return {"user_id": user_id, "status": self.status}
 
 
 class ResolvePrincipalTests(unittest.TestCase):
@@ -145,11 +152,115 @@ class ResolvePrincipalTests(unittest.TestCase):
             resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
         )
 
+    def test_rejected_account_token_resolves_to_nothing(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = "rejected"
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_pending_account_token_resolves_to_nothing(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = "pending"
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_legacy_key_without_user_row_still_resolves(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        # The key still validates, but the account row is genuinely absent.
+        self.auth.missing_users.add("user-1")
+        principal = resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        self.assertIsNotNone(principal)
+
+    def test_ineligible_request_revokes_the_grant(self):
+        grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = "rejected"
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+        self.assertIsNone(self.store.get_grant(grant_id))
+
+    def test_revoked_key_request_revokes_the_grant(self):
+        grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth._keys["user-1"] = []
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+        self.assertIsNone(self.store.get_grant(grant_id))
+
     def test_grant_for_unknown_key_resolves_to_nothing(self):
         _grant_id, token = self._issue_token("f" * 64)
         self.assertIsNone(
             resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
         )
+
+
+class GrantStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = OAuthStore(os.path.join(self.tmp.name, "auth.db"))
+        self.auth = _FakeAuth({"user-1": ["uc_live_a"]})
+        self.store.save_client(
+            client_id="c1",
+            client_name="C",
+            redirect_uris=["https://c.test/cb"],
+            source="manual",
+        )
+        request_id = self.store.create_request(
+            client_id="c1",
+            redirect_uri="https://c.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+        )
+        self.grant_id, _ = self.store.approve_request(
+            request_id=request_id,
+            user_id="user-1",
+            agent_id="claude-deadbeef",
+            key_hash="deadbeef",
+            key_fingerprint=fingerprint_key("uc_live_a"),
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_valid(self):
+        from mcp_identity import GRANT_VALID, grant_state
+
+        self.assertEqual(grant_state(self.auth, self.store, self.grant_id), GRANT_VALID)
+
+    def test_account_rejected(self):
+        from mcp_identity import GRANT_ACCOUNT, grant_state
+
+        self.auth.status = "rejected"
+        self.assertEqual(
+            grant_state(self.auth, self.store, self.grant_id), GRANT_ACCOUNT
+        )
+
+    def test_key_revoked(self):
+        from mcp_identity import GRANT_KEY, grant_state
+
+        self.auth._keys["user-1"] = []
+        self.assertEqual(grant_state(self.auth, self.store, self.grant_id), GRANT_KEY)
+
+    def test_unknown_grant(self):
+        from mcp_identity import GRANT_GONE, grant_state
+
+        self.assertEqual(grant_state(self.auth, self.store, "nope"), GRANT_GONE)
+
+    def test_store_failure_is_unknown_not_ineligible(self):
+        from mcp_identity import GRANT_UNKNOWN, grant_state
+
+        class Broken:
+            def get_grant(self, grant_id):
+                raise RuntimeError("db down")
+
+        self.assertEqual(grant_state(self.auth, Broken(), self.grant_id), GRANT_UNKNOWN)
 
 
 class TargetAgentTests(unittest.TestCase):
@@ -227,6 +338,22 @@ class TargetAgentTests(unittest.TestCase):
             target_agent(oauth, "claude-deadbeef-work")
         with self.assertRaises(IdentityError):
             target_agent(oauth, agent_id_for_key(self.key, "work"))
+
+    def test_oauth_error_names_the_requested_profile(self):
+        oauth = Principal(
+            kind=KIND_OAUTH,
+            user_id=self.user_id,
+            caller_tag="tag",
+            agent_id="claude-deadbeef-facebook",
+            grant_id="g1",
+            scopes=("mcp:browser",),
+        )
+        with self.assertRaises(IdentityError) as ctx:
+            target_agent(oauth, "work")
+        message = str(ctx.exception)
+        self.assertIn("facebook", message)
+        self.assertIn("work", message)
+        self.assertNotIn("Default browser", message)
 
     def test_oauth_without_pinned_agent_rejected(self):
         oauth = Principal(

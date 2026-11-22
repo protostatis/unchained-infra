@@ -81,7 +81,9 @@ def resolve_principal(
         # A grant is only as valid as the API key it was pinned to.  Checking
         # here (not just at refresh time) means revoking a key cuts connector
         # access immediately instead of waiting out the access-token TTL.
-        if not _grant_key_active(auth, row["user_id"], row["key_fingerprint"]):
+        state = grant_state(auth, store, row["grant_id"])
+        if state != GRANT_VALID:
+            revoke_if_detached(store, row["grant_id"], state)
             return None
         # Cheap constant-time-ish tag so provisioning cleanup can never collide
         # with an API-key caller's tag.
@@ -106,17 +108,60 @@ def resolve_principal(
     )
 
 
-def _grant_key_active(auth, user_id: str, key_fingerprint: str) -> bool:
-    if not key_fingerprint:
-        return False
+GRANT_VALID = "valid"
+GRANT_GONE = "gone"
+GRANT_ACCOUNT = "account"
+GRANT_KEY = "key"
+GRANT_UNKNOWN = "unknown"
+
+
+def user_is_eligible(auth, user_id: str) -> bool:
+    """Whether an account may still act through a delegated connector.
+
+    OAuth delegation requires an approved account.  A key-only identity (no
+    ``users`` row) predates accounts and is preserved.  API-key callers are
+    checked separately so this cannot silently change trial access.
+    """
     try:
-        keys = auth.get_keys_for_user(user_id)
+        user = auth.find_user_by_id(user_id)
     except Exception:
         return False
-    for key in keys:
-        if hashlib.sha256(key.encode()).hexdigest() == key_fingerprint:
-            return True
-    return False
+    if user is None:
+        return True
+    return (user.get("status") or "approved") == "approved"
+
+
+def grant_state(auth, store, grant_id: str | None) -> str:
+    """Classify a grant without side effects.
+
+    ``GRANT_UNKNOWN`` exists so a transient database failure cannot be mistaken
+    for a revoked account and trigger a destructive cleanup.
+    """
+    if not grant_id:
+        return GRANT_GONE
+    try:
+        grant = store.get_grant(grant_id)
+        if grant is None:
+            return GRANT_GONE
+        user = auth.find_user_by_id(grant["user_id"])
+        if user is not None and (user.get("status") or "approved") != "approved":
+            return GRANT_ACCOUNT
+        keys = auth.get_keys_for_user(grant["user_id"])
+        for key in keys:
+            if hashlib.sha256(key.encode()).hexdigest() == grant["key_fingerprint"]:
+                return GRANT_VALID
+        return GRANT_KEY
+    except Exception:
+        return GRANT_UNKNOWN
+
+
+def revoke_if_detached(store, grant_id: str | None, state: str) -> None:
+    """Drop a grant once its account or key is confirmed to be gone."""
+    if state in (GRANT_ACCOUNT, GRANT_KEY):
+        try:
+            store.revoke_grant(grant_id)
+        except Exception:
+            pass
 
 
 # Provisioned Chromes are temporary browsers launched with an arbitrary local
@@ -165,12 +210,12 @@ def target_agent(principal: Principal, requested: str, *, auth=None) -> str:
     if not principal.is_oauth:
         if not requested:
             return agent_id_for_key(principal.api_key or "")
-        if requested.startswith("claude-") or requested.startswith("headless-"):
+        if is_full_agent_id(requested):
             if auth is not None and _owned_by_user(auth, principal.user_id, requested):
                 return requested
-            raise IdentityError(f"Agent {requested} does not belong to you.")
+            raise IdentityError(f"Browser {agent_label(requested)} does not belong to you.")
         if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", requested):
-            raise IdentityError(f"Invalid profile name: {requested!r}")
+            raise IdentityError(f"Invalid browser name: {requested!r}")
         return agent_id_for_key(principal.api_key or "", requested)
 
     pinned = principal.agent_id or ""
@@ -181,16 +226,39 @@ def target_agent(principal: Principal, requested: str, *, auth=None) -> str:
     # A bare profile name is accepted only when it names the pinned browser;
     # another profile of the same key is a different browser and must not be
     # reachable without a fresh consent.
-    if requested == _profile_of(pinned):
+    if requested == agent_profile(pinned):
         return pinned
+    wanted = agent_label(requested) if is_full_agent_id(requested) else requested
     raise IdentityError(
-        f"This connector is limited to {pinned}; reconnect it to use {requested}."
+        f"This connector is limited to {agent_label(pinned)}; "
+        f"reconnect it to use {wanted}."
     )
 
 
-def _profile_of(agent_id: str) -> str:
+# ``<lane>-<8 hex>[-<profile>]``.  The lane is an implementation detail (it
+# distinguishes a user's local agent from a hosted worker, not a model vendor),
+# so this recognises the shape rather than hardcoding today's names.
+_FULL_AGENT_ID = re.compile(r"^[a-z][a-z0-9_-]*-[0-9a-f]{8}(?:-[A-Za-z0-9_-]{1,32})?$")
+
+
+def is_full_agent_id(value: str) -> bool:
+    return bool(_FULL_AGENT_ID.match(value or ""))
+
+
+def agent_profile(agent_id: str) -> str:
+    """Profile suffix of an agent id (``claude-abc12345-work`` -> ``work``)."""
     parts = agent_id.split("-", 2)
     return parts[2] if len(parts) > 2 else ""
+
+
+def agent_label(agent_id: str) -> str:
+    """Human-facing name for an agent id, without leaking the internal prefix."""
+    if not agent_id:
+        return ""
+    if agent_id.startswith("headless-"):
+        return "Unchained hosted browser"
+    profile = agent_profile(agent_id)
+    return profile or "Default browser"
 
 
 def _owned_by_user(auth, user_id: str, agent_id: str) -> bool:

@@ -71,6 +71,14 @@ class OAuthFlowTests(unittest.TestCase):
         self.api_key = self.auth.create_key(self.user_id)
 
         self.store = OAuthStore(self.db_path)
+        # The seeded policies cover real connectors; admit the test callback too.
+        self.store.add_policy(
+            scheme="https",
+            host="connector.test",
+            port=443,
+            path="/callback",
+            match="exact",
+        )
         self.provider = MCPOAuthProvider(
             self.store, issuer=ISSUER, resource=RESOURCE, dcr_enabled=True
         )
@@ -82,7 +90,7 @@ class OAuthFlowTests(unittest.TestCase):
             """Return pong."""
             return "pong"
 
-        install_complete_route(self.mcp, self.store)
+        install_complete_route(self.mcp, self.provider)
         self.mcp.auth = self.provider
         self.app = self.mcp.http_app(path="/mcp", json_response=True)
 
@@ -220,8 +228,9 @@ class OAuthFlowTests(unittest.TestCase):
                 "token_endpoint_auth_method": "none",
             },
         )
-        # Loopback is allowed: native clients use it.
-        self.assertEqual(resp.status_code, 201, resp.text)
+        # No cloud connector uses loopback; operators may still register one.
+        self.assertEqual(resp.status_code, 400, resp.text)
+        self.assertEqual(resp.json()["error"], "invalid_redirect_uri")
 
     # -- authorization -----------------------------------------------------
 
@@ -382,6 +391,159 @@ class OAuthFlowTests(unittest.TestCase):
             resp.json()["error"], ("invalid_client", "unauthorized_client")
         )
 
+    # -- callback admission ------------------------------------------------
+
+    async def _case_seeded_claude_callback_registers(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Claude",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        self.assertEqual(resp.status_code, 201, resp.text)
+
+    async def _case_unapproved_callback_is_refused(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Evil",
+                "redirect_uris": ["https://evil.test/callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        self.assertEqual(resp.status_code, 400, resp.text)
+        self.assertEqual(resp.json()["error"], "invalid_redirect_uri")
+
+    async def _case_userinfo_callback_is_refused(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Tricky",
+                "redirect_uris": ["https://claude.ai@evil.test/callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        self.assertEqual(resp.status_code, 400, resp.text)
+
+    async def _case_query_callback_is_refused_when_policy_disallows(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Query",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback?next=/x"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        self.assertEqual(resp.status_code, 400, resp.text)
+
+    async def _case_one_bad_callback_blocks_the_whole_registration(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Mixed",
+                "redirect_uris": [
+                    "https://claude.ai/api/mcp/auth_callback",
+                    "https://evil.test/callback",
+                ],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        self.assertEqual(resp.status_code, 400, resp.text)
+
+    async def _case_withdrawing_a_policy_blocks_the_client(self):
+        client = await self._register()
+        policy_id = next(
+            p["id"] for p in self.store.list_policies() if p["host"] == "connector.test"
+        )
+        self.assertTrue(self.store.remove_policy(policy_id))
+
+        resp, _ = await self._authorize(client)
+        # get_client() now reports the client as unknown, so the SDK refuses
+        # before any callback redirect can happen.
+        self.assertEqual(resp.status_code, 400, resp.text)
+
+    async def _case_withdrawn_policy_cannot_deliver_a_code(self):
+        client = await self._register()
+        resp, _ = await self._authorize(client)
+        request_id = resp.headers["location"].split("request=", 1)[1]
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id=self.user_id,
+            agent_id="claude-deadbeef",
+            key_hash="deadbeef",
+            key_fingerprint=hashlib.sha256(self.api_key.encode()).hexdigest(),
+            scopes=["mcp:browser"],
+            resource=RESOURCE,
+        )
+        policy_id = next(
+            p["id"] for p in self.store.list_policies() if p["host"] == "connector.test"
+        )
+        self.store.remove_policy(policy_id)
+
+        complete = await self.client.get("/oauth/complete", params={"ticket": ticket})
+        self.assertEqual(complete.status_code, 403, complete.text)
+        self.assertNotIn("code=", complete.headers.get("location", ""))
+
+    async def _case_changed_callback_cannot_receive_a_code(self):
+        self.store.save_client(
+            client_id="manual-1",
+            client_name="Manual",
+            redirect_uris=[REDIRECT_URI],
+            source="manual",
+        )
+        client = {"client_id": "manual-1"}
+        resp, _verifier = await self._authorize(client)
+        request_id = resp.headers["location"].split("request=", 1)[1]
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id=self.user_id,
+            agent_id="claude-deadbeef",
+            key_hash="deadbeef",
+            key_fingerprint=hashlib.sha256(self.api_key.encode()).hexdigest(),
+            scopes=["mcp:browser"],
+            resource=RESOURCE,
+        )
+        # Operator re-registers the client with a different callback while the
+        # approval is still live.
+        self.store.save_client(
+            client_id="manual-1",
+            client_name="Manual",
+            redirect_uris=["https://connector.test/other"],
+            source="manual",
+        )
+        complete = await self.client.get("/oauth/complete", params={"ticket": ticket})
+        self.assertEqual(complete.status_code, 403, complete.text)
+        self.assertNotIn("code=", complete.headers.get("location", ""))
+
+    async def _case_authorize_allocation_is_bounded(self):
+        import mcp_oauth_provider as provider_module
+
+        previous = provider_module.AUTHORIZE_MAX_PENDING_PER_CLIENT
+        provider_module.AUTHORIZE_MAX_PENDING_PER_CLIENT = 1
+        try:
+            client = await self._register()
+            first, _ = await self._authorize(client)
+            self.assertEqual(first.status_code, 302)
+            self.assertIn("/oauth/consent", first.headers["location"])
+
+            second, _ = await self._authorize(client)
+            self.assertEqual(second.status_code, 302)
+            self.assertIn("error=temporarily_unavailable", second.headers["location"])
+        finally:
+            provider_module.AUTHORIZE_MAX_PENDING_PER_CLIENT = previous
+
     async def _case_code_cannot_be_reused(self):
         client, _, code, verifier, _ = await self._full_flow()
         replay = await self.client.post(
@@ -394,8 +556,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "code_verifier": verifier,
             },
         )
-        self.assertEqual(replay.status_code, 400)
-        self.assertEqual(replay.json()["error"], "invalid_grant")
+        self._assert_token_error(replay)
 
     async def _case_wrong_verifier_is_rejected(self):
         client = await self._register()
@@ -412,8 +573,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "code_verifier": other_verifier,
             },
         )
-        self.assertEqual(wrong.status_code, 400)
-        self.assertEqual(wrong.json()["error"], "invalid_grant")
+        self._assert_token_error(wrong)
 
     async def _case_complete_rejects_unknown_ticket(self):
         resp = await self.client.get("/oauth/complete", params={"ticket": "nope"})
@@ -447,8 +607,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(replay.status_code, 400)
-        self.assertEqual(replay.json()["error"], "invalid_grant")
+        self._assert_token_error(replay)
 
         # Replay revokes the whole family, including the rotated token.
         after = await self.client.post(
@@ -459,7 +618,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(after.status_code, 400)
+        self._assert_token_error(after)
 
     async def _case_revocation_stops_access(self):
         client, tokens, _, _, _ = await self._full_flow()
@@ -495,6 +654,74 @@ class OAuthFlowTests(unittest.TestCase):
             },
         )
         self.assertEqual(after.status_code, 401)
+
+    # -- account lifecycle -------------------------------------------------
+
+    def _assert_token_error(self, response, code="invalid_grant"):
+        # FastMCP 4 returns 401 for token errors (MCP spec: invalid or expired
+        # tokens MUST be 401); the 2.x line returned 400 from the SDK. The
+        # error code in the body is the stable contract.
+        self.assertIn(response.status_code, (400, 401), response.text)
+        self.assertEqual(response.json().get("error"), code)
+
+    async def _reject_user(self):
+        with self.auth._conn() as conn:
+            conn.execute(
+                "UPDATE users SET status = 'rejected' WHERE user_id = ?", (self.user_id,)
+            )
+
+    async def _case_rejected_account_loses_mcp_access(self):
+        _client, tokens, _, _, grant_id = await self._full_flow()
+        await self._reject_user()
+        resp = await self.client.post(
+            "/mcp",
+            json=_initialize_payload(9),
+            headers={
+                **JSON_HEADERS,
+                "Authorization": f"Bearer {tokens['access_token']}",
+            },
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+        # Request-time enforcement detaches the connector, not just the call.
+        self.assertIsNone(self.store.get_grant(grant_id))
+
+    async def _case_rejected_account_cannot_refresh(self):
+        client, tokens, _, _, grant_id = await self._full_flow()
+        await self._reject_user()
+        refreshed = await self.client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"],
+            },
+        )
+        self._assert_token_error(refreshed)
+        # The connector is detached, not merely paused.
+        self.assertIsNone(self.store.get_grant(grant_id))
+
+    async def _case_key_revocation_kills_the_connector(self):
+        client, tokens, _, _, grant_id = await self._full_flow()
+        self.auth.revoke_key(self.api_key)
+        resp = await self.client.post(
+            "/mcp",
+            json=_initialize_payload(10),
+            headers={
+                **JSON_HEADERS,
+                "Authorization": f"Bearer {tokens['access_token']}",
+            },
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+        refreshed = await self.client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"],
+            },
+        )
+        self._assert_token_error(refreshed)
+        self.assertIsNone(self.store.get_grant(grant_id))
 
     # -- registration switch ----------------------------------------------
 
@@ -540,6 +767,15 @@ for _name in (
     "full_flow_issues_working_token",
     "token_ignores_client_secret_for_public_clients",
     "unknown_client_at_token_is_rejected",
+    "seeded_claude_callback_registers",
+    "unapproved_callback_is_refused",
+    "userinfo_callback_is_refused",
+    "query_callback_is_refused_when_policy_disallows",
+    "one_bad_callback_blocks_the_whole_registration",
+    "withdrawing_a_policy_blocks_the_client",
+    "withdrawn_policy_cannot_deliver_a_code",
+    "changed_callback_cannot_receive_a_code",
+    "authorize_allocation_is_bounded",
     "code_cannot_be_reused",
     "wrong_verifier_is_rejected",
     "complete_rejects_unknown_ticket",
@@ -547,6 +783,9 @@ for _name in (
     "refresh_rotation_and_replay",
     "revocation_stops_access",
     "grant_revocation_stops_access",
+    "rejected_account_loses_mcp_access",
+    "rejected_account_cannot_refresh",
+    "key_revocation_kills_the_connector",
     "dcr_can_be_disabled",
 ):
     setattr(OAuthFlowTests, "test_" + _name, _make_test(_name))

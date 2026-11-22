@@ -24,7 +24,6 @@ MCP SDK; this module owns policy and storage:
 from __future__ import annotations
 
 import os
-import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -41,10 +40,17 @@ from mcp.shared.auth import OAuthClientInformationFull
 
 from fastmcp.server.auth import OAuthProvider
 
+from mcp_identity import GRANT_VALID, grant_state, revoke_if_detached
 from mcp_oauth_store import (
     ACCESS_TOKEN_PREFIX,
+    BudgetExceeded,
     OAuthStore,
-    fingerprint_key,
+)
+from mcp_oauth_policy import (
+    RedirectURIError,
+    client_callback_status,
+    match_policy,
+    validate_redirect_uri,
 )
 
 SUPPORTED_SCOPE = "mcp:browser"
@@ -55,11 +61,30 @@ DEFAULT_SCOPES = [SUPPORTED_SCOPE]
 DCR_MAX_PER_HOUR = int(os.environ.get("MCP_OAUTH_DCR_MAX_PER_HOUR", "60"))
 DCR_MAX_TOTAL = int(os.environ.get("MCP_OAUTH_DCR_MAX_TOTAL", "5000"))
 
+# Authorization requests are allocated without a credential, so they need their
+# own ceiling.  Both are counts of outstanding (pending, unexpired) rows.
+AUTHORIZE_MAX_PENDING_PER_CLIENT = int(
+    os.environ.get("MCP_OAUTH_MAX_PENDING_PER_CLIENT", "20")
+)
+AUTHORIZE_MAX_PENDING_GLOBAL = int(
+    os.environ.get("MCP_OAUTH_MAX_PENDING_GLOBAL", "5000")
+)
+
 
 class _StoredCode(AuthorizationCode):
     """Authorization code plus the raw value needed to consume it."""
 
     raw_code: str
+
+
+class _ReplayedRefreshToken(RefreshToken):
+    """A refresh token that was already rotated.
+
+    Returning it (rather than ``None``) lets the exchange step revoke the
+    family; answering invalid_grant at load time would skip that.
+    """
+
+    family_id: str
 
 
 class MCPOAuthProvider(OAuthProvider):
@@ -72,7 +97,6 @@ class MCPOAuthProvider(OAuthProvider):
         issuer: str,
         resource: str,
         dcr_enabled: bool = False,
-        allowed_redirect_hosts: list[str] | None = None,
     ):
         self.store = store
         self.resource = resource
@@ -80,7 +104,6 @@ class MCPOAuthProvider(OAuthProvider):
         self.consent_url = f"{self.issuer}/oauth/consent"
         self.complete_url = f"{self.issuer}/oauth/complete"
         self.dcr_enabled = bool(dcr_enabled)
-        self.allowed_redirect_hosts = {h.lower() for h in (allowed_redirect_hosts or [])}
 
         from mcp.server.auth.settings import (
             ClientRegistrationOptions,
@@ -105,6 +128,11 @@ class MCPOAuthProvider(OAuthProvider):
         row = self.store.get_client(client_id)
         if row is None:
             return None
+        # A client whose callback is no longer admitted must look nonexistent,
+        # otherwise the SDK can still redirect a code to it before authorize()
+        # is ever called.
+        if client_callback_status(row, self.store.list_policies()) == "blocked":
+            return None
         return OAuthClientInformationFull(
             client_id=row["client_id"],
             client_name=row["client_name"],
@@ -128,11 +156,24 @@ class MCPOAuthProvider(OAuthProvider):
                 error="invalid_redirect_uri",
                 error_description="between 1 and 10 redirect URIs are required",
             )
+
+        policies = self.store.list_policies()
         for uri in redirect_uris:
-            if not _redirect_uri_allowed(uri, self.allowed_redirect_hosts):
+            try:
+                validate_redirect_uri(uri, issuer=self.issuer, allow_loopback=False)
+            except RedirectURIError as exc:
                 raise RegistrationError(
                     error="invalid_redirect_uri",
-                    error_description=f"redirect URI not allowed: {uri}",
+                    error_description=f"{exc}: {uri}",
+                ) from None
+            if not any(match_policy(uri, policy) for policy in policies):
+                raise RegistrationError(
+                    error="invalid_redirect_uri",
+                    error_description=(
+                        "this callback address is not approved for automatic "
+                        "registration; ask the operator to add it, or use a "
+                        "manually registered client"
+                    ),
                 )
 
         # Public clients only: a secret we never issue cannot be leaked.
@@ -143,25 +184,19 @@ class MCPOAuthProvider(OAuthProvider):
                 error_description="only public clients (token_endpoint_auth_method=none) are supported",
             )
 
-        if self.store.count_clients(since=time.time() - 3600) >= DCR_MAX_PER_HOUR:
+        try:
+            self.store.register_dynamic_client(
+                client_id=client_info.client_id,
+                client_name=(client_info.client_name or "Unnamed MCP client")[:120],
+                redirect_uris=redirect_uris,
+                max_per_hour=DCR_MAX_PER_HOUR,
+                max_total=DCR_MAX_TOTAL,
+            )
+        except BudgetExceeded as exc:
             raise RegistrationError(
                 error="invalid_client_metadata",
-                error_description="registration rate limit reached, try again later",
-            )
-        if self.store.count_clients() >= DCR_MAX_TOTAL:
-            raise RegistrationError(
-                error="invalid_client_metadata",
-                error_description="registration capacity reached",
-            )
-
-        self.store.save_client(
-            client_id=client_info.client_id,
-            client_name=(client_info.client_name or "Unnamed MCP client")[:120],
-            redirect_uris=redirect_uris,
-            grant_types=["authorization_code", "refresh_token"],
-            token_endpoint_auth_method="none",
-            source="dcr",
-        )
+                error_description=str(exc),
+            ) from None
 
     # -- authorization -----------------------------------------------------
 
@@ -169,6 +204,14 @@ class MCPOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
         redirect_uri = str(params.redirect_uri)
+
+        # The SDK validates the callback against the client record before it
+        # gets here. Re-check admission so a policy withdrawn while a request
+        # was in flight cannot still receive a code. The failure target is our
+        # own page: never redirect to a callback we no longer trust.
+        row = self.store.get_client(client.client_id)
+        if row is None or client_callback_status(row, self.store.list_policies()) == "blocked":
+            return f"{self.issuer}/oauth/error?reason=client_not_approved"
 
         # RFC 8707: the token must be for this resource, and nothing else.
         resource = params.resource
@@ -183,15 +226,20 @@ class MCPOAuthProvider(OAuthProvider):
         if not set(scopes).issubset(set(DEFAULT_SCOPES)):
             return _error_redirect(redirect_uri, "invalid_scope", params.state)
 
-        request_id = self.store.create_request(
-            client_id=client.client_id,
-            redirect_uri=redirect_uri,
-            state=params.state,
-            scopes=scopes,
-            code_challenge=code_challenge,
-            code_challenge_method="S256",
-            resource=self.resource,
-        )
+        try:
+            request_id = self.store.create_request(
+                client_id=client.client_id,
+                redirect_uri=redirect_uri,
+                state=params.state,
+                scopes=scopes,
+                code_challenge=code_challenge,
+                code_challenge_method="S256",
+                resource=self.resource,
+                max_per_client=AUTHORIZE_MAX_PENDING_PER_CLIENT,
+                max_global=AUTHORIZE_MAX_PENDING_GLOBAL,
+            )
+        except BudgetExceeded:
+            return _error_redirect(redirect_uri, "temporarily_unavailable", params.state)
         return f"{self.consent_url}?{urlencode({'request': request_id})}"
 
     # -- authorization code ------------------------------------------------
@@ -224,11 +272,13 @@ class MCPOAuthProvider(OAuthProvider):
                 error="invalid_grant",
                 error_description="authorization code is invalid or already used",
             )
-        # The pinned key must still exist; a revoked key invalidates the grant.
-        if not self._grant_key_still_active(consumed.get("grant_id")):
+        # The grant is only as valid as its account and its backing key.
+        state = grant_state(_auth(), self.store, consumed.get("grant_id"))
+        if state != GRANT_VALID:
+            revoke_if_detached(self.store, consumed.get("grant_id"), state)
             raise TokenError(
                 error="invalid_grant",
-                error_description="the linked API key was revoked",
+                error_description="the linked account or API key is no longer active",
             )
         issued = self.store.issue_tokens(
             grant_id=consumed["grant_id"],
@@ -243,9 +293,19 @@ class MCPOAuthProvider(OAuthProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        row = self.store.load_refresh_token(refresh_token)
-        if row is None or row["client_id"] != client.client_id:
+        row = self.store.load_refresh_token(
+            refresh_token, client_id=client.client_id
+        )
+        if row is None:
             return None
+        if row["consumed"]:
+            return _ReplayedRefreshToken(
+                token=refresh_token,
+                client_id=row["client_id"],
+                scopes=row["scopes"],
+                expires_at=int(row["expires_at"]),
+                family_id=row["family_id"],
+            )
         return RefreshToken(
             token=refresh_token,
             client_id=row["client_id"],
@@ -259,28 +319,34 @@ class MCPOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> Any:
-        rotated = self.store.consume_refresh_token(
-            refresh_token.token, client_id=client.client_id
+        if isinstance(refresh_token, _ReplayedRefreshToken):
+            # Same client presenting a spent token: treat the family as
+            # compromised. No grace window; forked successors are worse.
+            self.store.revoke_family(refresh_token.family_id)
+            raise TokenError(
+                error="invalid_grant",
+                error_description="refresh token was already used; reconnect the app",
+            )
+
+        rotated = self.store.rotate_refresh_token(
+            refresh_token.token,
+            client_id=client.client_id,
+            scopes=scopes or refresh_token.scopes,
         )
-        if rotated is None:
+        if rotated is None or rotated.get("replay"):
             raise TokenError(
                 error="invalid_grant",
                 error_description="refresh token is invalid or expired",
             )
-        if not self._grant_key_still_active(rotated["grant_id"]):
+        granted = rotated.get("scopes") or scopes or refresh_token.scopes
+        state = grant_state(_auth(), self.store, rotated["grant_id"])
+        if state != GRANT_VALID:
+            revoke_if_detached(self.store, rotated["grant_id"], state)
             raise TokenError(
                 error="invalid_grant",
-                error_description="the linked API key was revoked",
+                error_description="the linked account or API key is no longer active",
             )
-        granted = [s for s in scopes if s in rotated["scopes"]] or rotated["scopes"]
-        issued = self.store.issue_tokens(
-            grant_id=rotated["grant_id"],
-            client_id=client.client_id,
-            scopes=granted,
-            resource=rotated["resource"],
-            family_id=rotated["family_id"],
-        )
-        return _token_response(issued, granted)
+        return _token_response(rotated, granted)
 
     # -- verification ------------------------------------------------------
 
@@ -288,6 +354,14 @@ class MCPOAuthProvider(OAuthProvider):
         if token.startswith(ACCESS_TOKEN_PREFIX):
             row = self.store.load_access_token(token)
             if row is None:
+                return None
+            # Transport-level check must match the tool-level one: a revoked
+            # account or key has to fail here too, not only on tool dispatch,
+            # and a confirmed detachment revokes the grant rather than merely
+            # refusing this request.
+            state = grant_state(_auth(), self.store, row["grant_id"])
+            if state != GRANT_VALID:
+                revoke_if_detached(self.store, row["grant_id"], state)
                 return None
             if row["resource"] and row["resource"].rstrip("/") != self.resource.rstrip("/"):
                 return None
@@ -319,19 +393,9 @@ class MCPOAuthProvider(OAuthProvider):
 
     # -- helpers -----------------------------------------------------------
 
-    def _grant_key_still_active(self, grant_id: str | None) -> bool:
-        """True when the grant's backing API key still exists and is active."""
-        if not grant_id:
-            return False
-        grant = self.store.get_grant(grant_id)
-        if grant is None:
-            return False
-        auth = _auth()
-        try:
-            keys = auth.get_keys_for_user(grant["user_id"])
-        except Exception:
-            return False
-        return any(fingerprint_key(k) == grant["key_fingerprint"] for k in keys)
+    # Grant eligibility lives in mcp_identity.grant_state, shared with the
+    # tool layer so transport and dispatch cannot disagree.
+
 
 
 _AUTH: list[Any] = []
@@ -366,28 +430,6 @@ def _error_redirect(redirect_uri: str, error: str, state: str | None) -> str:
     return f"{redirect_uri}{sep}{urlencode(params)}"
 
 
-def _redirect_uri_allowed(uri: str, extra_hosts: set[str]) -> bool:
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(uri)
-    except ValueError:
-        return False
-    if not parsed.scheme or parsed.fragment:
-        return False
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return False
-    if parsed.scheme == "https":
-        return True
-    # Native/desktop clients use loopback redirects (RFC 8252).
-    if parsed.scheme == "http" and host in ("127.0.0.1", "localhost", "::1"):
-        return True
-    if extra_hosts and host in extra_hosts:
-        return True
-    return False
-
-
 # Module-level handle so helpers can reach the store without threading it
 # through every SDK callback.  Set by ``build_provider``.
 _ACTIVE_STORE: list[OAuthStore] = []
@@ -402,11 +444,6 @@ def build_provider(store: OAuthStore) -> MCPOAuthProvider | None:
         "MCP_OAUTH_RESOURCE", f"{issuer}/mcp"
     ).strip().rstrip("/")
     dcr = os.environ.get("MCP_OAUTH_DCR_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
-    hosts = [
-        h.strip().lower()
-        for h in os.environ.get("MCP_OAUTH_EXTRA_REDIRECT_HOSTS", "").split(",")
-        if h.strip()
-    ]
     _ACTIVE_STORE.clear()
     _ACTIVE_STORE.append(store)
     return MCPOAuthProvider(
@@ -414,17 +451,20 @@ def build_provider(store: OAuthStore) -> MCPOAuthProvider | None:
         issuer=issuer,
         resource=resource,
         dcr_enabled=dcr,
-        allowed_redirect_hosts=hosts,
     )
 
 
-def install_complete_route(mcp, store: OAuthStore) -> None:
+def install_complete_route(mcp, provider: "MCPOAuthProvider") -> None:
     """Register ``GET /oauth/complete`` on a FastMCP server.
 
     The browser lands here after approving on the website.  The ticket is a
     single-use capability minted by the consent POST; consuming it here is what
     turns an approval into an authorization code, and the redirect target is
     always the URI that was validated at ``/authorize`` time.
+
+    Completion re-checks the client because a policy can be withdrawn between
+    approval and this redirect; a code must never reach a callback that is no
+    longer admitted.
     """
 
     @mcp.custom_route("/oauth/complete", methods=["GET"])
@@ -435,8 +475,25 @@ def install_complete_route(mcp, store: OAuthStore) -> None:
         ticket = (request.query_params.get("ticket") or "").strip()
         if not ticket:
             return PlainTextResponse("Missing approval ticket.", status_code=400)
+        approval = provider.store.peek_approval(ticket)
+        if approval is None:
+            return PlainTextResponse("This approval is invalid or expired.", status_code=400)
+        pending = provider.store.get_request(approval["request_id"])
+        client = provider.store.get_client(pending["client_id"]) if pending else None
+        if client is None or client_callback_status(
+            client, provider.store.list_policies()
+        ) == "blocked":
+            return PlainTextResponse(
+                "This app's callback address is no longer approved.", status_code=403
+            )
+        # The request was authorized against a callback on record at that time;
+        # if the registration has since changed, do not send the code there.
+        if pending is not None and pending["redirect_uri"] not in client["redirect_uris"]:
+            return PlainTextResponse(
+                "This app's callback address changed; reconnect it.", status_code=403
+            )
         try:
-            payload = store.complete_request(ticket)
+            payload = provider.store.complete_request(ticket)
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
 

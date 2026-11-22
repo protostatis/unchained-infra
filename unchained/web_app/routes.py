@@ -77,6 +77,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/auth/logout", "web_app.handlers.auth_admin:handle_logout"),
     ("GET", "/auth/me", "web_app.handlers.auth_admin:handle_auth_me"),
     ("GET", "/oauth/consent", "web_app.handlers.mcp_oauth:handle_mcp_oauth_consent"),
+    ("GET", "/oauth/error", "web_app.handlers.mcp_oauth:handle_mcp_oauth_error"),
     ("POST", "/oauth/consent", "web_app.handlers.mcp_oauth:handle_mcp_oauth_consent_post"),
     ("GET", "/oauth/connections", "web_app.handlers.mcp_oauth:handle_mcp_oauth_connections"),
     ("POST", "/oauth/connections/revoke", "web_app.handlers.mcp_oauth:handle_mcp_oauth_connections_revoke"),

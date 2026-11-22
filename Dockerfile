@@ -73,7 +73,7 @@ RUN pip install --no-cache-dir \
     "httpx>=0.28.1" \
     "aiohttp>=3.11" \
     "anthropic>=0.49" \
-    "fastmcp>=2.0" \
+    "fastmcp==4.2.1" \
     "PyJWT>=2.0" \
     "cryptography>=42.0" \
     "boto3>=1.34,<2.0" \

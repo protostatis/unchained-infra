@@ -76,6 +76,62 @@ class ConsentHandlerTests(unittest.TestCase):
         ):
             return self._run(mcp_oauth.handle_mcp_oauth_consent_post(request))
 
+    def _get(self, request_id, *, user=USER, agents=AGENTS):
+        request = make_mocked_request("GET", f"/oauth/consent?request={request_id}")
+        with patch.object(mcp_oauth, "_signed_in", return_value=user), patch.object(
+            mcp_oauth, "_agent_options", return_value=agents
+        ):
+            response = self._run(mcp_oauth.handle_mcp_oauth_consent(request))
+        return response
+
+    def _dcr_client(self, client_id="dcr-1", uris=("https://claude.ai/api/mcp/auth_callback",)):
+        self.store.save_client(
+            client_id=client_id,
+            client_name="Claude",
+            redirect_uris=list(uris),
+            source="dcr",
+        )
+        return self.store.create_request(
+            client_id=client_id,
+            redirect_uri=uris[0],
+            state="s",
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource="https://unchainedsky.com/mcp",
+        )
+
+    # -- consent presentation ---------------------------------------------
+
+    def test_consent_shows_full_callback_and_host(self):
+        response = self._get(self.request_id)
+        self.assertEqual(response.status, 200)
+        body = response.text
+        self.assertIn("https://connector.test/cb", body)
+        self.assertIn("<strong>connector.test</strong>", body)
+
+    def test_manual_client_is_labelled_operator_registered(self):
+        response = self._get(self.request_id)
+        self.assertIn("registered by an Unchained administrator", response.text)
+
+    def test_policy_client_is_labelled_by_destination(self):
+        request_id = self._dcr_client()
+        response = self._get(request_id)
+        self.assertEqual(response.status, 200)
+        self.assertIn("matches Unchained&#x27;s allowed destinations", response.text)
+
+    def test_blocked_client_gets_no_allow_form(self):
+        request_id = self._dcr_client(uris=("https://evil.test/cb",))
+        response = self._get(request_id)
+        self.assertEqual(response.status, 403)
+        self.assertNotIn("name='agent_id'", response.text)
+
+    def test_browser_labels_do_not_headline_the_internal_id(self):
+        response = self._get(self.request_id)
+        # The profile name is the headline; the id is secondary text.
+        self.assertIn("<strong>facebook</strong>", response.text)
+        self.assertIn("claude-deadbeef-facebook", response.text)
+
     # -- rejection paths ---------------------------------------------------
 
     def test_missing_session_is_rejected(self):
@@ -208,6 +264,20 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertEqual(self._approve(request).status, 302)
         again = self._approve(request)
         self.assertEqual(again.status, 400)
+
+    def test_post_rejected_when_policy_withdrawn_after_get(self):
+        request_id = self._dcr_client()
+        policy_id = next(
+            p["id"] for p in self.store.list_policies() if p["host"] == "claude.ai"
+        )
+        self.store.remove_policy(policy_id)
+        request = _post(
+            {"request": request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 403)
+        self.assertEqual(self.store.get_request(request_id)["status"], "pending")
 
     # -- denial ------------------------------------------------------------
 

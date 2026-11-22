@@ -11,6 +11,7 @@ from mcp_oauth_store import (
     ACCESS_TOKEN_PREFIX,
     AUTHORIZATION_CODE_PREFIX,
     REFRESH_TOKEN_PREFIX,
+    BudgetExceeded,
     OAuthStore,
     agent_id_for_key,
     fingerprint_key,
@@ -230,15 +231,16 @@ class TokenTests(StoreTestBase):
         issued = self.store.issue_tokens(
             grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
         )
-        rotated = self.store.consume_refresh_token(
-            issued["refresh_token"], client_id="client-1"
+        rotated = self.store.rotate_refresh_token(
+            issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
         )
         self.assertIsNotNone(rotated)
         self.assertEqual(rotated["family_id"], issued["family_id"])
-        # The old refresh token is spent.
-        self.assertIsNone(
-            self.store.consume_refresh_token(issued["refresh_token"], client_id="client-1")
+        # The old refresh token is spent: replaying it revokes the family.
+        replay = self.store.rotate_refresh_token(
+            issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
         )
+        self.assertEqual(replay, {"replay": True})
 
     def test_refresh_replay_revokes_family(self):
         _, _, grant_id, ticket = self._approved()
@@ -246,12 +248,15 @@ class TokenTests(StoreTestBase):
             grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
         )
         self.assertIsNotNone(
-            self.store.consume_refresh_token(issued["refresh_token"], client_id="client-1")
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
         )
         # Replay of the rotated token is treated as compromise.
-        self.assertIsNone(
-            self.store.consume_refresh_token(issued["refresh_token"], client_id="client-1")
+        replay = self.store.rotate_refresh_token(
+            issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
         )
+        self.assertEqual(replay, {"replay": True})
         # The access token from the same family no longer works.
         self.assertIsNone(self.store.load_access_token(issued["access_token"]))
 
@@ -261,11 +266,16 @@ class TokenTests(StoreTestBase):
             grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
         )
         self.assertIsNone(
-            self.store.consume_refresh_token(issued["refresh_token"], client_id="intruder")
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="intruder", scopes=["mcp:browser"]
+            )
         )
-        # The rightful client can still rotate it.
+        # A wrong client must not have revoked anything: the rightful client
+        # can still rotate it.
         self.assertIsNotNone(
-            self.store.consume_refresh_token(issued["refresh_token"], client_id="client-1")
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
         )
 
     def test_revoke_access_token(self):
@@ -283,6 +293,134 @@ class TokenTests(StoreTestBase):
         )
         self.assertTrue(self.store.revoke_token(issued["refresh_token"]))
         self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+
+
+class FamilyTests(StoreTestBase):
+    def _issue(self):
+        _, _, grant_id, _ = self._approved()
+        return grant_id, self.store.issue_tokens(
+            grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
+        )
+
+    def test_issue_refuses_revoked_grant(self):
+        grant_id, _ = self._issue()
+        self.store.revoke_grant(grant_id)
+        with self.assertRaises(ValueError):
+            self.store.issue_tokens(
+                grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
+            )
+
+    def test_issue_refuses_revoked_family(self):
+        _grant_id, issued = self._issue()
+        self.store.revoke_family(issued["family_id"])
+        with self.assertRaises(ValueError):
+            self.store.issue_tokens(
+                grant_id=_grant_id,
+                client_id="client-1",
+                scopes=["mcp:browser"],
+                resource=None,
+                family_id=issued["family_id"],
+            )
+
+    def test_family_has_absolute_expiry(self):
+        grant_id, issued = self._issue()
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_families SET expires_at = 1 WHERE family_id = ?",
+                (issued["family_id"],),
+            )
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
+        )
+
+    def test_access_revocation_does_not_stop_refresh(self):
+        _grant_id, issued = self._issue()
+        self.assertTrue(self.store.revoke_token(issued["access_token"]))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNotNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
+        )
+
+    def test_refresh_revocation_kills_the_family(self):
+        _grant_id, issued = self._issue()
+        self.assertTrue(self.store.revoke_token(issued["refresh_token"]))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
+        )
+
+    def test_rotation_is_atomic_under_concurrency(self):
+        _grant_id, issued = self._issue()
+        results = []
+        lock = threading.Lock()
+
+        def rotate():
+            result = self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+            )
+            with lock:
+                results.append(result)
+
+        threads = [threading.Thread(target=rotate) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        winners = [r for r in results if r and not r.get("replay")]
+        replays = [r for r in results if r and r.get("replay")]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(len(replays), 5)
+        # A replay revokes the family, so even the winner's fresh tokens die.
+        self.assertIsNone(self.store.load_access_token(winners[0]["access_token"]))
+
+    def test_prune_removes_expired_families_and_tokens(self):
+        _grant_id, issued = self._issue()
+        one_day_ago = time.time() - 24 * 60 * 60
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_families SET expires_at = ? WHERE family_id = ?",
+                (one_day_ago, issued["family_id"]),
+            )
+        pruned = self.store.prune()
+        # Expired, but inside the 7-day retention window: still present, and
+        # already unusable.
+        self.assertEqual(pruned["families"], 0)
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_families SET expires_at = ? WHERE family_id = ?",
+                (time.time() - 40 * 24 * 60 * 60, issued["family_id"]),
+            )
+        pruned = self.store.prune()
+        self.assertEqual(pruned["families"], 1)
+        self.assertGreaterEqual(pruned["orphan_tokens"], 2)
+
+    def test_prune_keeps_consumed_ancestors_of_a_live_family(self):
+        _grant_id, issued = self._issue()
+        self.store.rotate_refresh_token(
+            issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+        )
+        self.store.prune()
+        with self.store._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM mcp_oauth_tokens WHERE family_id = ?",
+                (issued["family_id"],),
+            ).fetchone()
+        # Consumed ancestor + fresh access/refresh stay, so replay is detectable.
+        self.assertGreaterEqual(int(row["n"]), 3)
+        replay = self.store.rotate_refresh_token(
+            issued["refresh_token"], client_id="client-1", scopes=["mcp:browser"]
+        )
+        self.assertEqual(replay, {"replay": True})
 
 
 class GrantTests(StoreTestBase):
@@ -396,6 +534,172 @@ class HelperTests(unittest.TestCase):
 
     def test_fingerprint_is_full_sha256(self):
         self.assertEqual(len(fingerprint_key("x")), 64)
+
+
+class PolicySeedTests(StoreTestBase):
+    def test_defaults_are_installed_once(self):
+        policies = self.store.list_policies()
+        hosts = {p["host"] for p in policies}
+        self.assertIn("claude.ai", hosts)
+        self.assertIn("vertexaisearch.cloud.google.com", hosts)
+
+    def test_removed_policy_is_not_resurrected(self):
+        policy_id = self.store.list_policies()[0]["id"]
+        self.assertTrue(self.store.remove_policy(policy_id))
+        remaining = len(self.store.list_policies())
+
+        # Re-instantiating the store must not re-seed defaults.
+        fresh = OAuthStore(self.db_path)
+        self.assertEqual(len(fresh.list_policies()), remaining)
+
+    def test_add_policy_is_idempotent(self):
+        first = self.store.add_policy(
+            scheme="https", host="example.test", port=443, path="/cb"
+        )
+        second = self.store.add_policy(
+            scheme="https", host="example.test", port=443, path="/cb"
+        )
+        self.assertEqual(first, second)
+
+
+class DynamicClientBudgetTests(StoreTestBase):
+    def test_budget_refuses_and_does_not_insert(self):
+        self.store.register_dynamic_client(
+            client_id="c1",
+            client_name="one",
+            redirect_uris=["https://example.test/cb"],
+            max_total=1,
+        )
+        with self.assertRaises(BudgetExceeded):
+            self.store.register_dynamic_client(
+                client_id="c2",
+                client_name="two",
+                redirect_uris=["https://example.test/cb"],
+                max_total=1,
+            )
+        self.assertIsNone(self.store.get_client("c2"))
+
+
+class RequestBudgetTests(StoreTestBase):
+    def _create(self, **kwargs):
+        return self.store.create_request(
+            client_id="client-1",
+            redirect_uri="https://client.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+            **kwargs,
+        )
+
+    def test_per_client_cap(self):
+        self._client()
+        self._create(max_per_client=1)
+        with self.assertRaises(BudgetExceeded):
+            self._create(max_per_client=1)
+
+    def test_global_cap(self):
+        self._client()
+        self._create(max_global=1)
+        with self.assertRaises(BudgetExceeded):
+            self._create(max_global=1)
+
+    def test_completing_a_request_frees_the_slot(self):
+        self._client()
+        request_id = self._create(max_per_client=1)
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id="user-1",
+            agent_id="claude-aaaaaaaa",
+            key_hash="aaaaaaaa",
+            key_fingerprint="f" * 64,
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+        self.store.complete_request(ticket)
+        # The row is no longer pending, so a new request is admitted.
+        self._create(max_per_client=1)
+
+    def test_expired_rows_are_swept_on_the_allocation_path(self):
+        self._client()
+        request_id = self._create()
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = 1 WHERE id = ?",
+                (request_id,),
+            )
+        self._create()
+        with self.store._conn() as conn:
+            remaining = conn.execute("SELECT COUNT(*) AS n FROM mcp_oauth_requests").fetchone()
+        self.assertEqual(int(remaining["n"]), 1)
+
+    def test_sweep_keeps_requests_with_a_live_approval_ticket(self):
+        self._client()
+        request_id = self._create()
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id="user-1",
+            agent_id="claude-aaaaaaaa",
+            key_hash="aaaaaaaa",
+            key_fingerprint="f" * 64,
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+        # Request row is past its own expiry but the ticket (2 min) is still live.
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = ? WHERE id = ?",
+                (time.time() - 5, request_id),
+            )
+        self._create()  # triggers the sweep
+        self.assertIsNotNone(self.store.get_request(request_id))
+        payload = self.store.complete_request(ticket)
+        self.assertTrue(payload["code"].startswith(AUTHORIZATION_CODE_PREFIX))
+
+    def test_expired_pending_rows_do_not_count(self):
+        self._client()
+        request_id = self._create(max_per_client=1)
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = 1 WHERE id = ?",
+                (request_id,),
+            )
+        self._create(max_per_client=1)
+
+
+class DeleteClientTests(StoreTestBase):
+    def test_delete_revokes_grants_tokens_and_pending_state(self):
+        client, request_id, grant_id, ticket = self._approved()
+        code = self.store.complete_request(ticket)["code"]
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id=client["client_id"], scopes=["mcp:browser"], resource=None
+        )
+        # Leave a second, still-pending request behind too.
+        pending_id = self.store.create_request(
+            client_id=client["client_id"],
+            redirect_uri="https://client.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+        )
+
+        result = self.store.delete_client_atomic(client["client_id"])
+
+        self.assertTrue(result["client_deleted"])
+        self.assertEqual(result["grants_revoked"], 1)
+        self.assertIsNone(self.store.get_client(client["client_id"]))
+        self.assertIsNone(self.store.get_grant(grant_id))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(self.store.get_authorization_code(code))
+        self.assertIsNone(self.store.get_request(pending_id))
+
+    def test_delete_of_unknown_client_is_reported(self):
+        result = self.store.delete_client_atomic("nope")
+        self.assertFalse(result["client_deleted"])
+        self.assertEqual(result["grants_revoked"], 0)
 
 
 class PruneTests(StoreTestBase):

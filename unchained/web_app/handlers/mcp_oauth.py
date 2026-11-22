@@ -25,6 +25,8 @@ from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
+from mcp_identity import agent_label
+from mcp_oauth_policy import client_callback_status
 from web_app.core import get_core as _core
 
 _CSRF_COOKIE = "uc_oauth_csrf"
@@ -194,7 +196,24 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
     if user is None:
         return _login_page(request)
 
-    client = store.get_client(pending["client_id"]) or {}
+    client = store.get_client(pending["client_id"])
+    if client is None:
+        return _page(
+            "App no longer available",
+            "<p class='muted'>This app is no longer registered. Ask your assistant "
+            "to connect again.</p>",
+            status=400,
+        )
+    status = client_callback_status(client, store.list_policies())
+    if status == "blocked":
+        return _page(
+            "Callback address not approved",
+            "<p class='muted'>This app wants to send you back to an address Unchained "
+            "does not approve for automatic registration. Nothing was granted. "
+            "If this is unexpected, contact the operator before trying again.</p>",
+            status=403,
+        )
+
     options = _agent_options(user["user_id"])
     if not options:
         return _page(
@@ -204,7 +223,8 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
         )
 
     csrf = secrets.token_urlsafe(24)
-    callback_host = urlparse(pending["redirect_uri"]).netloc
+    callback = pending["redirect_uri"]
+    callback_host = urlparse(callback).netloc
 
     rows = []
     for opt in options:
@@ -214,21 +234,33 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
             f"<input type='radio' name='agent_id' value='{_escape(opt['agent_id'])}'"
             f"{' checked' if opt['connected'] else ''} required>"
             f"<span><strong>{_escape(opt['profile'])}</strong>"
-            f"<code>{_escape(opt['agent_id'])}</code>{state}</span>"
+            f"<code class='subtle'>{_escape(opt['agent_id'])}</code>{state}</span>"
             "</label>"
         )
+
+    policy_label = (
+        "Callback registered by an Unchained administrator."
+        if status == "manual"
+        else "Callback matches Unchained's allowed destinations."
+    )
 
     body = f"""
 <h1>Connect {_escape(client.get('client_name') or 'an app')}</h1>
 <p class='muted'>
   <strong>{_escape(client.get('client_name') or client.get('client_id') or 'An app')}</strong>
   wants to control one browser in your Unchained account.
-  After you approve, it will be sent back to <code>{_escape(callback_host)}</code>.
+  After you approve, it will be sent back to <strong>{_escape(callback_host)}</strong>.
+</p>
+<p class='muted small'>
+  The app name above was supplied by the app. {_escape(policy_label)}
+</p>
+<p class='muted small'>
+  Callback: <code class='wrap'>{_escape(callback)}</code>
 </p>
 <p class='note'>
-  This app was not verified by Unchained. While connected it can read pages,
-  click, type, run script and read cookies in the browser you choose below.
-  You can disconnect it any time from this page.
+  While connected it can read pages, click, type, run script and read cookies in
+  the browser you choose below. You can disconnect it any time from
+  <a href="/oauth/connections">Connected apps</a>.
 </p>
 <form method="post" action="/oauth/consent">
   <input type="hidden" name="request" value="{_escape(request_id)}">
@@ -279,6 +311,17 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             "Link expired",
             "<p class='muted'>This authorization request expired or was already used.</p>",
             status=400,
+        )
+
+    client = store.get_client(pending["client_id"])
+    if client is None or client_callback_status(
+        client, store.list_policies()
+    ) == "blocked":
+        return _page(
+            "App no longer approved",
+            "<p class='muted'>This app's callback address is no longer approved. "
+            "Nothing was granted.</p>",
+            status=403,
         )
 
     if decision != "approve":
@@ -333,7 +376,7 @@ async def handle_mcp_oauth_connections(request: web.Request) -> web.Response:
             rows.append(
                 "<div class='grant'>"
                 f"<div><strong>{_escape(grant['client_name'])}</strong>"
-                f"<code>{_escape(grant['agent_id'])}</code>"
+                f"<code class='subtle'>{_escape(agent_label(grant['agent_id']))}</code>"
                 f"<span class='muted'>connected {_escape(when)}</span></div>"
                 "<form method='post' action='/oauth/connections/revoke'>"
                 f"<input type='hidden' name='grant' value='{_escape(grant['id'])}'>"
@@ -368,6 +411,26 @@ async def handle_mcp_oauth_connections_revoke(request: web.Request) -> web.Respo
     response = web.HTTPFound("/oauth/connections")
     _clear_cookie(response)
     return response
+
+
+# -- GET /oauth/error ------------------------------------------------------
+
+
+async def handle_mcp_oauth_error(request: web.Request) -> web.Response:
+    """Issuer-owned error landing page.
+
+    Used instead of redirecting to a callback that is no longer approved, so an
+    attacker cannot turn our error path into a code-delivery mechanism.
+    """
+    reason = (request.query.get("reason") or "").strip()
+    messages = {
+        "client_not_approved": (
+            "This app's callback address is not approved, so nothing was granted. "
+            "Ask the assistant to try again later, or contact the operator."
+        ),
+    }
+    text = messages.get(reason, "This connection could not be completed.")
+    return _page("Connection not allowed", f"<p class='muted'>{_escape(text)}</p>", status=400)
 
 
 # -- helpers ---------------------------------------------------------------
@@ -425,6 +488,10 @@ _PAGE = """<!DOCTYPE html>
   h1{{font-size:1.3rem;margin-bottom:.75rem}}
   p{{font-size:.9rem;line-height:1.5;margin-bottom:1rem}}
   .muted{{color:#8b949e}}
+  .small{{font-size:.8rem}}
+  .subtle{{color:#6e7681;font-size:.7rem}}
+  .wrap{{white-space:pre-wrap;word-break:break-all;font-size:.72rem}}
+  a{{color:#58a6ff}}
   .note{{font-size:.8rem;color:#8b949e;border-left:2px solid #30363d;padding-left:.75rem}}
   code{{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem;color:#8b949e;
         display:block;margin-top:.2rem}}
