@@ -120,6 +120,25 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("matches Unchained&#x27;s allowed destinations", response.text)
 
+    def test_policy_client_shows_unverified_warning(self):
+        request_id = self._dcr_client()
+        response = self._get(request_id)
+        self.assertIn("Unverified connector", response.text)
+
+    def test_manual_client_has_no_unverified_warning(self):
+        response = self._get(self.request_id)
+        self.assertNotIn("Unverified connector", response.text)
+
+    def test_browser_requires_an_explicit_choice(self):
+        agents = [
+            {"agent_id": "claude-deadbeef-facebook", "profile": "facebook", "key": "uc_live_a", "connected": True},
+            {"agent_id": "claude-deadbeef-work", "profile": "work", "key": "uc_live_a", "connected": True},
+        ]
+        response = self._get(self.request_id, agents=agents)
+        self.assertEqual(response.status, 200)
+        self.assertNotIn(" checked", response.text)
+        self.assertEqual(response.text.count("name='agent_id'"), 2)
+
     def test_blocked_client_gets_no_allow_form(self):
         request_id = self._dcr_client(uris=("https://evil.test/cb",))
         response = self._get(request_id)

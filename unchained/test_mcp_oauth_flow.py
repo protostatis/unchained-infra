@@ -216,7 +216,11 @@ class OAuthFlowTests(unittest.TestCase):
             },
         )
         self.assertEqual(resp.status_code, 201, resp.text)
-        client_id = resp.json()["client_id"]
+        body = resp.json()
+        client_id = body["client_id"]
+        # The response must match what we store: public, no secret.
+        self.assertEqual(body["token_endpoint_auth_method"], "none")
+        self.assertIn(body.get("client_secret"), (None, ""))
         stored = self.store.get_client(client_id)
         self.assertEqual(stored["token_endpoint_auth_method"], "none")
 

@@ -232,7 +232,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
         rows.append(
             "<label class='agent'>"
             f"<input type='radio' name='agent_id' value='{_escape(opt['agent_id'])}'"
-            f"{' checked' if opt['connected'] else ''} required>"
+            f" required>"
             f"<span><strong>{_escape(opt['profile'])}</strong>"
             f"<code class='subtle'>{_escape(opt['agent_id'])}</code>{state}</span>"
             "</label>"
@@ -257,6 +257,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 <p class='muted small'>
   Callback: <code class='wrap'>{_escape(callback)}</code>
 </p>
+{"" if status == "manual" else "<p class='note warn'>Unverified connector. Its name was supplied by the app, and this callback does not tell Unchained which account will receive access. Only continue if you started this connection yourself in the app.</p>"}
 <p class='note'>
   While connected it can read pages, click, type, run script and read cookies in
   the browser you choose below. You can disconnect it any time from
@@ -493,6 +494,7 @@ _PAGE = """<!DOCTYPE html>
   .wrap{{white-space:pre-wrap;word-break:break-all;font-size:.72rem}}
   a{{color:#58a6ff}}
   .note{{font-size:.8rem;color:#8b949e;border-left:2px solid #30363d;padding-left:.75rem}}
+  .note.warn{{color:#d29922;border-left-color:#d29922}}
   code{{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem;color:#8b949e;
         display:block;margin-top:.2rem}}
   fieldset{{border:1px solid #30363d;border-radius:10px;padding:1rem;margin:1rem 0}}
