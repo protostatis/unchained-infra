@@ -165,12 +165,12 @@ def target_agent(principal: Principal, requested: str, *, auth=None) -> str:
     if not principal.is_oauth:
         if not requested:
             return agent_id_for_key(principal.api_key or "")
-        if requested.startswith("claude-") or requested.startswith("headless-"):
+        if is_full_agent_id(requested):
             if auth is not None and _owned_by_user(auth, principal.user_id, requested):
                 return requested
-            raise IdentityError(f"Agent {requested} does not belong to you.")
+            raise IdentityError(f"Browser {agent_label(requested)} does not belong to you.")
         if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", requested):
-            raise IdentityError(f"Invalid profile name: {requested!r}")
+            raise IdentityError(f"Invalid browser name: {requested!r}")
         return agent_id_for_key(principal.api_key or "", requested)
 
     pinned = principal.agent_id or ""
@@ -181,16 +181,38 @@ def target_agent(principal: Principal, requested: str, *, auth=None) -> str:
     # A bare profile name is accepted only when it names the pinned browser;
     # another profile of the same key is a different browser and must not be
     # reachable without a fresh consent.
-    if requested == _profile_of(pinned):
+    if requested == agent_profile(pinned):
         return pinned
     raise IdentityError(
-        f"This connector is limited to {pinned}; reconnect it to use {requested}."
+        f"This connector is limited to {agent_label(pinned)}; "
+        f"reconnect it to use {agent_label(requested) or requested}."
     )
 
 
-def _profile_of(agent_id: str) -> str:
+# ``<lane>-<8 hex>[-<profile>]``.  The lane is an implementation detail (it
+# distinguishes a user's local agent from a hosted worker, not a model vendor),
+# so this recognises the shape rather than hardcoding today's names.
+_FULL_AGENT_ID = re.compile(r"^[a-z][a-z0-9_-]*-[0-9a-f]{8}(?:-[A-Za-z0-9_-]{1,32})?$")
+
+
+def is_full_agent_id(value: str) -> bool:
+    return bool(_FULL_AGENT_ID.match(value or ""))
+
+
+def agent_profile(agent_id: str) -> str:
+    """Profile suffix of an agent id (``claude-abc12345-work`` -> ``work``)."""
     parts = agent_id.split("-", 2)
     return parts[2] if len(parts) > 2 else ""
+
+
+def agent_label(agent_id: str) -> str:
+    """Human-facing name for an agent id, without leaking the internal prefix."""
+    if not agent_id:
+        return ""
+    if agent_id.startswith("headless-"):
+        return "Unchained hosted browser"
+    profile = agent_profile(agent_id)
+    return profile or "Default browser"
 
 
 def _owned_by_user(auth, user_id: str, agent_id: str) -> bool:

@@ -992,7 +992,7 @@ Options:
 
     provider = build_provider(_oauth_store())
     if provider is not None:
-        install_complete_route(mcp, _oauth_store())
+        install_complete_route(mcp, provider)
         mcp.auth = provider
         print(f"[mcp] OAuth enabled: issuer={provider.issuer} resource={provider.resource}")
     else:

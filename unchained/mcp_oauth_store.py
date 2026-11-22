@@ -89,6 +89,10 @@ def _loads(raw: str | None, default: Any) -> Any:
         return default
 
 
+class BudgetExceeded(Exception):
+    """Raised when a bounded allocation (clients or requests) is full."""
+
+
 class OAuthStore:
     """OAuth client, grant and token storage in the Unchained SQLite database."""
 
@@ -197,6 +201,24 @@ class OAuthStore:
                     consumed_at REAL
                 );
 
+                CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scheme TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL DEFAULT 443,
+                    path TEXT NOT NULL,
+                    match TEXT NOT NULL CHECK (match IN ('exact', 'prefix')),
+                    allow_query INTEGER NOT NULL DEFAULT 0,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    UNIQUE (scheme, host, port, path, match, allow_query)
+                );
+
+                CREATE TABLE IF NOT EXISTS mcp_oauth_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_oauth_requests_expiry
                     ON mcp_oauth_requests (expires_at);
                 CREATE INDEX IF NOT EXISTS idx_oauth_codes_grant
@@ -211,6 +233,43 @@ class OAuthStore:
                     ON mcp_oauth_grants (client_id);
                 """
             )
+            self._seed_policies(conn)
+
+    def _seed_policies(self, conn) -> None:
+        """Install default callback policies exactly once.
+
+        Re-seeding on every init would resurrect a policy an operator removed,
+        so the seed is versioned by a marker row: an intentionally empty policy
+        table stays empty.
+        """
+        from mcp_oauth_policy import DEFAULT_POLICIES
+
+        row = conn.execute(
+            "SELECT value FROM mcp_oauth_meta WHERE key = 'policy_seed_version'"
+        ).fetchone()
+        if row is not None:
+            return
+        for policy in DEFAULT_POLICIES:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO mcp_oauth_policies
+                    (scheme, host, port, path, match, allow_query, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    policy["scheme"],
+                    policy["host"].lower(),
+                    int(policy["port"]),
+                    policy["path"],
+                    policy["match"],
+                    int(policy["allow_query"]),
+                    policy.get("note", ""),
+                    _now(),
+                ),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('policy_seed_version', '1')"
+        )
 
     # -- clients -----------------------------------------------------------
 
@@ -306,6 +365,221 @@ class OAuthStore:
                 )
             return cur.rowcount or 0
 
+    # -- callback policies -------------------------------------------------
+
+    def list_policies(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM mcp_oauth_policies ORDER BY host, path"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_policy(
+        self,
+        *,
+        scheme: str,
+        host: str,
+        port: int,
+        path: str,
+        match: str = "exact",
+        allow_query: int = 0,
+        note: str = "",
+    ) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO mcp_oauth_policies
+                    (scheme, host, port, path, match, allow_query, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scheme.lower(),
+                    host.lower(),
+                    int(port),
+                    path,
+                    match,
+                    int(allow_query),
+                    note,
+                    _now(),
+                ),
+            )
+            if (cur.rowcount or 0) == 0:
+                row = conn.execute(
+                    """
+                    SELECT id FROM mcp_oauth_policies
+                     WHERE scheme = ? AND host = ? AND port = ? AND path = ?
+                       AND match = ? AND allow_query = ?
+                    """,
+                    (scheme.lower(), host.lower(), int(port), path, match, int(allow_query)),
+                ).fetchone()
+                return int(row["id"]) if row else 0
+            return int(cur.lastrowid or 0)
+
+    def remove_policy(self, policy_id: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM mcp_oauth_policies WHERE id = ?", (int(policy_id),)
+            )
+            return (cur.rowcount or 0) == 1
+
+    def dcr_clients(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.*,
+                       (SELECT COUNT(*) FROM mcp_oauth_grants g
+                         WHERE g.client_id = c.client_id AND g.revoked_at IS NULL) AS grants
+                  FROM mcp_oauth_clients c
+                 WHERE c.source = 'dcr'
+                 ORDER BY c.created_at
+                """
+            ).fetchall()
+        return [
+            {
+                "client_id": r["client_id"],
+                "client_name": r["client_name"],
+                "redirect_uris": _loads(r["redirect_uris"], []),
+                "grants": int(r["grants"] or 0),
+            }
+            for r in rows
+        ]
+
+    def register_dynamic_client(
+        self,
+        *,
+        client_id: str,
+        client_name: str,
+        redirect_uris: Iterable[str],
+        max_per_hour: int = 0,
+        max_total: int = 0,
+    ) -> None:
+        """Admit a DCR client atomically, enforcing the registration budget."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if max_per_hour:
+                    row = conn.execute(
+                        "SELECT COUNT(*) AS n FROM mcp_oauth_clients WHERE created_at >= ?",
+                        (now - 3600,),
+                    ).fetchone()
+                    if int(row["n"]) >= max_per_hour:
+                        raise BudgetExceeded("registration rate limit reached, try again later")
+                if max_total:
+                    row = conn.execute(
+                        "SELECT COUNT(*) AS n FROM mcp_oauth_clients"
+                    ).fetchone()
+                    if int(row["n"]) >= max_total:
+                        raise BudgetExceeded("registration capacity reached")
+                conn.execute(
+                    """
+                    INSERT INTO mcp_oauth_clients
+                        (client_id, client_name, redirect_uris, grant_types,
+                         token_endpoint_auth_method, source, created_at)
+                    VALUES (?, ?, ?, ?, 'none', 'dcr', ?)
+                    """,
+                    (
+                        client_id,
+                        client_name,
+                        _json(list(redirect_uris)),
+                        _json(["authorization_code", "refresh_token"]),
+                        now,
+                    ),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+
+    def delete_client_atomic(self, client_id: str) -> dict:
+        """Remove a client and everything it could still use, in one transaction.
+
+        Deleting the row alone would leave live grants, tokens, pending requests
+        and approval tickets behind, so a policy withdrawal has to cascade.
+        """
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                grant_ids = [
+                    r["id"]
+                    for r in conn.execute(
+                        "SELECT id FROM mcp_oauth_grants WHERE client_id = ? AND revoked_at IS NULL",
+                        (client_id,),
+                    ).fetchall()
+                ]
+                if grant_ids:
+                    placeholders = ",".join("?" for _ in grant_ids)
+                    conn.execute(
+                        f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({placeholders})",
+                        (now, *grant_ids),
+                    )
+                    conn.execute(
+                        f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                        f"WHERE revoked_at IS NULL AND grant_id IN ({placeholders})",
+                        (now, *grant_ids),
+                    )
+                requests = conn.execute(
+                    "SELECT id FROM mcp_oauth_requests WHERE client_id = ?", (client_id,)
+                ).fetchall()
+                request_ids = [r["id"] for r in requests]
+                if request_ids:
+                    placeholders = ",".join("?" for _ in request_ids)
+                    conn.execute(
+                        f"DELETE FROM mcp_oauth_approvals WHERE request_id IN ({placeholders})",
+                        tuple(request_ids),
+                    )
+                conn.execute("DELETE FROM mcp_oauth_codes WHERE client_id = ?", (client_id,))
+                conn.execute("DELETE FROM mcp_oauth_requests WHERE client_id = ?", (client_id,))
+                cur = conn.execute(
+                    "DELETE FROM mcp_oauth_clients WHERE client_id = ?", (client_id,)
+                )
+                deleted = (cur.rowcount or 0) == 1
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return {
+            "client_deleted": deleted,
+            "grants_revoked": len(grant_ids),
+            "requests_discarded": len(request_ids),
+        }
+
+    # -- maintenance -------------------------------------------------------
+
+    @staticmethod
+    def _sweep_expired(conn, now: float) -> None:
+        """Delete a bounded batch of expired one-shot rows.
+
+        Called from the allocation path, which is the only place an
+        unauthenticated caller can create rows. Bounded so a large backlog is
+        drained across requests instead of holding the write lock.
+        """
+        conn.execute(
+            """
+            DELETE FROM mcp_oauth_requests WHERE rowid IN (
+                SELECT rowid FROM mcp_oauth_requests WHERE expires_at < ? LIMIT 200
+            )
+            """,
+            (now,),
+        )
+        conn.execute(
+            """
+            DELETE FROM mcp_oauth_approvals WHERE rowid IN (
+                SELECT rowid FROM mcp_oauth_approvals WHERE expires_at < ? LIMIT 200
+            )
+            """,
+            (now,),
+        )
+        conn.execute(
+            """
+            DELETE FROM mcp_oauth_codes WHERE rowid IN (
+                SELECT rowid FROM mcp_oauth_codes WHERE expires_at < ? LIMIT 200
+            )
+            """,
+            (now,),
+        )
+
     # -- authorization requests -------------------------------------------
 
     def create_request(
@@ -318,31 +592,66 @@ class OAuthStore:
         code_challenge: str,
         code_challenge_method: str,
         resource: str | None,
+        max_per_client: int = 0,
+        max_global: int = 0,
     ) -> str:
         request_id = secrets.token_urlsafe(32)
         now = _now()
         with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO mcp_oauth_requests
-                    (id, client_id, redirect_uri, state, scopes, code_challenge,
-                     code_challenge_method, resource, status, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request_id,
-                    client_id,
-                    redirect_uri,
-                    state,
-                    _json(list(scopes)),
-                    code_challenge,
-                    code_challenge_method,
-                    resource,
-                    STATUS_PENDING,
-                    now,
-                    now + AUTHORIZATION_REQUEST_TTL,
-                ),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # The ceilings below count only unexpired rows, so the sweep is
+                # what bounds total churn: without it an unauthenticated caller
+                # could keep expiring rows forever and never hit a cap.
+                self._sweep_expired(conn, now)
+                # Count only outstanding, unexpired work: completing or denying
+                # a request frees its slot, so a pending-count bound cannot be
+                # bypassed by allocating faster than it can be drained.
+                if max_global:
+                    row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS n FROM mcp_oauth_requests
+                         WHERE status = ? AND expires_at > ?
+                        """,
+                        (STATUS_PENDING, now),
+                    ).fetchone()
+                    if int(row["n"]) >= max_global:
+                        raise BudgetExceeded("too many authorization requests are pending")
+                if max_per_client:
+                    row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS n FROM mcp_oauth_requests
+                         WHERE client_id = ? AND status = ? AND expires_at > ?
+                        """,
+                        (client_id, STATUS_PENDING, now),
+                    ).fetchone()
+                    if int(row["n"]) >= max_per_client:
+                        raise BudgetExceeded("too many authorization requests are pending")
+                conn.execute(
+                    """
+                    INSERT INTO mcp_oauth_requests
+                        (id, client_id, redirect_uri, state, scopes, code_challenge,
+                         code_challenge_method, resource, status, created_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request_id,
+                        client_id,
+                        redirect_uri,
+                        state,
+                        _json(list(scopes)),
+                        code_challenge,
+                        code_challenge_method,
+                        resource,
+                        STATUS_PENDING,
+                        now,
+                        now + AUTHORIZATION_REQUEST_TTL,
+                    ),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
         return request_id
 
     def get_request(self, request_id: str) -> dict | None:
@@ -402,6 +711,15 @@ class OAuthStore:
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                registered = conn.execute(
+                    """
+                    SELECT 1 FROM mcp_oauth_clients
+                     WHERE client_id = (SELECT client_id FROM mcp_oauth_requests WHERE id = ?)
+                    """,
+                    (request_id,),
+                ).fetchone()
+                if registered is None:
+                    raise ValueError("client is no longer registered")
                 cur = conn.execute(
                     """
                     UPDATE mcp_oauth_requests
@@ -503,6 +821,12 @@ class OAuthStore:
                     raise ValueError("authorization request is missing")
                 if request_row["status"] != STATUS_APPROVED:
                     raise ValueError("authorization request was not approved")
+                registered = conn.execute(
+                    "SELECT 1 FROM mcp_oauth_clients WHERE client_id = ?",
+                    (request_row["client_id"],),
+                ).fetchone()
+                if registered is None:
+                    raise ValueError("client is no longer registered")
 
                 conn.execute(
                     "UPDATE mcp_oauth_requests SET status = ? WHERE id = ?",

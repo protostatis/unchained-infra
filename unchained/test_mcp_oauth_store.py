@@ -11,6 +11,7 @@ from mcp_oauth_store import (
     ACCESS_TOKEN_PREFIX,
     AUTHORIZATION_CODE_PREFIX,
     REFRESH_TOKEN_PREFIX,
+    BudgetExceeded,
     OAuthStore,
     agent_id_for_key,
     fingerprint_key,
@@ -396,6 +397,149 @@ class HelperTests(unittest.TestCase):
 
     def test_fingerprint_is_full_sha256(self):
         self.assertEqual(len(fingerprint_key("x")), 64)
+
+
+class PolicySeedTests(StoreTestBase):
+    def test_defaults_are_installed_once(self):
+        policies = self.store.list_policies()
+        hosts = {p["host"] for p in policies}
+        self.assertIn("claude.ai", hosts)
+        self.assertIn("vertexaisearch.cloud.google.com", hosts)
+
+    def test_removed_policy_is_not_resurrected(self):
+        policy_id = self.store.list_policies()[0]["id"]
+        self.assertTrue(self.store.remove_policy(policy_id))
+        remaining = len(self.store.list_policies())
+
+        # Re-instantiating the store must not re-seed defaults.
+        fresh = OAuthStore(self.db_path)
+        self.assertEqual(len(fresh.list_policies()), remaining)
+
+    def test_add_policy_is_idempotent(self):
+        first = self.store.add_policy(
+            scheme="https", host="example.test", port=443, path="/cb"
+        )
+        second = self.store.add_policy(
+            scheme="https", host="example.test", port=443, path="/cb"
+        )
+        self.assertEqual(first, second)
+
+
+class DynamicClientBudgetTests(StoreTestBase):
+    def test_budget_refuses_and_does_not_insert(self):
+        self.store.register_dynamic_client(
+            client_id="c1",
+            client_name="one",
+            redirect_uris=["https://example.test/cb"],
+            max_total=1,
+        )
+        with self.assertRaises(BudgetExceeded):
+            self.store.register_dynamic_client(
+                client_id="c2",
+                client_name="two",
+                redirect_uris=["https://example.test/cb"],
+                max_total=1,
+            )
+        self.assertIsNone(self.store.get_client("c2"))
+
+
+class RequestBudgetTests(StoreTestBase):
+    def _create(self, **kwargs):
+        return self.store.create_request(
+            client_id="client-1",
+            redirect_uri="https://client.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+            **kwargs,
+        )
+
+    def test_per_client_cap(self):
+        self._client()
+        self._create(max_per_client=1)
+        with self.assertRaises(BudgetExceeded):
+            self._create(max_per_client=1)
+
+    def test_global_cap(self):
+        self._client()
+        self._create(max_global=1)
+        with self.assertRaises(BudgetExceeded):
+            self._create(max_global=1)
+
+    def test_completing_a_request_frees_the_slot(self):
+        self._client()
+        request_id = self._create(max_per_client=1)
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id="user-1",
+            agent_id="claude-aaaaaaaa",
+            key_hash="aaaaaaaa",
+            key_fingerprint="f" * 64,
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+        self.store.complete_request(ticket)
+        # The row is no longer pending, so a new request is admitted.
+        self._create(max_per_client=1)
+
+    def test_expired_rows_are_swept_on_the_allocation_path(self):
+        self._client()
+        request_id = self._create()
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = 1 WHERE id = ?",
+                (request_id,),
+            )
+        self._create()
+        with self.store._conn() as conn:
+            remaining = conn.execute("SELECT COUNT(*) AS n FROM mcp_oauth_requests").fetchone()
+        self.assertEqual(int(remaining["n"]), 1)
+
+    def test_expired_pending_rows_do_not_count(self):
+        self._client()
+        request_id = self._create(max_per_client=1)
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = 1 WHERE id = ?",
+                (request_id,),
+            )
+        self._create(max_per_client=1)
+
+
+class DeleteClientTests(StoreTestBase):
+    def test_delete_revokes_grants_tokens_and_pending_state(self):
+        client, request_id, grant_id, ticket = self._approved()
+        code = self.store.complete_request(ticket)["code"]
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id=client["client_id"], scopes=["mcp:browser"], resource=None
+        )
+        # Leave a second, still-pending request behind too.
+        pending_id = self.store.create_request(
+            client_id=client["client_id"],
+            redirect_uri="https://client.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+        )
+
+        result = self.store.delete_client_atomic(client["client_id"])
+
+        self.assertTrue(result["client_deleted"])
+        self.assertEqual(result["grants_revoked"], 1)
+        self.assertIsNone(self.store.get_client(client["client_id"]))
+        self.assertIsNone(self.store.get_grant(grant_id))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(self.store.get_authorization_code(code))
+        self.assertIsNone(self.store.get_request(pending_id))
+
+    def test_delete_of_unknown_client_is_reported(self):
+        result = self.store.delete_client_atomic("nope")
+        self.assertFalse(result["client_deleted"])
+        self.assertEqual(result["grants_revoked"], 0)
 
 
 class PruneTests(StoreTestBase):

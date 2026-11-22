@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from mcp_oauth_policy import RedirectURIError, validate_redirect_uri  # noqa: E402
 from mcp_oauth_store import OAuthStore  # noqa: E402
 
 
@@ -62,22 +63,12 @@ def _list(store: OAuthStore, db_path: str) -> int:
 
 
 def _revoke_client(store: OAuthStore, client_id: str) -> int:
-    with store._conn() as conn:
-        grant_ids = [
-            r["id"]
-            for r in conn.execute(
-                "SELECT id FROM mcp_oauth_grants WHERE client_id = ? AND revoked_at IS NULL",
-                (client_id,),
-            ).fetchall()
-        ]
-    for grant_id in grant_ids:
-        store.revoke_grant(grant_id)
-    with store._conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM mcp_oauth_clients WHERE client_id = ?", (client_id,)
-        )
-        deleted = cur.rowcount or 0
-    print(f"Revoked {len(grant_ids)} grant(s); removed {deleted} client row(s).")
+    result = store.delete_client_atomic(client_id)
+    print(
+        f"Revoked {result['grants_revoked']} grant(s); "
+        f"discarded {result['requests_discarded']} pending request(s); "
+        f"removed {1 if result['client_deleted'] else 0} client row(s)."
+    )
     return 0
 
 
@@ -105,6 +96,14 @@ def main() -> int:
     if not (args.client_id and args.name and args.redirect_uri):
         parser.error("--client-id, --name and at least one --redirect-uri are required")
 
+    issuer = os.environ.get("MCP_OAUTH_ISSUER", "https://unchainedsky.com").strip().rstrip("/")
+    for uri in args.redirect_uri:
+        try:
+            validate_redirect_uri(uri, issuer=issuer, allow_loopback=True)
+        except RedirectURIError as exc:
+            print(f"Refusing redirect URI {uri}: {exc}")
+            return 2
+
     store.save_client(
         client_id=args.client_id,
         client_name=args.name,
@@ -114,7 +113,9 @@ def main() -> int:
     print(f"Registered {args.client_id} in {store.db_path}\n")
     print("Paste these into the connector's advanced settings:")
     print(f"  Client ID:     {args.client_id}")
-    print("  Client Secret: (any placeholder — this client is public)")
+    print("  Client Secret: leave empty if the field is optional; otherwise any")
+    print("                 placeholder works because the client is public and")
+    print("                 the exchange is proven by PKCE, not by a secret.")
     for uri in args.redirect_uri:
         print(f"  Redirect URI:  {uri}")
     print("\nAuthorization and token URLs come from discovery; no need to type them.")
