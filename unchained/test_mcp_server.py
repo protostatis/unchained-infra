@@ -607,6 +607,41 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not found", result.content[0].text)
         cleanup.assert_not_awaited()
 
+    async def test_cleanup_refuses_when_status_is_unreadable(self):
+        cleanup = AsyncMock()
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._oauth(),
+            ),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(return_value={"error": "relay down"}),
+            ),
+            patch("cloud_tools.provision_cleanup", new=cleanup),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_provision_cleanup", {"slot": "ab12"},
+            )
+        self.assertIn("Could not verify", result.content[0].text)
+        cleanup.assert_not_awaited()
+
+    async def test_list_profiles_raises_when_the_grant_key_is_revoked(self):
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._oauth(),
+            ),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("mcp_server._key_for_grant", return_value=""),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await mcp_server.mcp._tool_manager.call_tool(
+                    "list_chrome_profiles", {},
+                )
+        self.assertIn("revoked", str(ctx.exception))
+
     async def test_old_grant_is_told_to_reconnect(self):
         with (
             patch(

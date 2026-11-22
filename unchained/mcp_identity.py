@@ -85,10 +85,10 @@ def resolve_principal(
         if state != GRANT_VALID:
             revoke_if_detached(store, row["grant_id"], state)
             return None
-        # Cheap constant-time-ish tag so provisioning cleanup can never collide
-        # with an API-key caller's tag. 64 bits: this tag is the ownership
-        # authority for provisioned browsers.
-        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:16]
+        # Ownership authority for provisioned browsers: 128 bits from the
+        # grant id. Stable across token refreshes and far below the bridge's
+        # 64-character caller_tag cap.
+        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:32]
         return Principal(
             kind=KIND_OAUTH,
             user_id=row["user_id"],

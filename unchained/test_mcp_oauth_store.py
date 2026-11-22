@@ -257,6 +257,27 @@ class TokenTests(StoreTestBase):
         loaded = self.store.load_access_token(rotated["access_token"])
         self.assertEqual(loaded["scopes"], ["mcp:browser"])
 
+    def test_refresh_with_only_ungranted_scopes_is_refused(self):
+        _, _, grant_id, ticket = self._approved()
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
+        )
+        self.assertIsNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"],
+                client_id="client-1",
+                scopes=["mcp:provision"],
+            )
+        )
+        # The token was not consumed by the refused attempt.
+        self.assertIsNotNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"],
+                client_id="client-1",
+                scopes=["mcp:browser"],
+            )
+        )
+
     def test_refresh_replay_revokes_family(self):
         _, _, grant_id, ticket = self._approved()
         issued = self.store.issue_tokens(

@@ -1437,9 +1437,15 @@ class OAuthStore:
                 # Without this an old grant could add mcp:provision without
                 # the updated consent screen ever being shown.
                 granted_scopes = _loads(row["scopes"], [])
-                requested = list(scopes) if scopes else granted_scopes
-                final_scopes = [s for s in requested if s in granted_scopes]
-                if not final_scopes:
+                requested = list(scopes or [])
+                if requested:
+                    final_scopes = [s for s in requested if s in granted_scopes]
+                    if not final_scopes:
+                        # Asking for only ungranted scopes is a client error,
+                        # not a reason to silently restore the full set.
+                        conn.execute("ROLLBACK")
+                        return None
+                else:
                     final_scopes = granted_scopes
 
                 cur = conn.execute(

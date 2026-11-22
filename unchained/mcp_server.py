@@ -878,7 +878,9 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
         # for this lookup; it is never returned to the caller.
         api_key = _key_for_grant(principal)
         if not api_key:
-            return "The API key linked to this connector was revoked. Reconnect it."
+            raise ValueError(
+                "The API key linked to this connector was revoked. Reconnect it."
+            )
     else:
         api_key = principal.api_key or ""
     if not api_key:
@@ -996,18 +998,20 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
+    principal = _require_principal()
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)  # raises if no credential
     # Pass caller_tag so cleanup-all only kills this caller's provisions.
     # OAuth grants are tagged oauth-<grant hash>.
-    principal = _require_principal()
-    _require_provision_capability(principal)
     caller_tag = principal.caller_tag
     if principal.is_oauth and slot:
         # The bridge cannot reject an unowned legacy slot that has no stored
         # tag, so verify positive ownership before asking it to delete.
         status = await cloud_tools.provision_status(aid)
         slots = status.get("slots") if isinstance(status, dict) else None
-        info = slots.get(slot) if isinstance(slots, dict) else None
+        if not isinstance(slots, dict):
+            return "Could not verify that slot's ownership. Retry in a moment."
+        info = slots.get(slot)
         if not isinstance(info, dict) or info.get("caller_tag") != caller_tag:
             return f"Slot {slot} not found — nothing cleaned."
     result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
