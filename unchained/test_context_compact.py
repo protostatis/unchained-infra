@@ -36,7 +36,8 @@ class TestClassifyTool(unittest.TestCase):
             self.assertEqual(_classify_tool(name), "data", name)
 
     def test_meta_tools(self):
-        for name in ("list_connected_agents", "cdp_provision_launch",
+        for name in ("list_connected_agents", "list_chrome_profiles",
+                      "cdp_provision_launch",
                       "cdp_provision_cleanup", "list_provisioned_tabs"):
             self.assertEqual(_classify_tool(name), "meta", name)
 

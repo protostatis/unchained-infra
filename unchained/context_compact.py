@@ -41,7 +41,7 @@ _PAGE_STATE_TOOLS = frozenset({
 _EPHEMERAL_TOOLS = frozenset({"cdp_type", "type_text", "cdp_set_file", "submit_form", "press_enter"})
 _DATA_TOOLS = frozenset({"js_eval", "intel_stores", "intel_shape", "intel_find_paths"})
 _META_TOOLS = frozenset({
-    "list_connected_agents", "cdp_provision_launch",
+    "list_connected_agents", "list_chrome_profiles", "cdp_provision_launch",
     "cdp_provision_cleanup", "list_provisioned_tabs",
 })
 

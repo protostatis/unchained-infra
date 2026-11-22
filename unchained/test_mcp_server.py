@@ -247,5 +247,117 @@ class TestCdpNavigateSignatureContract(unittest.TestCase):
         self.assertIs(param.default, True)
 
 
+class TestListChromeProfilesTool(unittest.IsolatedAsyncioTestCase):
+    """list_chrome_profiles must surface provisionable paths, not agent names."""
+
+    def _principal(self):
+        return mcp_server.Principal(
+            kind="api_key",
+            user_id="user-1",
+            caller_tag="tag",
+            api_key="uc_live_test",
+        )
+
+    async def _call(self, fetch_mock, agent_id=""):
+        with (
+            patch("mcp_server._require_principal", return_value=self._principal()),
+            patch("mcp_server._resolve_agent", return_value="claude-abc-facebook"),
+            patch("provision_helpers.fetch_relay_profiles", new=fetch_mock),
+        ):
+            return await mcp_server.mcp._tool_manager.call_tool(
+                "list_chrome_profiles", {"agent_id": agent_id},
+            )
+
+    async def test_lists_profile_paths_for_provisioning(self):
+        profiles = [
+            {
+                "path": "/Users/you/Library/Application Support/Google/Chrome/Profile 5",
+                "dir_name": "Profile 5",
+                "name": "Work",
+                "email": "work@example.com",
+            },
+            {
+                "path": "/Users/you/Library/Application Support/Google/Chrome/Default",
+                "dir_name": "Default",
+                "name": "Personal",
+                "email": "me@example.com",
+            },
+        ]
+        fetch = AsyncMock(return_value=profiles)
+        result = await self._call(fetch, agent_id="facebook")
+        text = result.content[0].text
+
+        self.assertIn("Work (work@example.com)", text)
+        self.assertIn("Personal (me@example.com)", text)
+        self.assertIn(
+            "path: /Users/you/Library/Application Support/Google/Chrome/Profile 5",
+            text,
+        )
+        self.assertIn("cdp_provision_launch", text)
+        self.assertNotIn("claude-abc-facebook", text)
+
+        kwargs = fetch.await_args.kwargs
+        self.assertEqual(kwargs["agent_id"], "claude-abc-facebook")
+        self.assertEqual(
+            kwargs["headers"], {"Authorization": "Bearer uc_live_test"}
+        )
+
+    async def test_empty_inventory_is_explicit(self):
+        result = await self._call(AsyncMock(return_value=[]))
+        self.assertEqual(
+            result.content[0].text,
+            "No Chrome profiles with a Google sign-in were found on this machine.",
+        )
+
+    async def test_disconnected_agent_points_at_list_connected_agents(self):
+        import httpx
+
+        request = httpx.Request(
+            "GET", "http://relay:8765/api/agents/claude-abc-facebook/profiles"
+        )
+        error = httpx.HTTPStatusError(
+            "404", request=request, response=httpx.Response(404, request=request)
+        )
+        result = await self._call(AsyncMock(side_effect=error))
+        text = result.content[0].text
+        self.assertIn("No browser is connected", text)
+        self.assertIn("list_connected_agents", text)
+
+    async def test_unexpected_error_text_is_not_forwarded(self):
+        result = await self._call(
+            AsyncMock(side_effect=RuntimeError("bridge at 10.9.9.9 refused"))
+        )
+        text = result.content[0].text
+        self.assertEqual(
+            text,
+            "Error listing Chrome profiles: the browser service is unavailable.",
+        )
+        self.assertNotIn("10.9.9.9", text)
+
+    async def test_invalid_inventory_is_reported_without_internals(self):
+        result = await self._call(
+            AsyncMock(
+                side_effect=ValueError("bad payload from relay.internal:8765")
+            )
+        )
+        text = result.content[0].text
+        self.assertIn("invalid profile inventory", text)
+        self.assertNotIn("relay.internal", text)
+
+    async def test_oauth_principal_is_refused(self):
+        oauth = mcp_server.Principal(
+            kind="oauth", user_id="user-1", caller_tag="tag"
+        )
+        with (
+            patch("mcp_server._require_principal", return_value=oauth),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await mcp_server.mcp._tool_manager.call_tool(
+                    "list_chrome_profiles", {},
+                )
+        self.assertIn("API-key MCP client", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

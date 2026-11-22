@@ -28963,6 +28963,7 @@ Header:   Authorization: Bearer YOUR_UNCHAINED_API_KEY</pre>
           <tr><td><code>cdp_set_file</code></td><td>Set a file on <code>&lt;input type="file"&gt;</code> without the OS picker.</td></tr>
           <tr><td><code>list_connected_agents</code></td><td>List connected browser agents and Chrome profiles.</td></tr>
           <tr class="tools-group"><td colspan="2">Chrome Profile Provisioning</td></tr>
+          <tr><td><code>list_chrome_profiles</code></td><td>List local Chrome profiles (with Google sign-in) and their paths for <code>cdp_provision_launch</code>.</td></tr>
           <tr><td><code>cdp_provision_launch</code></td><td>Launch Chrome with a user profile for OAuth/authenticated browsing.</td></tr>
           <tr><td><code>cdp_provision_cleanup</code></td><td>Clean up provisioned Chrome instances.</td></tr>
           <tr><td><code>list_provisioned_tabs</code></td><td>List tabs in provisioned Chrome (discover OAuth popups).</td></tr>
