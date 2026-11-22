@@ -187,6 +187,12 @@ class MCPOAuthProvider(OAuthProvider):
                 error="invalid_client_metadata",
                 error_description=f"unsupported token_endpoint_auth_method: {method}",
             )
+        # The register handler echoes this object in its 201 response, so clear
+        # the method and any generated secret here: a console must not walk away
+        # believing it holds a secret that get_client() will never return.
+        client_info.token_endpoint_auth_method = "none"
+        client_info.client_secret = None
+        client_info.client_secret_expires_at = None
 
         try:
             self.store.register_dynamic_client(
