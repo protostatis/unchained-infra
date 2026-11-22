@@ -59,7 +59,20 @@ def cmd_list(store: OAuthStore) -> int:
     return 0
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _loopback_host(host: str) -> bool:
+    """Policies gate automatic registration, and native loopback clients are
+    registered by an operator instead. A loopback policy can never admit
+    anything useful, so refuse it rather than storing a dead row."""
+    return str(host or "").strip().lower() in _LOOPBACK_HOSTS
+
+
 def cmd_add(store: OAuthStore, args) -> int:
+    if _loopback_host(args.host):
+        print("Refusing to add policy: loopback callbacks are registered manually, not by policy.")
+        return 2
     try:
         validate_redirect_uri(
             f"{args.scheme}://{args.host}{args.path}",
@@ -186,9 +199,12 @@ def cmd_import(store: OAuthStore, args) -> int:
         if match not in ("exact", "prefix"):
             print(f"Skipping entry with invalid match mode: {entry!r}")
             continue
+        if _loopback_host(host):
+            print(f"Skipping {host}: loopback callbacks are registered manually, not by policy.")
+            continue
         uri = f"{scheme}://{host}" + ("" if port in (443, 80) else f":{port}") + path
         try:
-            validate_redirect_uri(uri, issuer=_issuer(), allow_loopback=True)
+            validate_redirect_uri(uri, issuer=_issuer(), allow_loopback=False)
         except RedirectURIError as exc:
             print(f"Skipping {uri}: {exc}")
             continue
