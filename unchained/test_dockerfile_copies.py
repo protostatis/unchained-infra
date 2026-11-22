@@ -86,6 +86,14 @@ class DockerfileCoverageTests(unittest.TestCase):
             "Dockerfile does not copy these imported modules: " + ", ".join(missing),
         )
 
+    def test_oauth_ops_scripts_are_in_the_image(self):
+        text = DOCKERFILE.read_text()
+        for name in (
+            "register_mcp_oauth_client.py",
+            "manage_mcp_oauth_policy.py",
+        ):
+            self.assertIn(f"COPY unchained/scripts/{name} scripts/{name}", text)
+
     def test_new_oauth_modules_are_listed(self):
         copied_modules, _ = _copied_sources(DOCKERFILE)
         for name in (

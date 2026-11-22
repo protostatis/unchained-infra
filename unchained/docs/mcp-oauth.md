@@ -20,6 +20,27 @@ requires PKCE, Authorization Server Metadata and Dynamic Client Registration
 consoles for an arbitrary header or a static bearer token, so the endpoint has
 to become an authorization server.
 
+## Supported surfaces
+
+| Surface | Position |
+|---|---|
+| **Claude** custom connector | **Verified** (Claude Desktop): exact callback allowlisted, DCR, refresh rotation observed |
+| **Gemini CLI** | Supported bearer header (`gemini mcp add … --header`); no OAuth |
+| **Gemini web** (`gemini.google.com`) | **Verified** (assisted): six exact callbacks per Google account binding; four refreshes observed over an hour |
+| **Gemini mobile** | No setup promise; use a connection created on the web if Google offers it |
+| **Gemini desktop** | **Embedded setup is not supported.** Its webview has no WebAuthn, so passkey accounts fail at Google's own sign-in before `/authorize` is ever reached |
+| **ChatGPT** | **Verified** (chatgpt.com custom connector): dynamic `https://chatgpt.com/connector/oauth/` path admitted as a prefix |
+| **Gemini Enterprise** | Assisted manual client (`scripts/register_mcp_oauth_client.py`) |
+
+Google's own help page documents custom apps as added in the web app and
+available in web and mobile. Do not promise desktop inheritance; the desktop
+app may present the same settings surface, but that flow is not documented and
+is where the embedded-webview failure occurs.
+
+Consumer custom apps are also restricted by Google to personal Google accounts,
+US, 18+, English, with History enabled. Link those restrictions rather than
+promising general availability.
+
 ## Shape of the solution
 
 The MCP server owns the protocol; the website owns the login. Both already
@@ -118,21 +139,37 @@ the 401 challenge it needs. `/mcp/setup` is a stable alias for the install page.
 A callback URL is where the authorization code lands, so automatic
 registration only accepts destinations an operator has approved.  Policies live
 in `mcp_oauth_callback_policies` and name an exact scheme, host, port and path
-(optionally a path prefix) plus whether a query string is allowed.  Two are
-seeded — Claude's and Gemini Enterprise's — and the seed is versioned, so a
-policy an operator removes stays removed.
+(optionally a path prefix) plus whether a query string is allowed.
+
+Policy provenance is split:
+
+* **Static provider callbacks** (Claude, Gemini Enterprise, ChatGPT, Muse) live
+  in `mcp_oauth_policy.py` and are seeded from code with a version marker. A
+  fresh database gets all of them; an existing one receives only the entries
+  added in newer seed versions, so a policy an operator removed stays removed.
+* **Per-user callbacks** — the six `user_bound_custom-mcp-<hash>` paths a Gemini
+  account registers — are environment-specific and live only in the database.
+  Snapshot them with `export` and restore with `import`.
 
 ```bash
 uv run scripts/manage_mcp_oauth_policy.py list
 uv run scripts/manage_mcp_oauth_policy.py add \
-    --host chatgpt.com --path /connector_platform_oauth_redirect \
-    --note "ChatGPT custom MCP server"
+    --host example.com --path /oauth/callback \
+    --note "operator-added provider"
+uv run scripts/manage_mcp_oauth_policy.py export --file policies.json
+uv run scripts/manage_mcp_oauth_policy.py import --file policies.json --apply
 ```
 
-Removing a policy does not silently take effect: automatic clients whose stored
-callbacks no longer match are reported by `revalidate`, and only withdrawn with
-`--apply`, which revokes their grants and discards their pending requests in one
-transaction.
+`export` writes every policy; `import` reports what is missing and only adds,
+so a restore never deletes an operator's newer entries.
+
+Removing a policy takes effect **immediately for admission**: an automatic
+client whose stored callbacks no longer match is refused at `get_client`, so
+authorization, token and consent operations stop working for it. `revalidate`
+reports those clients, and `revalidate --apply` additionally revokes their
+grants and tokens, discards pending requests and deletes the client rows in one
+transaction. Running it is cleanup; not running it leaves unusable clients
+behind.
 
 Manual clients (registered by an operator) skip admission but never syntax
 validation: https only, no userinfo, no fragments, no issuer-host callbacks, and
@@ -229,6 +266,20 @@ family is alive — that is what makes replay detectable.
 - The 401 challenge includes `error="invalid_token"` alongside
   `resource_metadata`. Discovery works, but if a connector is strict about a
   bare challenge this is the first thing to adjust.
+- **Refresh rotation is compatible with the tested providers.** Gemini consumer
+  accepted four rotations across an hour and ChatGPT rotated once, with no
+  family revoked by replay detection. Google's Persistent Linking guidance
+  describes returning a stable refresh token; the observed behaviour did not
+  require it. Other Google surfaces may differ, so do not treat this as a
+  blanket guarantee. The 90-day absolute family lifetime means an intentional
+  reconnect roughly quarterly.
+- **A placeholder secret is not confidential-client authentication.** Manual and
+  Enterprise clients are registered as public (`token_endpoint_auth_method=none`),
+  and the secret field is ignored. Verify the console actually works that way
+  before describing it as supported.
+- **Embedded webviews cannot do WebAuthn.** Any client that signs the user in
+  through an in-app browser will fail for passkey-only Google accounts before
+  reaching this server.
 - The SDK requires `client_id` in the token request body. That matches RFC 6749
   §3.2.1 for public clients, so Basic-only client authentication is out of
   scope by design.

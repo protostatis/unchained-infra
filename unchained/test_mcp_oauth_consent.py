@@ -20,7 +20,12 @@ from multidict import CIMultiDict
 from mcp_oauth_store import fingerprint_key
 from web_app.handlers import mcp_oauth
 
-USER = {"user_id": "user-1", "auth_method": "session", "status": "approved"}
+USER = {
+    "user_id": "user-1",
+    "email": "protostatis.dev@gmail.com",
+    "auth_method": "session",
+    "status": "approved",
+}
 AGENTS = [
     {
         "agent_id": "claude-deadbeef-facebook",
@@ -124,6 +129,32 @@ class ConsentHandlerTests(unittest.TestCase):
         request_id = self._dcr_client()
         response = self._get(request_id)
         self.assertIn("Unverified connector", response.text)
+
+    def test_consent_shows_the_signed_in_account(self):
+        response = self._get(self.request_id)
+        self.assertIn("Signed in as", response.text)
+        self.assertIn("protostatis.dev@gmail.com", response.text)
+        self.assertIn("Switch account", response.text)
+
+    def test_switch_account_clears_the_session_and_returns_to_the_same_request(self):
+        request = _post(
+            {"request": self.request_id, "decision": "switch", "agent_id": ""}
+        )
+
+        class FakeCore:
+            def _clear_session_cookie(self, response, request):
+                response.del_cookie("uc_session", path="/")
+
+        with patch.object(mcp_oauth, "_signed_in", return_value=USER), patch.object(
+            mcp_oauth, "_core", return_value=FakeCore()
+        ):
+            response = self._run(mcp_oauth.handle_mcp_oauth_consent_post(request))
+
+        self.assertEqual(response.status, 302)
+        self.assertIn(f"/oauth/consent?request={self.request_id}", response.headers["Location"])
+        cookie = response.cookies.get("uc_session")
+        self.assertIsNotNone(cookie)
+        self.assertIn(cookie["max-age"], ("0", 0))
 
     def test_manual_client_has_no_unverified_warning(self):
         response = self._get(self.request_id)

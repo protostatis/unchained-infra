@@ -266,20 +266,28 @@ class OAuthStore:
             self._seed_policies(conn)
 
     def _seed_policies(self, conn) -> None:
-        """Install default callback policies exactly once.
+        """Install static callback policies, versioned, without resurrecting.
 
-        Re-seeding on every init would resurrect a policy an operator removed,
-        so the seed is versioned by a marker row: an intentionally empty policy
-        table stays empty.
+        Each entry records the seed version it arrived in.  A fresh database
+        gets everything; an existing one gets only the entries newer than its
+        marker, so a policy an operator removed stays removed while a newly
+        shipped provider still reaches a live database.
         """
-        from mcp_oauth_policy import DEFAULT_POLICIES
+        from mcp_oauth_policy import DEFAULT_POLICIES, STATIC_POLICY_SET_VERSION
 
         row = conn.execute(
             "SELECT value FROM mcp_oauth_meta WHERE key = 'policy_seed_version'"
         ).fetchone()
-        if row is not None:
+        try:
+            current = int(row["value"]) if row is not None else 0
+        except (TypeError, ValueError):
+            current = 0
+        if current >= STATIC_POLICY_SET_VERSION:
             return
+
         for policy in DEFAULT_POLICIES:
+            if int(policy.get("since", 1)) <= current:
+                continue
             conn.execute(
                 """
                 INSERT OR IGNORE INTO mcp_oauth_policies
@@ -298,7 +306,8 @@ class OAuthStore:
                 ),
             )
         conn.execute(
-            "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('policy_seed_version', '1')"
+            "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('policy_seed_version', ?)",
+            (str(STATIC_POLICY_SET_VERSION),),
         )
 
     # -- clients -----------------------------------------------------------
