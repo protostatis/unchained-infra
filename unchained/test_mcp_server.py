@@ -667,6 +667,51 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(verdict)
 
 
+class TestGrantKeyLookup(unittest.TestCase):
+    def _principal(self):
+        return mcp_server.Principal(
+            kind="oauth",
+            user_id="u1",
+            caller_tag="t",
+            agent_id="claude-abc",
+            grant_id="g1",
+        )
+
+    def test_returns_only_the_grant_pinned_key(self):
+        with (
+            patch("mcp_server._oauth_store") as store,
+            patch("mcp_server._auth") as auth,
+            patch(
+                "mcp_oauth_store.fingerprint_key",
+                side_effect=lambda key: (
+                    "pinned" if key == "uc_live_pinned" else "other"
+                ),
+            ),
+        ):
+            store.return_value.get_grant.return_value = {
+                "user_id": "u1",
+                "key_fingerprint": "pinned",
+            }
+            auth.get_keys_for_user.return_value = [
+                "uc_live_wrong",
+                "uc_live_pinned",
+            ]
+            self.assertEqual(mcp_server._key_for_grant(self._principal()), "uc_live_pinned")
+
+    def test_revoked_key_returns_empty(self):
+        with (
+            patch("mcp_server._oauth_store") as store,
+            patch("mcp_server._auth") as auth,
+            patch("mcp_oauth_store.fingerprint_key", return_value="other"),
+        ):
+            store.return_value.get_grant.return_value = {
+                "user_id": "u1",
+                "key_fingerprint": "pinned",
+            }
+            auth.get_keys_for_user.return_value = ["uc_live_other"]
+            self.assertEqual(mcp_server._key_for_grant(self._principal()), "")
+
+
 class TestTabAliasValidation(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_aliases_that_look_like_tab_ids(self):
         for alias in (

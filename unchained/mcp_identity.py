@@ -87,7 +87,9 @@ def resolve_principal(
             return None
         # Ownership authority for provisioned browsers: 128 bits from the
         # grant id. Stable across token refreshes and far below the bridge's
-        # 64-character caller_tag cap.
+        # 64-character caller_tag cap. This is a namespace separator, not a
+        # secret: grant ids are server-generated, and the grant itself is
+        # revalidated on every request.
         tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:32]
         return Principal(
             kind=KIND_OAUTH,

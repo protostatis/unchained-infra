@@ -1437,6 +1437,10 @@ class OAuthStore:
                 # Without this an old grant could add mcp:provision without
                 # the updated consent screen ever being shown.
                 granted_scopes = _loads(row["scopes"], [])
+                if not granted_scopes:
+                    # Tokens written before scopes were persisted behaved as
+                    # the base browser scope; never emit an empty scope set.
+                    granted_scopes = ["mcp:browser"]
                 requested = list(scopes or [])
                 if requested:
                     final_scopes = [s for s in requested if s in granted_scopes]
