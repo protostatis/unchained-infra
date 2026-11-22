@@ -9793,6 +9793,8 @@ function _setHostedAccessCopy(copy, message, autoDismiss) {
   const expectedMessage = nextMessage;
   copy._dismissTimer = setTimeout(function() {
     copy._dismissTimer = null;
+    // Re-check at fire time: a desktop render can schedule this timer and then
+    // resize to mobile, where the copy must stay in the accessibility tree.
     if (copy.textContent === expectedMessage &&
         !(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;
   }, 30000);
@@ -9825,8 +9827,10 @@ function _renderHostedAccessUi() {
       ? 'Hosted models draw from your account credit. No provider API key required.'
       : 'Credit is exhausted. Free hosted models remain available.';
     autoDismissCopy = available > 0;
+    // Do not schedule a dismissal while the copy is visually hidden on mobile.
     if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) autoDismissCopy = false;
-    compactCopy = available > 0;
+    // Match the CSS body class exactly: compact only the hosted workspace.
+    compactCopy = available > 0 && hostedWorkspaceMode;
   } else if (_openrouterUsage && _openrouterUsage.capped) {
     label.textContent = 'Free trial limit reached';
     copyText = 'Free hosted models remain available, or switch to local provider mode.';
@@ -9836,7 +9840,8 @@ function _renderHostedAccessUi() {
   }
   _setHostedAccessCopy(copy, copyText, autoDismissCopy);
   notice.classList.toggle('hosted-compact-copy', compactCopy);
-  notice.title = copyText;
+  if (compactCopy) notice.title = copyText;
+  else notice.removeAttribute('title');
   if (hintTitle) hintTitle.textContent = hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat';
   if (hintSub) {
     hintSub.textContent = hostedWorkspaceMode
@@ -12196,8 +12201,10 @@ function closeInstallModal() {
 }
 
 /* Icon-only controls need explicit accessible names. Kept in script (rather
-   than markup) so the workbench markup-baseline guard stays stable. */
-(function labelIconOnlyControls() {
+   than markup) so the workbench markup-baseline guard stays stable. This
+   hosted workspace/trial template puts the script at the end of the body, and
+   the DOM-ready guard keeps the labels correct if that ever changes. */
+function labelIconOnlyControls() {
   const send = document.getElementById('sendbtn');
   if (send && !send.getAttribute('aria-label')) {
     send.setAttribute('aria-label', 'Send message');
@@ -12220,7 +12227,12 @@ function closeInstallModal() {
   }
   const input = document.getElementById('msginput');
   if (input && !input.getAttribute('enterkeyhint')) input.setAttribute('enterkeyhint', 'send');
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', labelIconOnlyControls, {once:true});
+} else {
+  labelIconOnlyControls();
+}
 </script>
 </body>
 </html>"""
@@ -21858,6 +21870,8 @@ body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #agent-bar{display:none!important}
   body.agent-view-open #main .bubble.asst{padding-right:80px!important}
   body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+  /* The note belongs to the model/profile row; the minimized-dock group above
+     covers the closed dock, and this covers the docked chat sheet. */
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-expanded) #main #profile-note{display:none!important}
   body.agent-shell-task .agent-view-chat-toggle{font-size:11px!important}
   body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:11px!important}

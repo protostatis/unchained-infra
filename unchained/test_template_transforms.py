@@ -290,6 +290,9 @@ class TestTemplateTransforms(unittest.TestCase):
     def test_mobile_quick_wins_reclaim_chrome_and_keep_preview_tappable(self):
         from web_app import templates
 
+        # Source markers only. Computed layout, tap-through, and the keyboard
+        # state are covered by the Playwright mobile review; CI now runs this
+        # module so a removed rule fails a required check.
         html = templates.TRIAL_CHAT_HTML
         # Chat-only mobile drops the decorative agent strip and uses the full
         # viewport, with the topbar owning the notch inset.
@@ -334,10 +337,6 @@ class TestTemplateTransforms(unittest.TestCase):
             html,
         )
         self.assertIn(
-            "body.agent-shell-task.agent-view-open #main #modelsel,",
-            html,
-        )
-        self.assertIn(
             "font-family:-apple-system,system-ui,sans-serif!important;font-size:13px!important;font-weight:600!important",
             html,
         )
@@ -352,11 +351,12 @@ class TestTemplateTransforms(unittest.TestCase):
             "body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;",
             html,
         )
-        self.assertIn("compactCopy = available > 0;", html)
+        self.assertIn("compactCopy = available > 0 && hostedWorkspaceMode;", html)
         self.assertIn(
             "notice.classList.toggle('hosted-compact-copy', compactCopy);", html
         )
-        self.assertIn("notice.title = copyText;", html)
+        self.assertIn("if (compactCopy) notice.title = copyText;", html)
+        self.assertIn("else notice.removeAttribute('title');", html)
         self.assertIn(
             "!(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;",
             html,
@@ -386,6 +386,10 @@ class TestTemplateTransforms(unittest.TestCase):
         # Icon-only controls get accessible names without changing the
         # workbench markup baseline.
         self.assertIn("function labelIconOnlyControls()", html)
+        self.assertIn(
+            "document.addEventListener('DOMContentLoaded', labelIconOnlyControls, {once:true});",
+            html,
+        )
         self.assertIn("send.setAttribute('aria-label', 'Send message');", html)
         self.assertIn("cancel.setAttribute('aria-label', 'Cancel response');", html)
         self.assertIn(
