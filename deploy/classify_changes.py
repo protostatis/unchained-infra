@@ -113,8 +113,12 @@ UNCHAINED_OWNERSHIP: dict[str, set[str]] = {
     "unchained/relay.py": {"relay"},
     "unchained/chrome_bridge.py": {"relay"},
 
-    # mcp entry point
+    # mcp entry point + OAuth state shared with the web consent screen
     "unchained/mcp_server.py": {"mcp"},
+    "unchained/mcp_identity.py": {"mcp", "web"},
+    "unchained/mcp_oauth_policy.py": {"mcp", "web"},
+    "unchained/mcp_oauth_store.py": {"mcp", "web"},
+    "unchained/mcp_oauth_provider.py": {"mcp"},
 
     # hosted unbrowser MCP egress proxy image
     "unchained/unbrowser_ssrf_proxy.py": {"unbrowser-egress", "unbrowser-mcp"},
