@@ -112,6 +112,69 @@ window brought forward:
 cdp_navigate  url=https://slickdeals.net  bring_to_front=true
 ```
 
+## Tool Surface
+
+Browser tools accept `agent_id`; tab-aware tools also accept `tab_id`
+(`"auto"`, a tab ID, an alias, or a `prov-<slot>-<id>`). Tools marked
+API-key only reject OAuth connectors.
+
+### Page understanding and extraction
+
+| Tool | Purpose |
+|------|---------|
+| `ddm` | DOM Density Map — page layout + interactive elements (~500 tokens) |
+| `ddm_frame` | DDM inside one iframe |
+| `intel_probe` | Fingerprint the page and rank extraction strategies |
+| `intel_extract` | Pull structured data with the chosen (or forced) strategy |
+| `intel_stores` | List JS globals over 10KB that may hold page data |
+| `intel_shape` | Map the shape of one JS global |
+| `intel_find_paths` | Find paths to a key inside a JS global |
+| `js_eval` | Run JavaScript in the page |
+| `js_eval_frame` | Run JavaScript inside one iframe |
+
+### Interaction
+
+| Tool | Purpose |
+|------|---------|
+| `cdp_navigate` | Navigate; background by default, `bring_to_front=true` to show |
+| `cdp_click` | Click by coordinates, DDM element ID, or label |
+| `cdp_type` | Type into the focused element |
+| `cdp_press_enter` | Press Enter in the focused element |
+| `cdp_key_press` | Press a key with modifier flags |
+| `cdp_scroll` | Scroll the page and return updated layout |
+| `cdp_wait_ready` | Wait for `dom`, `network`, or `both` (default) |
+| `cdp_screenshot` | Screenshot for CAPTCHAs/visual checks (prefer DDM) |
+| `cdp_set_file` | Attach a local file to `<input type="file">` without the picker |
+
+### Tabs, frames, cookies
+
+| Tool | Purpose |
+|------|---------|
+| `cdp_list_frames` | List iframes with frame IDs and URLs |
+| `cdp_set_tab_alias` | Name a tab so the alias works as `tab_id` |
+| `cdp_list_tab_aliases` | List named tabs |
+| `cdp_get_cookies` | Read cookies for session saving |
+| `cdp_set_cookies` | Inject cookies; rejects overly broad domains |
+
+### Rhythm (event-driven SPA automation)
+
+| Tool | Purpose |
+|------|---------|
+| `rhythm_train` | Learn a site's element timing once |
+| `rhythm_catch` | Scan the DOM for specific data terms |
+| `rhythm_execute` | Run a multi-step plan at event speed |
+| `rhythm_query` | Query what Rhythm already knows about a site |
+
+### Agents and provisioning
+
+| Tool | Purpose |
+|------|---------|
+| `list_connected_agents` | List connected browsers and their profiles |
+| `list_chrome_profiles` API-key only | List local Chrome profiles (Google sign-in) and their paths for `cdp_provision_launch` |
+| `cdp_provision_launch` API-key only | Launch a temporary Chrome from a profile copy |
+| `list_provisioned_tabs` API-key only | List tabs, including OAuth popups, in provisioned Chromes |
+| `cdp_provision_cleanup` API-key only | Kill provisioned Chrome(s) and remove temp dirs |
+
 ## Provisioned Chrome Tabs And OAuth Popups
 
 When a provisioned Chrome flow opens a second tab or popup window, the default

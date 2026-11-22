@@ -8,8 +8,9 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 ## What This Enables
 
 - Keep your real browser session (cookies, extensions, 2FA state, IP)
-- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`) from any
-  MCP-compatible client
+- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`,
+  `list_chrome_profiles`, `cdp_provision_launch`, `list_provisioned_tabs`) from
+  any MCP-compatible client
 - Run multiple Chrome profiles simultaneously (e.g. personal + work + social)
 - Discover tabs opened by provisioned Chrome flows, including OAuth popups
 - Zero-config path if you already installed the agent via `curl | bash`
@@ -101,6 +102,79 @@ Then call tools directly — `agent_id` is auto-detected from your API key:
 - `ddm` with `flags=--text --find Slickdeals`
 - `list_provisioned_tabs` after a provisioned login flow opens a popup tab
 
+`cdp_navigate` navigates in the background by default — the Chrome window
+stays out of your way while you work on other tasks. If a navigation silently
+fails (Chrome 147+ routes `Page.navigate` to the omnibox AI Mode target when
+the tab isn't foregrounded), pass `bring_to_front=true` to retry with the
+window brought forward:
+
+```text
+cdp_navigate  url=https://slickdeals.net  bring_to_front=true
+```
+
+## Tool Surface
+
+Browser tools accept `agent_id`; tab-aware tools also accept `tab_id`
+(`"auto"`, a tab ID, an alias, or a `prov-<slot>-<id>`). Tools marked
+API-key only reject OAuth connectors.
+
+### Page understanding and extraction
+
+| Tool | Purpose |
+|------|---------|
+| `ddm` | DOM Density Map — page layout + interactive elements (~500 tokens) |
+| `ddm_frame` | DDM inside one iframe |
+| `intel_probe` | Fingerprint the page and rank extraction strategies |
+| `intel_extract` | Pull structured data with the chosen (or forced) strategy |
+| `intel_stores` | List JS globals over 10KB that may hold page data |
+| `intel_shape` | Map the shape of one JS global |
+| `intel_find_paths` | Find paths to a key inside a JS global |
+| `js_eval` | Run JavaScript in the page |
+| `js_eval_frame` | Run JavaScript inside one iframe |
+
+### Interaction
+
+| Tool | Purpose |
+|------|---------|
+| `cdp_navigate` | Navigate; background by default, `bring_to_front=true` to show |
+| `cdp_click` | Click by coordinates, DDM element ID, or label |
+| `cdp_type` | Type into the focused element |
+| `cdp_press_enter` | Press Enter in the focused element |
+| `cdp_key_press` | Press a key with modifier flags |
+| `cdp_scroll` | Scroll the page and return updated layout |
+| `cdp_wait_ready` | Wait for `dom`, `network`, or `both` (default) |
+| `cdp_screenshot` | Screenshot for CAPTCHAs/visual checks (prefer DDM) |
+| `cdp_set_file` | Attach a local file to `<input type="file">` without the picker |
+
+### Tabs, frames, cookies
+
+| Tool | Purpose |
+|------|---------|
+| `cdp_list_frames` | List iframes with frame IDs and URLs |
+| `cdp_set_tab_alias` | Name a tab so the alias works as `tab_id` |
+| `cdp_list_tab_aliases` | List named tabs |
+| `cdp_get_cookies` | Read cookies for session saving |
+| `cdp_set_cookies` | Inject cookies; rejects overly broad domains |
+
+### Rhythm (event-driven SPA automation)
+
+| Tool | Purpose |
+|------|---------|
+| `rhythm_train` | Learn a site's element timing once |
+| `rhythm_catch` | Scan the DOM for specific data terms |
+| `rhythm_execute` | Run a multi-step plan at event speed |
+| `rhythm_query` | Query what Rhythm already knows about a site |
+
+### Agents and provisioning
+
+| Tool | Purpose |
+|------|---------|
+| `list_connected_agents` | List connected browsers and their profiles |
+| `list_chrome_profiles` API-key only | List local Chrome profiles (Google sign-in) and their paths for `cdp_provision_launch` |
+| `cdp_provision_launch` API-key only | Launch a temporary Chrome from a profile copy |
+| `list_provisioned_tabs` API-key only | List tabs, including OAuth popups, in provisioned Chromes |
+| `cdp_provision_cleanup` API-key only | Kill provisioned Chrome(s) and remove temp dirs |
+
 ## Provisioned Chrome Tabs And OAuth Popups
 
 When a provisioned Chrome flow opens a second tab or popup window, the default
@@ -176,24 +250,91 @@ ddm agent_id=facebook
 
 When `agent_id` is empty (the default), tools target the default profile.
 
-## Local Chrome Profiles To Copy
+## Provisioned Chrome (OAuth / Authenticated Browsing)
 
-`list_chrome_profiles` returns the Chrome profiles on the agent's machine that
-you can copy into a temporary browser, matching the web app's profile picker.
-Only profiles signed into a Google account are listed.
+Use provisioned Chrome when you need to sign into a site using a real Chrome
+profile (with saved passwords, cookies, 2FA state) through the MCP tools.
+
+### Workflow
+
+1. **List** the local Chrome profiles you can copy:
 
 ```text
 list_chrome_profiles
+```
 
+Response:
+
+```text
 Chrome profiles available to copy (pass path to cdp_provision_launch):
   Profile 5 (you@example.com)
     path: /Users/you/Library/Application Support/Google/Chrome/Profile 5
 The original profile is not modified; Chrome runs on a copy.
 ```
 
-Pass one of those `path` values to `cdp_provision_launch` as `profile_path`.
-Both tools require an API-key MCP client; OAuth connectors cannot copy local
-profiles.
+Only profiles signed into a Google account are listed, matching the web app's
+profile picker. Skip this step if you already know the profile's absolute path.
+
+2. **Launch** a temporary Chrome with the user's profile:
+
+```text
+cdp_provision_launch  profile_path="/Users/you/Library/Application Support/Google/Chrome/Profile 5"
+```
+
+Response:
+
+```text
+Provisioned Chrome launched.
+  Slot: a1b2
+  Tab ID: prov-a1b2-AABB11CC22DD33EE44FF55667788990A
+  Debug port: 9600
+```
+
+3. **Use** the returned `tab_id` with any MCP tool:
+
+```text
+cdp_navigate  url=https://x.com  tab_id=prov-a1b2-AABB11CC22DD33EE44FF55667788990A
+```
+
+4. **Discover new tabs** (e.g., OAuth popups) with `list_provisioned_tabs`:
+
+```text
+Slot a1b2 (profile: Profile 5, 2 tabs):
+  prov-a1b2-AABB11CC22DD33EE  Log in to X / X  https://x.com/i/flow/login
+  prov-a1b2-E914E9D4B944AABB  Sign in - Google  https://accounts.google.com/...
+```
+
+5. **Switch** to the popup tab using its prov-prefixed ID:
+
+```text
+ddm  tab_id=prov-a1b2-E914E9D4B944AABB
+cdp_click  x=780  y=377  tab_id=prov-a1b2-E914E9D4B944AABB
+```
+
+6. **Clean up** when done:
+
+```text
+cdp_provision_cleanup  slot=a1b2     # specific slot
+cdp_provision_cleanup                 # all slots
+```
+
+### Provisioning Tools
+
+| Tool | Purpose |
+|------|---------|
+| `list_chrome_profiles` | List local Chrome profiles (with Google sign-in) and their paths |
+| `cdp_provision_launch` | Launch temp Chrome with a profile. Returns slot + prov-prefixed tab ID |
+| `list_provisioned_tabs` | List all tabs across provisioned Chrome instances |
+| `cdp_provision_cleanup` | Kill provisioned Chrome(s) and clean up temp dirs |
+
+### Notes
+
+- Provisioned Chrome runs as a separate process with a copy of the profile
+- The original Chrome profile is not modified
+- `list_chrome_profiles` reads the same inventory as the web app: profiles signed into a Google account
+- `list_chrome_profiles` and the provisioning tools require an API-key MCP client; OAuth connectors cannot copy local profiles
+- Tab IDs use `prov-{slot}-{chrome_id}` format — pass these to any MCP tool's `tab_id` parameter
+- `ddm --tabs` with a prov-prefixed `tab_id` auto-prefixes tab IDs in the output
 
 ## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
 
@@ -207,8 +348,10 @@ consistent:
 - `agent_id` is auto-detected from your API key — you do not need to pass it.
 - To target a specific Chrome profile, pass the profile name in `agent_id` (e.g. `agent_id=facebook`).
 - Use `list_connected_agents` to discover all connected profiles.
-- Use `list_chrome_profiles` to find local profile paths for `cdp_provision_launch`.
-- Use `list_provisioned_tabs` after profile provisioning or OAuth flows to discover `prov-<slot>-<tab_id>` values for new tabs and popups.
+- Use `list_chrome_profiles` to find the local profile paths `cdp_provision_launch` can copy.
+- Use `cdp_provision_launch` to launch a temp Chrome with a user profile for OAuth flows.
+- Use `list_provisioned_tabs` to discover tabs (including popups) in provisioned Chrome.
+- Use `cdp_provision_cleanup` to clean up provisioned Chrome instances when done.
 
 #### DDM-First Methodology
 

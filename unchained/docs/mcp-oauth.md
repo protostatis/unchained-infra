@@ -181,8 +181,11 @@ loopback allowed only for native clients an operator registered.
   `Referrer-Policy: no-referrer`.
 - Client-supplied names are HTML-escaped and marked unverified; nothing fetched
   from a client is rendered.
-- Browser provisioning (`cdp_provision_launch`) is denied for OAuth callers: a
-  new Chrome from another profile would widen what consent promised.
+- Browser provisioning (`cdp_provision_launch`, `cdp_provision_cleanup`,
+  `list_provisioned_tabs`) and the local profile inventory
+  (`list_chrome_profiles`) are denied for OAuth callers: a new Chrome from
+  another profile would widen what consent promised, and the inventory would
+  enumerate every Google account saved on the host.
 
 ## Account lifecycle
 
