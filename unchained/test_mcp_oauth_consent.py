@@ -314,6 +314,11 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertEqual(grant["key_fingerprint"], fingerprint_key("uc_live_a"))
         self.assertIn("mcp:provision", grant["scopes"])
 
+        # The code carries the approved scopes, which is what the token
+        # exchange and therefore the principal will see.
+        code = self.store.get_authorization_code(payload["code"])
+        self.assertIn("mcp:provision", code["scopes"])
+
     def test_approve_is_single_use(self):
         request = _post(
             {"request": self.request_id, "decision": "approve",

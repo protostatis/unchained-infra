@@ -242,6 +242,21 @@ class TokenTests(StoreTestBase):
         )
         self.assertEqual(replay, {"replay": True})
 
+    def test_refresh_cannot_widen_scopes(self):
+        _, _, grant_id, ticket = self._approved()
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id="client-1", scopes=["mcp:browser"], resource=None
+        )
+        rotated = self.store.rotate_refresh_token(
+            issued["refresh_token"],
+            client_id="client-1",
+            scopes=["mcp:browser", "mcp:provision"],
+        )
+        self.assertIsNotNone(rotated)
+        self.assertEqual(rotated["scopes"], ["mcp:browser"])
+        loaded = self.store.load_access_token(rotated["access_token"])
+        self.assertEqual(loaded["scopes"], ["mcp:browser"])
+
     def test_refresh_replay_revokes_family(self):
         _, _, grant_id, ticket = self._approved()
         issued = self.store.issue_tokens(

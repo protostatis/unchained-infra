@@ -642,5 +642,20 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(verdict)
 
 
+class TestTabAliasValidation(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_aliases_that_look_like_tab_ids(self):
+        for alias in ("prov-dc31-AA", "A" * 32, "0123456789abcdef0123456789abcdef"):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_set_tab_alias", {"alias": alias, "tab_id": "auto"},
+            )
+            self.assertIn("looks like a tab ID", result.content[0].text, alias)
+
+    async def test_rejects_reserved_auto(self):
+        result = await mcp_server.mcp._tool_manager.call_tool(
+            "cdp_set_tab_alias", {"alias": "Auto", "tab_id": "auto"},
+        )
+        self.assertIn("reserved", result.content[0].text)
+
+
 if __name__ == "__main__":
     unittest.main()

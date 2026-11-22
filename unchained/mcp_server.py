@@ -18,6 +18,7 @@ Claude Code connects:
 import base64
 import json
 import os
+import re
 import sys
 
 import asyncio
@@ -184,6 +185,11 @@ def _require_provision_capability(principal: Principal) -> None:
     """Reject grants approved before profile access was part of consent."""
     if not oauth_can_provision(principal):
         raise ValueError(PROVISION_RECONSENT_REQUIRED)
+
+
+# CDP target ids are 32 hex characters. An alias with that shape could shadow
+# a concrete target and redirect an already-authorized call.
+_CONCRETE_TAB_ID_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 
 
 def _relay_host_port() -> tuple[str, int]:
@@ -726,6 +732,11 @@ async def cdp_set_tab_alias(alias: str, tab_id: str,
         return "Alias too long (max 64 characters)."
     if alias.lower() == "auto":
         return "Cannot use 'auto' as an alias — it is reserved."
+    if alias.startswith("prov-") or _CONCRETE_TAB_ID_RE.match(alias):
+        # A concrete tab id must never resolve through the alias table: an
+        # alias shadowing one would let a caller redirect another caller's
+        # already-authorized target.
+        return "That alias looks like a tab ID; choose a name."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.set_tab_alias(aid, alias, tab_id)
 
