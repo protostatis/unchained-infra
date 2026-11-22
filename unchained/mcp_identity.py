@@ -85,9 +85,12 @@ def resolve_principal(
         if state != GRANT_VALID:
             revoke_if_detached(store, row["grant_id"], state)
             return None
-        # Cheap constant-time-ish tag so provisioning cleanup can never collide
-        # with an API-key caller's tag.
-        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:8]
+        # Ownership authority for provisioned browsers: 128 bits from the
+        # grant id. Stable across token refreshes and far below the bridge's
+        # 64-character caller_tag cap. This is a namespace separator, not a
+        # secret: grant ids are server-generated, and the grant itself is
+        # revalidated on every request.
+        tag = "oauth-" + hashlib.sha256(row["grant_id"].encode()).hexdigest()[:32]
         return Principal(
             kind=KIND_OAUTH,
             user_id=row["user_id"],
@@ -165,39 +168,88 @@ def revoke_if_detached(store, grant_id: str | None, state: str) -> None:
 
 
 # Provisioned Chromes are temporary browsers launched with an arbitrary local
-# profile. A connector approved for one browser must not reach them, and it
-# must not enumerate every Google account saved on the host either.
-PROVISION_ONLY_TOOLS = frozenset(
-    {
-        "cdp_provision_launch",
-        "cdp_provision_cleanup",
-        "list_chrome_profiles",
-        "list_provisioned_tabs",
-    }
+# profile. A connector may launch its own, but it must never drive or enumerate
+# another caller's slots. Ownership travels as the caller tag the bridge stored
+# at launch time; provisioning tools pass ``principal.caller_tag`` and this
+# module decides whether a ``prov-`` tab belongs to the grant.
+OAUTH_PROV_TAB_DENIED = (
+    "That provisioned browser belongs to another client. "
+    "Launch your own with cdp_provision_launch."
 )
 
-OAUTH_SCOPE_DENIED = (
-    "OAuth connectors can only drive the browser granted at consent. "
-    "Provisioned Chrome instances require an API-key MCP client."
+OAUTH_PROV_TAB_UNVERIFIED = (
+    "Could not verify that the provisioned browser belongs to this connector. "
+    "Retry in a moment."
+)
+
+OAUTH_CONCRETE_TARGET_REQUIRED = (
+    "OAuth connectors must target 'auto', a tab id, or one of their own "
+    "provisioned tab ids. Tab aliases are not available to connectors."
+)
+
+# New consent grants this scope. Grants approved before profile access existed
+# do not have it, so they must reconnect instead of silently gaining the
+# ability to copy local Chrome profiles.
+PROVISION_SCOPE = "mcp:provision"
+
+PROVISION_RECONSENT_REQUIRED = (
+    "This connector was approved before Chrome profile access existed. "
+    "Reconnect it to review and approve the new permission."
 )
 
 
-def oauth_tool_target_error(
-    principal: Principal | None, tool_name: str, arguments: dict | None
-) -> str | None:
-    """Return a denial message when an OAuth caller reaches outside its grant.
+def oauth_can_provision(principal: Principal | None) -> bool:
+    """Return True when this caller may use the provisioning tools.
 
-    Applied to every tool call so a newly added tool that accepts ``tab_id`` is
-    covered without another call-site check.
+    API keys keep their existing access. OAuth grants need the scope added by
+    the updated consent screen, which existing grants do not carry.
     """
     if principal is None or not principal.is_oauth:
+        return True
+    return principal.allows(PROVISION_SCOPE)
+
+
+_PROV_TAB_RE = re.compile(r"^prov-([A-Za-z0-9]+)-([A-Za-z0-9]+)\Z")
+
+
+def provision_slot_from_tab_id(tab_id: str) -> str:
+    """Return the slot portion of a canonical ``prov-{slot}-{id}`` id, or "".
+
+    Legacy ids such as ``prov-auto`` and ``prov-{id}`` do not name a slot.
+    Control characters are rejected outright: downstream URL parsing
+    normalizes them, which could turn a checked string into another target.
+    """
+    match = _PROV_TAB_RE.match(str(tab_id or ""))
+    return match.group(1) if match else ""
+
+
+def oauth_prov_tab_allowed(
+    principal: Principal | None,
+    tab_id: str,
+    slots: dict | None,
+) -> bool | None:
+    """Decide whether an OAuth caller may drive ``tab_id``.
+
+    ``slots`` is the ``provision_status`` payload for the browser pinned to the
+    grant. Returns True when the caller is not OAuth (API keys keep their
+    existing behaviour), False when the slot belongs to someone else, and None
+    when the status payload cannot answer the question.
+    """
+    if principal is None or not principal.is_oauth:
+        return True
+    if not str(tab_id or "").startswith("prov-"):
+        return True
+    slot = provision_slot_from_tab_id(tab_id)
+    if not slot:
+        # Legacy ``prov-{id}`` and ``prov-auto`` reach the sole provisioned
+        # browser without naming a slot, so ownership cannot be established.
+        return False
+    if not isinstance(slots, dict):
         return None
-    if tool_name in PROVISION_ONLY_TOOLS:
-        return OAUTH_SCOPE_DENIED
-    tab_id = str((arguments or {}).get("tab_id") or "")
-    if tab_id.startswith("prov-"):
-        return OAUTH_SCOPE_DENIED
-    return None
+    info = slots.get(slot)
+    if not isinstance(info, dict):
+        return False
+    return info.get("caller_tag") == principal.caller_tag
 
 
 def target_agent(principal: Principal, requested: str, *, auth=None) -> str:

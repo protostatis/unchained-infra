@@ -18,6 +18,7 @@ Claude Code connects:
 import base64
 import json
 import os
+import re
 import sys
 
 import asyncio
@@ -33,8 +34,14 @@ import cloud_tools
 from auth import Auth
 from mcp_identity import (
     IdentityError,
+    OAUTH_CONCRETE_TARGET_REQUIRED,
+    OAUTH_PROV_TAB_DENIED,
+    OAUTH_PROV_TAB_UNVERIFIED,
+    PROVISION_RECONSENT_REQUIRED,
     Principal,
-    oauth_tool_target_error,
+    oauth_can_provision,
+    oauth_prov_tab_allowed,
+    provision_slot_from_tab_id,
     resolve_principal,
     target_agent,
 )
@@ -175,6 +182,17 @@ def _require_principal() -> Principal:
     return principal
 
 
+def _require_provision_capability(principal: Principal) -> None:
+    """Reject grants approved before profile access was part of consent."""
+    if not oauth_can_provision(principal):
+        raise ValueError(PROVISION_RECONSENT_REQUIRED)
+
+
+# CDP target ids are 32 hex characters. An alias with that shape could shadow
+# a concrete target and redirect an already-authorized call.
+_CONCRETE_TAB_ID_RE = re.compile(r"^[0-9A-Fa-f]{32}\Z")
+
+
 def _relay_host_port() -> tuple[str, int]:
     """Return the relay's internal host and port for direct HTTP queries.
 
@@ -203,26 +221,61 @@ def _oauth_store():
 
 
 # ---------------------------------------------------------------------------
-# OAuth callers may only drive the browser they consented to
+# OAuth callers may drive the browser they consented to, plus any provisioned
+# Chrome their grant launched. Another caller's slot stays out of reach.
 # ---------------------------------------------------------------------------
 
 
+async def _oauth_prov_tab_verdict(principal: Principal, tab_id: str) -> bool | None:
+    """Return True/False/None for an OAuth caller's target prov tab."""
+    if not str(tab_id or "").startswith("prov-"):
+        return True
+    if not provision_slot_from_tab_id(tab_id):
+        # Legacy ``prov-{id}`` / ``prov-auto`` select the sole provisioned
+        # browser without a slot, so their owner cannot be established.
+        return False
+    if not principal.agent_id:
+        return False
+    try:
+        result = await cloud_tools.provision_status(principal.agent_id)
+    except Exception as exc:
+        print(
+            "[mcp] provision ownership lookup failed "
+            f"({type(exc).__name__}): {exc}"
+        )
+        return None
+    slots = result.get("slots") if isinstance(result, dict) else None
+    return oauth_prov_tab_allowed(principal, tab_id, slots)
+
+
 class OAuthToolScopeMiddleware(Middleware):
-    """Reject provisioned-browser access for OAuth principals.
+    """Hold OAuth callers to their granted browser and their own provisions.
 
     Registered on the server so a new tool that accepts ``tab_id`` is covered
-    without another call-site check.
+    without another call-site check. Connectors may target ``auto``, a
+    concrete tab id, or their own provisioned tab id. Tab aliases are resolved
+    per agent in the private core, after this check, so a connector cannot use
+    one: a name authorized here could be rebound to another caller's slot
+    before execution.
     """
 
     async def on_call_tool(self, context, call_next):
         principal, _error = _principal_or_error()
         arguments = getattr(context.message, "arguments", None) or {}
-        name = str(getattr(context.message, "name", "") or "")
-        denial = oauth_tool_target_error(principal, name, arguments)
-        if denial:
-            from fastmcp.exceptions import ToolError
+        tab_id = str(arguments.get("tab_id") or "")
+        if principal is not None and principal.is_oauth and tab_id not in ("", "auto"):
+            if not tab_id.startswith("prov-") and not _CONCRETE_TAB_ID_RE.match(tab_id):
+                from fastmcp.exceptions import ToolError
 
-            raise ToolError(denial)
+                raise ToolError(OAUTH_CONCRETE_TARGET_REQUIRED)
+            verdict = await _oauth_prov_tab_verdict(principal, tab_id)
+            if verdict is not True:
+                from fastmcp.exceptions import ToolError
+
+                raise ToolError(
+                    OAUTH_PROV_TAB_DENIED if verdict is False
+                    else OAUTH_PROV_TAB_UNVERIFIED
+                )
         return await call_next(context)
 
 
@@ -637,15 +690,57 @@ async def cdp_set_tab_alias(alias: str, tab_id: str,
         return "Alias too long (max 64 characters)."
     if alias.lower() == "auto":
         return "Cannot use 'auto' as an alias — it is reserved."
+    if alias.lower().startswith("prov-") or _CONCRETE_TAB_ID_RE.match(alias):
+        # A concrete tab id must never resolve through the alias table: an
+        # alias shadowing one would let a caller redirect another caller's
+        # already-authorized target.
+        return "That alias looks like a tab ID; choose a name."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.set_tab_alias(aid, alias, tab_id)
 
 
 @mcp.tool()
 async def cdp_list_tab_aliases(agent_id: str = "") -> str:
-    """List all named tab aliases."""
+    """List all named tab aliases.
+
+    An OAuth connector sees only aliases that do not point at another
+    caller's provisioned Chrome.
+    """
+    principal = _require_principal()
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.list_tab_aliases(aid)
+    raw = await cloud_tools.list_tab_aliases(aid)
+    if not principal.is_oauth:
+        return raw
+    if str(raw or "").strip() == "No tab aliases set":
+        return raw
+    try:
+        aliases = json.loads(raw)
+    except Exception:
+        return "Could not read tab aliases; retry in a moment."
+    if not isinstance(aliases, dict):
+        return "Could not read tab aliases; retry in a moment."
+    try:
+        status = await cloud_tools.provision_status(aid)
+    except Exception:
+        status = {}
+    slots = status.get("slots") if isinstance(status, dict) else {}
+    own = {
+        slot
+        for slot, info in (slots or {}).items()
+        if isinstance(info, dict) and info.get("caller_tag") == principal.caller_tag
+    }
+    visible = {
+        alias: target
+        for alias, target in aliases.items()
+        if not (
+            isinstance(target, str)
+            and target.startswith("prov-")
+            and provision_slot_from_tab_id(target) not in own
+        )
+    }
+    if not visible:
+        return "No tab aliases set"
+    return json.dumps(visible, indent=2)
 
 
 @mcp.tool()
@@ -774,18 +869,20 @@ async def list_chrome_profiles(agent_id: str = "") -> str:
             connected; a profile name such as "facebook" also works.
     """
     principal = _require_principal()
-    if principal.is_oauth:
-        # Profiles exist only to be copied by cdp_provision_launch, which
-        # OAuth connectors may not call. Refuse rather than expose the
-        # machine's full Google account list to a one-browser grant.
-        raise ValueError(
-            "Listing Chrome profiles requires an API-key MCP client; "
-            "OAuth connectors can only drive the browser granted at consent."
-        )
+    _require_provision_capability(principal)
     # Auth and ownership failures stay tool errors here, like every other
     # tool: an invalid key must not look like a successful text result.
     aid = _resolve_agent(profile=agent_id)
-    api_key = principal.api_key or ""
+    if principal.is_oauth:
+        # The relay only knows API keys. Use the key the grant is pinned to
+        # for this lookup; it is never returned to the caller.
+        api_key = _key_for_grant(principal)
+        if not api_key:
+            raise ValueError(
+                "The API key linked to this connector was revoked. Reconnect it."
+            )
+    else:
+        api_key = principal.api_key or ""
     if not api_key:
         raise ValueError("Authorization: Bearer <api_key> header is required.")
 
@@ -868,16 +965,12 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
 
     Returns the provisioned slot ID and initial tab ID. Use the returned
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
+
+    The browser runs on a copy of the profile. An OAuth connector may only
+    drive slots its own grant launched.
     """
     principal = _require_principal()
-    if principal.is_oauth:
-        # Consent promises one already-connected browser.  Launching a new
-        # Chrome from another profile would widen that promise behind the
-        # user's back, so connectors must use an API-key client to provision.
-        raise ValueError(
-            "Browser provisioning requires an API-key MCP client; "
-            "OAuth connectors can only drive the browser granted at consent."
-        )
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)
     caller_tag = principal.caller_tag
     result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
@@ -905,11 +998,22 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
+    principal = _require_principal()
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)  # raises if no credential
     # Pass caller_tag so cleanup-all only kills this caller's provisions.
-    # OAuth callers get a grant-scoped tag, which owns no provisioned slots.
-    principal = _require_principal()
+    # OAuth grants are tagged oauth-<grant hash>.
     caller_tag = principal.caller_tag
+    if principal.is_oauth and slot:
+        # The bridge cannot reject an unowned legacy slot that has no stored
+        # tag, so verify positive ownership before asking it to delete.
+        status = await cloud_tools.provision_status(aid)
+        slots = status.get("slots") if isinstance(status, dict) else None
+        if not isinstance(slots, dict):
+            return "Could not verify that slot's ownership. Retry in a moment."
+        info = slots.get(slot)
+        if not isinstance(info, dict) or info.get("caller_tag") != caller_tag:
+            return f"Slot {slot} not found — nothing cleaned."
     result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
@@ -935,12 +1039,23 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
     Use this after provisioning Chrome with a profile to discover
     new tabs (e.g., OAuth popups). Returns prov-prefixed tab IDs
     that can be passed to ddm, cdp_click, cdp_type, etc.
+
+    An OAuth connector sees only the slots its own grant launched.
     """
+    principal = _require_principal()
+    _require_provision_capability(principal)
     aid = _resolve_agent(profile=agent_id)
     result = await cloud_tools.provision_status(aid)
     if "error" in result:
         return f"Error: {result['error']}"
     slots = result.get("slots", {})
+    if principal.is_oauth and isinstance(slots, dict):
+        slots = {
+            slot: info
+            for slot, info in slots.items()
+            if isinstance(info, dict)
+            and info.get("caller_tag") == principal.caller_tag
+        }
     if not slots:
         return "No provisioned Chrome instances."
     lines = []

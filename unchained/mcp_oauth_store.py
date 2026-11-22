@@ -765,10 +765,18 @@ class OAuthStore:
                 cur = conn.execute(
                     """
                     UPDATE mcp_oauth_requests
-                       SET status = ?, grant_id = ?, user_id = ?
+                       SET status = ?, grant_id = ?, user_id = ?, scopes = ?
                      WHERE id = ? AND status = ? AND expires_at > ?
                     """,
-                    (STATUS_APPROVED, grant_id, user_id, request_id, STATUS_PENDING, now),
+                    (
+                        STATUS_APPROVED,
+                        grant_id,
+                        user_id,
+                        _json(list(scopes)),
+                        request_id,
+                        STATUS_PENDING,
+                        now,
+                    ),
                 )
                 if (cur.rowcount or 0) != 1:
                     raise ValueError("request is no longer pending")
@@ -1425,6 +1433,25 @@ class OAuthStore:
                     conn.execute("ROLLBACK")
                     return None
 
+                # RFC 6749: a refresh may narrow scopes, never widen them.
+                # Without this an old grant could add mcp:provision without
+                # the updated consent screen ever being shown.
+                granted_scopes = _loads(row["scopes"], [])
+                if not granted_scopes:
+                    # Tokens written before scopes were persisted behaved as
+                    # the base browser scope; never emit an empty scope set.
+                    granted_scopes = ["mcp:browser"]
+                requested = list(scopes or [])
+                if requested:
+                    final_scopes = [s for s in requested if s in granted_scopes]
+                    if not final_scopes:
+                        # Asking for only ungranted scopes is a client error,
+                        # not a reason to silently restore the full set.
+                        conn.execute("ROLLBACK")
+                        return None
+                else:
+                    final_scopes = granted_scopes
+
                 cur = conn.execute(
                     "UPDATE mcp_oauth_tokens SET consumed_at = ? "
                     "WHERE token_hash = ? AND consumed_at IS NULL",
@@ -1440,7 +1467,7 @@ class OAuthStore:
                     client_id=client_id,
                     family_id=row["family_id"],
                     family_expires_at=row["family_expires_at"] or (now + FAMILY_TTL),
-                    scopes=scopes,
+                    scopes=final_scopes,
                     resource=row["resource"],
                 )
             except Exception:
@@ -1453,6 +1480,7 @@ class OAuthStore:
             "expires_in": issued["expires_in"],
             "family_id": issued["family_id"],
             "grant_id": row["grant_id"],
+            "scopes": final_scopes,
         }
 
     def _revoke_family_tx(self, conn, family_id: str, now: float) -> None:

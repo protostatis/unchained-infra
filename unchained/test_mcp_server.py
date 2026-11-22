@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -344,19 +345,392 @@ class TestListChromeProfilesTool(unittest.IsolatedAsyncioTestCase):
         self.assertIn("invalid profile inventory", text)
         self.assertNotIn("relay.internal", text)
 
-    async def test_oauth_principal_is_refused(self):
+    async def test_oauth_uses_the_grant_key(self):
         oauth = mcp_server.Principal(
-            kind="oauth", user_id="user-1", caller_tag="tag"
+            kind="oauth",
+            user_id="user-1",
+            caller_tag="oauth-deadbeef",
+            agent_id="claude-abc",
+            grant_id="g1",
+            scopes=("mcp:browser", "mcp:provision"),
         )
+        fetch = AsyncMock(return_value=[])
         with (
             patch("mcp_server._require_principal", return_value=oauth),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("mcp_server._key_for_grant", return_value="uc_live_grant"),
+            patch("provision_helpers.fetch_relay_profiles", new=fetch),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "list_chrome_profiles", {},
+            )
+        self.assertIn("No Chrome profiles", result.content[0].text)
+        self.assertEqual(
+            fetch.await_args.kwargs["headers"],
+            {"Authorization": "Bearer uc_live_grant"},
+        )
+
+
+class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
+    """OAuth connectors may provision, but only see and drive their own slots."""
+
+    def _oauth(self):
+        return mcp_server.Principal(
+            kind="oauth",
+            user_id="user-1",
+            caller_tag="oauth-deadbeef",
+            agent_id="claude-abc",
+            grant_id="g1",
+            scopes=("mcp:browser", "mcp:provision"),
+        )
+
+    def _old_oauth(self):
+        return mcp_server.Principal(
+            kind="oauth",
+            user_id="user-1",
+            caller_tag="oauth-deadbeef",
+            agent_id="claude-abc",
+            grant_id="g1",
+            scopes=("mcp:browser",),
+        )
+
+    async def test_list_provisioned_tabs_filters_other_callers(self):
+        status = {
+            "slots": {
+                "dc31": {
+                    "profile": "Profile 1",
+                    "caller_tag": "oauth-deadbeef",
+                    "tabs": [{"tab_id": "prov-dc31-AA", "title": "Mine"}],
+                },
+                "ab12": {
+                    "profile": "Profile 2",
+                    "caller_tag": "abc123",
+                    "tabs": [{"tab_id": "prov-ab12-BB", "title": "Other"}],
+                },
+            }
+        }
+        with (
+            patch("mcp_server._require_principal", return_value=self._oauth()),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(return_value=status),
+            ),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "list_provisioned_tabs", {},
+            )
+        text = result.content[0].text
+        self.assertIn("Slot dc31", text)
+        self.assertNotIn("Slot ab12", text)
+        self.assertNotIn("Other", text)
+
+    async def test_oauth_launch_passes_the_grant_tag(self):
+        launch = AsyncMock(
+            return_value={"slot": "dc31", "tab_id": "prov-dc31-AA", "port": 9600}
+        )
+        with (
+            patch("mcp_server._require_principal", return_value=self._oauth()),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.provision_launch", new=launch),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_provision_launch", {"profile_path": "/x"},
+            )
+        self.assertIn("Slot: dc31", result.content[0].text)
+        self.assertEqual(launch.await_args.kwargs["caller_tag"], "oauth-deadbeef")
+
+    async def test_verdict_allows_only_the_grants_slot(self):
+        status = {"slots": {"dc31": {"caller_tag": "oauth-deadbeef"}}}
+        with patch(
+            "cloud_tools.provision_status", new=AsyncMock(return_value=status)
+        ):
+            own = await mcp_server._oauth_prov_tab_verdict(
+                self._oauth(), "prov-dc31-AA"
+            )
+            other = await mcp_server._oauth_prov_tab_verdict(
+                self._oauth(), "prov-ab12-AA"
+            )
+        self.assertIs(own, True)
+        self.assertIs(other, False)
+
+    async def test_aliases_hide_other_callers_prov_targets(self):
+        raw = json.dumps(
+            {
+                "mine": "prov-dc31-AA",
+                "other": "prov-ab12-BB",
+                "plain": "AABBCCDD",
+            }
+        )
+        status = {
+            "slots": {
+                "dc31": {"caller_tag": "oauth-deadbeef"},
+                "ab12": {"caller_tag": "abc123"},
+            }
+        }
+        with (
+            patch("mcp_server._require_principal", return_value=self._oauth()),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch(
+                "cloud_tools.list_tab_aliases",
+                new=AsyncMock(return_value=raw),
+            ),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(return_value=status),
+            ),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_list_tab_aliases", {},
+            )
+        visible = json.loads(result.content[0].text)
+        self.assertIn("mine", visible)
+        self.assertIn("plain", visible)
+        self.assertNotIn("other", visible)
+
+    def _ctx(self, arguments):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            message=SimpleNamespace(arguments=dict(arguments))
+        )
+
+    async def test_middleware_denies_legacy_prov_ids(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        called = []
+
+        async def call_next(context):
+            called.append(True)
+            return "ok"
+
+        with (
+            patch(
+                "mcp_server._principal_or_error",
+                return_value=(self._oauth(), ""),
+            ),
+            patch(
+                "cloud_tools.list_tab_aliases",
+                new=AsyncMock(return_value="No tab aliases set"),
+            ),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "prov-auto"}), call_next
+                )
+        self.assertIn("belongs to another client", str(ctx.exception))
+        self.assertFalse(called)
+
+    async def test_middleware_denies_alias_names(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        called = []
+
+        async def call_next(context):
+            called.append(True)
+            return "ok"
+
+        with patch(
+            "mcp_server._principal_or_error",
+            return_value=(self._oauth(), ""),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "reddit"}), call_next
+                )
+        self.assertIn("aliases are not available", str(ctx.exception))
+        self.assertFalse(called)
+
+    async def test_middleware_allows_a_concrete_tab_id(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        seen = []
+
+        async def call_next(context):
+            seen.append(dict(context.message.arguments))
+            return "ok"
+
+        with patch(
+            "mcp_server._principal_or_error",
+            return_value=(self._oauth(), ""),
+        ):
+            await middleware.on_call_tool(
+                self._ctx({"tab_id": "A" * 32}), call_next
+            )
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "A" * 32 + "\n"}), call_next
+                )
+        self.assertEqual(seen[0]["tab_id"], "A" * 32)
+        self.assertIn("aliases are not available", str(ctx.exception))
+
+    async def test_middleware_fails_closed_when_status_is_unreadable(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        called = []
+
+        async def call_next(context):
+            called.append(True)
+            return "ok"
+
+        with (
+            patch(
+                "mcp_server._principal_or_error",
+                return_value=(self._oauth(), ""),
+            ),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(side_effect=RuntimeError("private core down")),
+            ),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "prov-dc31-AA"}), call_next
+                )
+        self.assertIn("Could not verify", str(ctx.exception))
+        self.assertFalse(called)
+
+    async def test_oauth_cleanup_refuses_an_unowned_slot(self):
+        status = {"slots": {"ab12": {"caller_tag": ""}}}
+        cleanup = AsyncMock()
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._oauth(),
+            ),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(return_value=status),
+            ),
+            patch("cloud_tools.provision_cleanup", new=cleanup),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_provision_cleanup", {"slot": "ab12"},
+            )
+        self.assertIn("not found", result.content[0].text)
+        cleanup.assert_not_awaited()
+
+    async def test_cleanup_refuses_when_status_is_unreadable(self):
+        cleanup = AsyncMock()
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._oauth(),
+            ),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch(
+                "cloud_tools.provision_status",
+                new=AsyncMock(return_value={"error": "relay down"}),
+            ),
+            patch("cloud_tools.provision_cleanup", new=cleanup),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_provision_cleanup", {"slot": "ab12"},
+            )
+        self.assertIn("Could not verify", result.content[0].text)
+        cleanup.assert_not_awaited()
+
+    async def test_list_profiles_raises_when_the_grant_key_is_revoked(self):
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._oauth(),
+            ),
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("mcp_server._key_for_grant", return_value=""),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await mcp_server.mcp._tool_manager.call_tool(
+                    "list_chrome_profiles", {},
+                )
+        self.assertIn("revoked", str(ctx.exception))
+
+    async def test_old_grant_is_told_to_reconnect(self):
+        with (
+            patch(
+                "mcp_server._require_principal",
+                return_value=self._old_oauth(),
+            ),
             patch("mcp_server._resolve_agent", return_value="claude-abc"),
         ):
             with self.assertRaises(Exception) as ctx:
                 await mcp_server.mcp._tool_manager.call_tool(
                     "list_chrome_profiles", {},
                 )
-        self.assertIn("API-key MCP client", str(ctx.exception))
+        self.assertIn("Reconnect", str(ctx.exception))
+
+    async def test_verdict_is_unknown_when_status_fails(self):
+        with patch(
+            "cloud_tools.provision_status",
+            new=AsyncMock(side_effect=RuntimeError("relay down")),
+        ):
+            verdict = await mcp_server._oauth_prov_tab_verdict(
+                self._oauth(), "prov-dc31-AA"
+            )
+        self.assertIsNone(verdict)
+
+
+class TestGrantKeyLookup(unittest.TestCase):
+    def _principal(self):
+        return mcp_server.Principal(
+            kind="oauth",
+            user_id="u1",
+            caller_tag="t",
+            agent_id="claude-abc",
+            grant_id="g1",
+        )
+
+    def test_returns_only_the_grant_pinned_key(self):
+        with (
+            patch("mcp_server._oauth_store") as store,
+            patch("mcp_server._auth") as auth,
+            patch(
+                "mcp_oauth_store.fingerprint_key",
+                side_effect=lambda key: (
+                    "pinned" if key == "uc_live_pinned" else "other"
+                ),
+            ),
+        ):
+            store.return_value.get_grant.return_value = {
+                "user_id": "u1",
+                "key_fingerprint": "pinned",
+            }
+            auth.get_keys_for_user.return_value = [
+                "uc_live_wrong",
+                "uc_live_pinned",
+            ]
+            self.assertEqual(mcp_server._key_for_grant(self._principal()), "uc_live_pinned")
+
+    def test_revoked_key_returns_empty(self):
+        with (
+            patch("mcp_server._oauth_store") as store,
+            patch("mcp_server._auth") as auth,
+            patch("mcp_oauth_store.fingerprint_key", return_value="other"),
+        ):
+            store.return_value.get_grant.return_value = {
+                "user_id": "u1",
+                "key_fingerprint": "pinned",
+            }
+            auth.get_keys_for_user.return_value = ["uc_live_other"]
+            self.assertEqual(mcp_server._key_for_grant(self._principal()), "")
+
+
+class TestTabAliasValidation(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_aliases_that_look_like_tab_ids(self):
+        for alias in (
+            "prov-dc31-AA",
+            "PROV-dc31-AA",
+            "Prov-dc31-AA",
+            "A" * 32,
+            "0123456789abcdef0123456789abcdef",
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "cdp_set_tab_alias", {"alias": alias, "tab_id": "auto"},
+            )
+            self.assertIn("looks like a tab ID", result.content[0].text, alias)
+
+    async def test_rejects_reserved_auto(self):
+        result = await mcp_server.mcp._tool_manager.call_tool(
+            "cdp_set_tab_alias", {"alias": "Auto", "tab_id": "auto"},
+        )
+        self.assertIn("reserved", result.content[0].text)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,11 @@ from web_app.core import get_core as _core
 _CSRF_COOKIE = "uc_oauth_csrf"
 _CSRF_MAX_AGE = 600
 
+# Bump whenever the consent copy grants new access. GET embeds this value and
+# POST refuses a form rendered under an older copy, so a page opened before a
+# deploy cannot approve permissions it never displayed.
+CONSENT_VERSION = "2"
+
 
 _STORE: list = []
 
@@ -260,8 +265,13 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 {"" if status == "manual" else "<p class='note warn'>Unverified connector. Its name was supplied by the app, and this callback does not tell Unchained which account will receive access. Only continue if you started this connection yourself in the app.</p>"}
 <p class='note'>
   While connected it can read pages, click, type, run script and read cookies in
-  the browser you choose below. You can disconnect it any time from
-  <a href="/oauth/connections">Connected apps</a>.
+  the browser you choose below. It can also list the Chrome profiles available
+  to that browser's computer — each profile's name, Google account email and
+  path — and launch a copy of any of them using saved sign-ins, then act in
+  those signed-in accounts. The original profile is not modified, but actions
+  through the connector can change online account data, and anything it returns
+  may be processed by the assistant provider. You can disconnect it any time
+  from <a href="/oauth/connections">Connected apps</a>.
 </p>
 <div class='account'>
   Signed in as <strong>{_escape(user.get("email") or user.get("user_id") or "")}</strong>
@@ -275,6 +285,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 <form method="post" action="/oauth/consent">
   <input type="hidden" name="request" value="{_escape(request_id)}">
   <input type="hidden" name="csrf" value="{_escape(csrf)}">
+  <input type="hidden" name="consent_version" value="{CONSENT_VERSION}">
   <fieldset>
     <legend>Choose the browser it may drive</legend>
     {''.join(rows)}
@@ -306,6 +317,7 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
     decision = str(form.get("decision") or "").strip()
     agent_id = str(form.get("agent_id") or "").strip()
     csrf = str(form.get("csrf") or "").strip()
+    consent_version = str(form.get("consent_version") or "").strip()
 
     if not _csrf_ok(request, csrf):
         return _page(
@@ -325,6 +337,15 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             response.del_cookie("uc_session", path="/")
         _clear_cookie(response)
         return response
+
+    if decision == "approve" and consent_version != CONSENT_VERSION:
+        return _page(
+            "Consent page is out of date",
+            "<p class='muted'>These permissions changed since this page was "
+            "opened. Reload the consent page, review what the connector can "
+            "do now, and approve again.</p>",
+            status=400,
+        )
 
     store = _store()
     pending = store.pending_request(request_id)
@@ -367,7 +388,10 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
         agent_id=chosen["agent_id"],
         key_hash=hashlib.sha256(chosen["key"].encode()).hexdigest()[:8],
         key_fingerprint=fingerprint_key(chosen["key"]),
-        scopes=pending["scopes"],
+        # The consent copy covers the full provisioning lane, so the grant
+        # carries the scope that unlocks it. Grants approved before that copy
+        # existed lack this and must reconnect.
+        scopes=list(dict.fromkeys([*pending["scopes"], "mcp:provision"])),
         resource=pending["resource"],
     )
 

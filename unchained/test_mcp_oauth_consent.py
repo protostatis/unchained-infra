@@ -40,7 +40,13 @@ def _post(fields, *, cookie="csrf-value", csrf_field="csrf-value"):
     """A POST request whose parsed form is the given fields."""
     headers = CIMultiDict({"Cookie": f"{mcp_oauth._CSRF_COOKIE}={cookie}"})
     request = make_mocked_request("POST", "/oauth/consent", headers=headers)
-    request.post = AsyncMock(return_value={**fields, "csrf": csrf_field})
+    request.post = AsyncMock(
+        return_value={
+            "consent_version": mcp_oauth.CONSENT_VERSION,
+            **fields,
+            "csrf": csrf_field,
+        }
+    )
     return request
 
 
@@ -135,6 +141,33 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertIn("Signed in as", response.text)
         self.assertIn("protostatis.dev@gmail.com", response.text)
         self.assertIn("Switch account", response.text)
+
+    def test_consent_discloses_profile_copying(self):
+        response = self._get(self.request_id)
+        self.assertIn("Google account email", response.text)
+        self.assertIn("launch a copy", response.text)
+        self.assertIn("original profile is not modified", response.text)
+        self.assertIn("assistant provider", response.text)
+
+    def test_consent_form_carries_the_current_consent_version(self):
+        response = self._get(self.request_id)
+        self.assertIn(
+            f'name="consent_version" value="{mcp_oauth.CONSENT_VERSION}"',
+            response.text,
+        )
+
+    def test_stale_consent_version_is_refused(self):
+        request = _post(
+            {
+                "request": self.request_id,
+                "decision": "approve",
+                "agent_id": "claude-deadbeef-facebook",
+                "consent_version": "1",
+            }
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+        self.assertIn("out of date", response.text)
 
     def test_switch_account_clears_the_session_and_returns_to_the_same_request(self):
         request = _post(
@@ -305,6 +338,12 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertEqual(grant["agent_id"], "claude-deadbeef-facebook")
         self.assertEqual(grant["user_id"], "user-1")
         self.assertEqual(grant["key_fingerprint"], fingerprint_key("uc_live_a"))
+        self.assertIn("mcp:provision", grant["scopes"])
+
+        # The code carries the approved scopes, which is what the token
+        # exchange and therefore the principal will see.
+        code = self.store.get_authorization_code(payload["code"])
+        self.assertIn("mcp:provision", code["scopes"])
 
     def test_approve_is_single_use(self):
         request = _post(
