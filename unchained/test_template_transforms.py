@@ -287,6 +287,116 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('placeholder="Ask anything..."', local_html)
         self.assertNotIn('placeholder="Ask the agent anything..."', local_html)
 
+    def test_mobile_quick_wins_reclaim_chrome_and_keep_preview_tappable(self):
+        from web_app import templates
+
+        # Source markers only. Computed layout, tap-through, and the keyboard
+        # state are covered by the Playwright mobile review; CI now runs this
+        # module so a removed rule fails a required check.
+        html = templates.TRIAL_CHAT_HTML
+        # Chat-only mobile drops the decorative agent strip and uses the full
+        # viewport, with the topbar owning the notch inset.
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-head{display:none!important}",
+            html,
+        )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{inset:0!important}",
+            html,
+        )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #topbar{padding-top:max(5px,env(safe-area-inset-top))!important}",
+            html,
+        )
+        # The minimized browser dock carries only the composer; the canvas must
+        # stay tappable rather than sit under the topbar/banner/helper note.
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #topbar",
+            html,
+        )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #model-notice",
+            html,
+        )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #profile-note",
+            html,
+        )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #agent-bar{display:none!important}",
+            html,
+        )
+        # Touch copy button must not paint over assistant text.
+        self.assertIn(
+            "body.agent-view-open #main .bubble.asst{padding-right:80px!important}",
+            html,
+        )
+        # Mobile type floor and a sans-serif model name that fits at 360px.
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open #main #modelrow label{font-size:11px!important}",
+            html,
+        )
+        self.assertIn(
+            "font-family:-apple-system,system-ui,sans-serif!important;font-size:13px!important;font-weight:600!important",
+            html,
+        )
+        self.assertIn(
+            "#archive-panel .archive-close{width:44px;min-width:44px;height:44px;min-height:44px;display:grid;place-items:center;padding:0}",
+            html,
+        )
+        # Mobile keeps the ordinary funded banner to one line while leaving the
+        # full explanation in the accessibility tree (and the banner title).
+        # Exceptional states (exhausted/unavailable/capped) keep visible copy.
+        self.assertIn(
+            "body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;",
+            html,
+        )
+        self.assertIn("compactCopy = available > 0 && hostedWorkspaceMode;", html)
+        self.assertIn(
+            "notice.classList.toggle('hosted-compact-copy', compactCopy);", html
+        )
+        self.assertIn("if (compactCopy) notice.title = copyText;", html)
+        self.assertIn("else notice.removeAttribute('title');", html)
+        self.assertIn(
+            "!(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;",
+            html,
+        )
+        # The browser chat sheet does not show the model/profile selector, so it
+        # must not show the selector's helper note.
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-expanded) #main #profile-note{display:none!important}",
+            html,
+        )
+        # The install dialog must fit and scroll inside a 375x667 phone.
+        self.assertIn(
+            "max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));",
+            html,
+        )
+        self.assertIn("overflow-y:auto;-webkit-overflow-scrolling:touch;", html)
+        self.assertIn(
+            "#install-modal .modal-close{\n  top:8px;right:8px;width:44px;height:44px;display:grid;place-items:center;",
+            html,
+        )
+        self.assertIn(
+            "installClose.setAttribute('aria-label', 'Close install dialog');", html
+        )
+        self.assertIn("if (modalCard) modalCard.scrollTop = 0;", html)
+        # Empty-state hints must not auto-scroll out of view on short phones.
+        self.assertIn("if (chat && !document.getElementById('chat-hints')) {", html)
+        # Icon-only controls get accessible names without changing the
+        # workbench markup baseline.
+        self.assertIn("function labelIconOnlyControls()", html)
+        self.assertIn(
+            "document.addEventListener('DOMContentLoaded', labelIconOnlyControls, {once:true});",
+            html,
+        )
+        self.assertIn("send.setAttribute('aria-label', 'Send message');", html)
+        self.assertIn("cancel.setAttribute('aria-label', 'Cancel response');", html)
+        self.assertIn(
+            "archiveClose.setAttribute('aria-label', 'Close archives');", html
+        )
+        self.assertIn("input.setAttribute('enterkeyhint', 'send');", html)
+
     def test_agent_view_uses_browser_preview_copy_without_exposing_diagnostics(self):
         from web_app import templates
 

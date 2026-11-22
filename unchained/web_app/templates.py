@@ -9221,6 +9221,20 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
 #install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
 #install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
 #install-modal .modal-note{color:var(--muted);font-size:11px;margin-top:12px}
+/* Fit the install dialog inside short phones and keep it scrollable. */
+#install-modal{
+  padding:max(12px,env(safe-area-inset-top)) 0 max(12px,env(safe-area-inset-bottom));
+  overflow-y:auto;
+}
+#install-modal .modal-card{
+  max-height:calc(100dvh - 24px);
+  max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;
+}
+#install-modal .modal-close{
+  top:8px;right:8px;width:44px;height:44px;display:grid;place-items:center;
+  padding:0;border-radius:50%;
+}
 
 #sendbtn.setup-blocked{background:#34384d;color:var(--setup-soft);cursor:not-allowed;opacity:0.9}
 
@@ -9779,7 +9793,10 @@ function _setHostedAccessCopy(copy, message, autoDismiss) {
   const expectedMessage = nextMessage;
   copy._dismissTimer = setTimeout(function() {
     copy._dismissTimer = null;
-    if (copy.textContent === expectedMessage) copy.hidden = true;
+    // Re-check at fire time: a desktop render can schedule this timer and then
+    // resize to mobile, where the copy must stay in the accessibility tree.
+    if (copy.textContent === expectedMessage &&
+        !(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;
   }, 30000);
 }
 
@@ -9799,6 +9816,7 @@ function _renderHostedAccessUi() {
   notice.classList.toggle('funded', funded);
   let copyText = '';
   let autoDismissCopy = false;
+  let compactCopy = false;
   if (!_creditState || _creditState.available === false) {
     label.textContent = 'Hosted access';
     copyText = 'Credit status is temporarily unavailable. Retrying automatically.';
@@ -9809,6 +9827,10 @@ function _renderHostedAccessUi() {
       ? 'Hosted models draw from your account credit. No provider API key required.'
       : 'Credit is exhausted. Free hosted models remain available.';
     autoDismissCopy = available > 0;
+    // Do not schedule a dismissal while the copy is visually hidden on mobile.
+    if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) autoDismissCopy = false;
+    // Match the CSS body class exactly: compact only the hosted workspace.
+    compactCopy = available > 0 && hostedWorkspaceMode;
   } else if (_openrouterUsage && _openrouterUsage.capped) {
     label.textContent = 'Free trial limit reached';
     copyText = 'Free hosted models remain available, or switch to local provider mode.';
@@ -9817,6 +9839,9 @@ function _renderHostedAccessUi() {
     copyText = 'Lightweight hosted models with a dedicated browser workspace. No provider API key required.';
   }
   _setHostedAccessCopy(copy, copyText, autoDismissCopy);
+  notice.classList.toggle('hosted-compact-copy', compactCopy);
+  if (compactCopy) notice.title = copyText;
+  else notice.removeAttribute('title');
   if (hintTitle) hintTitle.textContent = hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat';
   if (hintSub) {
     hintSub.textContent = hostedWorkspaceMode
@@ -10907,6 +10932,8 @@ function openInstallModal() {
   if (!modal) return;
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
+  const modalCard = modal.querySelector('.modal-card');
+  if (modalCard) modalCard.scrollTop = 0;
   document.addEventListener('keydown', handleInstallModalKeydown);
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
@@ -12171,6 +12198,40 @@ function copyInstallCmd() {
 
 function closeInstallModal() {
   hideInstallModal(true);
+}
+
+/* Icon-only controls need explicit accessible names. Kept in script (rather
+   than markup) so the workbench markup-baseline guard stays stable. This
+   hosted workspace/trial template puts the script at the end of the body, and
+   the DOM-ready guard keeps the labels correct if that ever changes. */
+function labelIconOnlyControls() {
+  const send = document.getElementById('sendbtn');
+  if (send && !send.getAttribute('aria-label')) {
+    send.setAttribute('aria-label', 'Send message');
+    send.setAttribute('title', 'Send message');
+  }
+  const cancel = document.getElementById('cancelbtn');
+  if (cancel && !cancel.getAttribute('aria-label')) {
+    cancel.setAttribute('aria-label', 'Cancel response');
+    cancel.setAttribute('title', 'Cancel response');
+  }
+  const archiveClose = document.querySelector('#archive-panel .archive-close');
+  if (archiveClose && !archiveClose.getAttribute('aria-label')) {
+    archiveClose.setAttribute('aria-label', 'Close archives');
+    archiveClose.setAttribute('title', 'Close archives');
+  }
+  const installClose = document.querySelector('#install-modal .modal-close');
+  if (installClose && !installClose.getAttribute('aria-label')) {
+    installClose.setAttribute('aria-label', 'Close install dialog');
+    installClose.setAttribute('title', 'Close install dialog');
+  }
+  const input = document.getElementById('msginput');
+  if (input && !input.getAttribute('enterkeyhint')) input.setAttribute('enterkeyhint', 'send');
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', labelIconOnlyControls, {once:true});
+} else {
+  labelIconOnlyControls();
 }
 </script>
 </body>
@@ -14151,6 +14212,8 @@ function openInstallModal() {
   if (!modal) return;
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
+  const modalCard = modal.querySelector('.modal-card');
+  if (modalCard) modalCard.scrollTop = 0;
   document.addEventListener('keydown', handleInstallModalKeydown);
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
@@ -17660,6 +17723,8 @@ function openInstallModal() {
   if (!modal) return;
   if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
   modal.style.display = 'flex';
+  const modalCard = modal.querySelector('.modal-card');
+  if (modalCard) modalCard.scrollTop = 0;
   document.addEventListener('keydown', handleInstallModalKeydown);
   // The installer and the command both follow the detected OS, so their labels have to
   // as well: a Windows user was told "Terminal command" next to a PowerShell command.
@@ -21792,6 +21857,31 @@ body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-expanded #app-shell #main{inset:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important}
 }
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
+/* Mobile quick wins: reclaim chrome, respect the notch, and keep the
+   browser preview tappable while the chat composer is minimized. */
+@media(max-width:760px){
+  body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-head{display:none!important}
+  body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{inset:0!important}
+  body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #topbar{padding-top:max(5px,env(safe-area-inset-top))!important}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #topbar,
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #model-notice,
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #profile-note,
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #new-chat-feedback,
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #agent-bar{display:none!important}
+  body.agent-view-open #main .bubble.asst{padding-right:80px!important}
+  body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+  /* The note belongs to the model/profile row; the minimized-dock group above
+     covers the closed dock, and this covers the docked chat sheet. */
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-expanded) #main #profile-note{display:none!important}
+  body.agent-shell-task .agent-view-chat-toggle{font-size:11px!important}
+  body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:11px!important}
+  body.agent-shell-task.agent-view-open #main #lane-picker-toggle strong{font-size:11px!important}
+  body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{font-size:11px!important}
+  body.agent-shell-task.agent-view-open #main #modelrow label{font-size:11px!important}
+  body.agent-shell-task.agent-view-open #main #modelsel,
+  body.agent-shell-task.agent-view-open #main #profilesel{font-family:-apple-system,system-ui,sans-serif!important;font-size:13px!important;font-weight:600!important}
+  #archive-panel .archive-close{width:44px;min-width:44px;height:44px;min-height:44px;display:grid;place-items:center;padding:0}
+}
 </style>"""
 
 _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1">
@@ -23516,7 +23606,12 @@ function setAgentViewChatState(mode, surface) {
 
   if (surface === 'chat' && mode !== 'minimized') {
     const chat = document.getElementById('chat');
-    if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+    // Only follow the transcript when there is one. On a short phone the
+    // empty-state hints are taller than the chat viewport, and scrolling them
+    // to the bottom hides the hero and clips the introduction.
+    if (chat && !document.getElementById('chat-hints')) {
+      requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+    }
     if (_agentViewIsMobile() && mode !== 'fullscreen') requestAnimationFrame(function() {
       if (!document.body.classList.contains('agent-view-open') ||
           !document.body.classList.contains('agent-view-chat-open') ||
