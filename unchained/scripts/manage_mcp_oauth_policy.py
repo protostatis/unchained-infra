@@ -157,15 +157,25 @@ def cmd_import(store: OAuthStore, args) -> int:
         print("Expected a JSON array of policies.")
         return 2
 
+    # Normalise both sides: the store lowercases scheme and host on insert, but
+    # a row written by hand may not be canonical, and dedup must not depend on
+    # that.
     existing = {
-        (p["scheme"], p["host"], p["port"], p["path"], p["match"], p["allow_query"])
+        (
+            str(p["scheme"]).lower(),
+            str(p["host"]).lower(),
+            int(p["port"]),
+            str(p["path"]),
+            str(p["match"]),
+            int(p["allow_query"]),
+        )
         for p in store.list_policies()
     }
     to_add = []
     for entry in data:
         try:
-            scheme = str(entry["scheme"])
-            host = str(entry["host"])
+            scheme = str(entry["scheme"]).lower()
+            host = str(entry["host"]).lower()
             port = int(entry["port"])
             path = str(entry["path"])
             match = str(entry.get("match", "exact"))
@@ -182,7 +192,7 @@ def cmd_import(store: OAuthStore, args) -> int:
         except RedirectURIError as exc:
             print(f"Skipping {uri}: {exc}")
             continue
-        key = (scheme, host.lower(), port, path, match, allow_query)
+        key = (scheme, host, port, path, match, allow_query)
         if key not in existing:
             to_add.append(dict(scheme=scheme, host=host, port=port, path=path,
                                match=match, allow_query=allow_query,
