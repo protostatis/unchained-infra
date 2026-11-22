@@ -21,7 +21,7 @@ import html
 import os
 import secrets
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from aiohttp import web
 
@@ -263,6 +263,15 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
   the browser you choose below. You can disconnect it any time from
   <a href="/oauth/connections">Connected apps</a>.
 </p>
+<div class='account'>
+  Signed in as <strong>{_escape(user.get("email") or user.get("user_id") or "")}</strong>
+  <form method="post" action="/oauth/consent">
+    <input type="hidden" name="request" value="{_escape(request_id)}">
+    <input type="hidden" name="csrf" value="{_escape(csrf)}">
+    <input type="hidden" name="decision" value="switch">
+    <button type="submit" class="link">Switch account</button>
+  </form>
+</div>
 <form method="post" action="/oauth/consent">
   <input type="hidden" name="request" value="{_escape(request_id)}">
   <input type="hidden" name="csrf" value="{_escape(csrf)}">
@@ -304,6 +313,18 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             "<p class='muted'>This page expired. Return to your assistant and try again.</p>",
             status=400,
         )
+
+    if decision == "switch":
+        # Sign out of the website and re-render the same consent request, so
+        # the next Google sign-in can pick a different account.
+        target = f"/oauth/consent?request={quote(request_id)}" if request_id else "/"
+        response = web.HTTPFound(target)
+        try:
+            _core()._clear_session_cookie(response, request)
+        except Exception:
+            response.del_cookie("uc_session", path="/")
+        _clear_cookie(response)
+        return response
 
     store = _store()
     pending = store.pending_request(request_id)
@@ -505,6 +526,9 @@ _PAGE = """<!DOCTYPE html>
   button{{font:inherit;font-size:.9rem;padding:.55rem 1.1rem;border-radius:8px;cursor:pointer;
           border:1px solid #30363d;background:#161b22;color:#c9d1d9}}
   button.primary{{background:#238636;border-color:#2ea043;color:#fff}}
+  .account{{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.85rem;color:#8b949e;margin-bottom:1rem}}
+  .account form{{margin:0}}
+  button.link{{background:none;border:0;padding:0;color:#58a6ff;font:inherit;cursor:pointer;text-decoration:underline}}
   .grant{{display:flex;justify-content:space-between;align-items:center;gap:1rem;
           border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:.75rem}}
   .grant span.muted{{display:block;font-size:.78rem;margin-top:.25rem}}
