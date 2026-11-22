@@ -732,7 +732,7 @@ async def cdp_set_tab_alias(alias: str, tab_id: str,
         return "Alias too long (max 64 characters)."
     if alias.lower() == "auto":
         return "Cannot use 'auto' as an alias — it is reserved."
-    if alias.startswith("prov-") or _CONCRETE_TAB_ID_RE.match(alias):
+    if alias.lower().startswith("prov-") or _CONCRETE_TAB_ID_RE.match(alias):
         # A concrete tab id must never resolve through the alias table: an
         # alias shadowing one would let a caller redirect another caller's
         # already-authorized target.

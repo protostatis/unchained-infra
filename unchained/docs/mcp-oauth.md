@@ -82,9 +82,11 @@ Key properties:
 - **One grant, one browser.** The consent screen pins the exact `agent_id`.
   Every tool call re-checks the pin; another profile of the same key is a
   different browser and is refused.
-- **Provisioned Chromes are out of scope.** A connector cannot list, launch or
-  target `prov-` tabs; a middleware applies that to every tool call, so a new
-  tool is covered without another call-site check.
+- **Provisioned Chromes are grant-scoped.** A connector may list local Chrome
+  profiles and launch copies, but it can only see and drive slots its own
+  grant launched. Ownership rides a grant-stable caller tag; aliases are
+  resolved before the target check, tab-shaped alias names are refused, and
+  an unverifiable target fails closed.
 - **Key revocation is immediate.** Transport-level token verification and each
   tool call both confirm the grant's backing API key is still active, so
   revoking a key cuts connector access at once rather than waiting out the
@@ -255,8 +257,9 @@ family is alive — that is what makes replay detectable.
 - JWTs, JWKS or distributed signing.
 - Client ID Metadata Documents, OIDC, password or client-credentials grants.
 - Confidential clients and client secrets.
-- Fine-grained scopes (one honest scope, `mcp:browser`, backed by the full tool
-  set).
+- Fine-grained scopes: `mcp:browser` drives the chosen browser;
+  `mcp:provision` adds local profile inventory and grant-owned provisioned
+  copies. Existing grants without it must reconnect.
 - Multi-agent grants or automatic failover to another connected browser.
 
 ## Known interop details

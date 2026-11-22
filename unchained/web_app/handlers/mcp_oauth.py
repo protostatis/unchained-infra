@@ -32,6 +32,11 @@ from web_app.core import get_core as _core
 _CSRF_COOKIE = "uc_oauth_csrf"
 _CSRF_MAX_AGE = 600
 
+# Bump whenever the consent copy grants new access. GET embeds this value and
+# POST refuses a form rendered under an older copy, so a page opened before a
+# deploy cannot approve permissions it never displayed.
+CONSENT_VERSION = "2"
+
 
 _STORE: list = []
 
@@ -280,6 +285,7 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 <form method="post" action="/oauth/consent">
   <input type="hidden" name="request" value="{_escape(request_id)}">
   <input type="hidden" name="csrf" value="{_escape(csrf)}">
+  <input type="hidden" name="consent_version" value="{CONSENT_VERSION}">
   <fieldset>
     <legend>Choose the browser it may drive</legend>
     {''.join(rows)}
@@ -311,6 +317,7 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
     decision = str(form.get("decision") or "").strip()
     agent_id = str(form.get("agent_id") or "").strip()
     csrf = str(form.get("csrf") or "").strip()
+    consent_version = str(form.get("consent_version") or "").strip()
 
     if not _csrf_ok(request, csrf):
         return _page(
@@ -330,6 +337,15 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             response.del_cookie("uc_session", path="/")
         _clear_cookie(response)
         return response
+
+    if decision == "approve" and consent_version != CONSENT_VERSION:
+        return _page(
+            "Consent page is out of date",
+            "<p class='muted'>These permissions changed since this page was "
+            "opened. Reload the consent page, review what the connector can "
+            "do now, and approve again.</p>",
+            status=400,
+        )
 
     store = _store()
     pending = store.pending_request(request_id)

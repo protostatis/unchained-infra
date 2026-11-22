@@ -40,7 +40,13 @@ def _post(fields, *, cookie="csrf-value", csrf_field="csrf-value"):
     """A POST request whose parsed form is the given fields."""
     headers = CIMultiDict({"Cookie": f"{mcp_oauth._CSRF_COOKIE}={cookie}"})
     request = make_mocked_request("POST", "/oauth/consent", headers=headers)
-    request.post = AsyncMock(return_value={**fields, "csrf": csrf_field})
+    request.post = AsyncMock(
+        return_value={
+            "consent_version": mcp_oauth.CONSENT_VERSION,
+            **fields,
+            "csrf": csrf_field,
+        }
+    )
     return request
 
 
@@ -142,6 +148,26 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertIn("launch a copy", response.text)
         self.assertIn("original profile is not modified", response.text)
         self.assertIn("assistant provider", response.text)
+
+    def test_consent_form_carries_the_current_consent_version(self):
+        response = self._get(self.request_id)
+        self.assertIn(
+            f'name="consent_version" value="{mcp_oauth.CONSENT_VERSION}"',
+            response.text,
+        )
+
+    def test_stale_consent_version_is_refused(self):
+        request = _post(
+            {
+                "request": self.request_id,
+                "decision": "approve",
+                "agent_id": "claude-deadbeef-facebook",
+                "consent_version": "1",
+            }
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 400)
+        self.assertIn("out of date", response.text)
 
     def test_switch_account_clears_the_session_and_returns_to_the_same_request(self):
         request = _post(

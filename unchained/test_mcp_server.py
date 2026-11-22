@@ -644,7 +644,13 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
 
 class TestTabAliasValidation(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_aliases_that_look_like_tab_ids(self):
-        for alias in ("prov-dc31-AA", "A" * 32, "0123456789abcdef0123456789abcdef"):
+        for alias in (
+            "prov-dc31-AA",
+            "PROV-dc31-AA",
+            "Prov-dc31-AA",
+            "A" * 32,
+            "0123456789abcdef0123456789abcdef",
+        ):
             result = await mcp_server.mcp._tool_manager.call_tool(
                 "cdp_set_tab_alias", {"alias": alias, "tab_id": "auto"},
             )
