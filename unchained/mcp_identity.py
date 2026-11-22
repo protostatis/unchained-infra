@@ -180,6 +180,11 @@ OAUTH_PROV_TAB_UNVERIFIED = (
     "Retry in a moment."
 )
 
+OAUTH_CONCRETE_TARGET_REQUIRED = (
+    "OAuth connectors must target 'auto', a tab id, or one of their own "
+    "provisioned tab ids. Tab aliases are not available to connectors."
+)
+
 # New consent grants this scope. Grants approved before profile access existed
 # do not have it, so they must reconnect instead of silently gaining the
 # ability to copy local Chrome profiles.
@@ -202,12 +207,18 @@ def oauth_can_provision(principal: Principal | None) -> bool:
     return principal.allows(PROVISION_SCOPE)
 
 
+_PROV_TAB_RE = re.compile(r"^prov-([A-Za-z0-9]+)-([A-Za-z0-9]+)$")
+
+
 def provision_slot_from_tab_id(tab_id: str) -> str:
-    """Return the slot portion of a ``prov-{slot}-{id}`` tab ID, or ""."""
-    parts = str(tab_id or "").split("-", 2)
-    if len(parts) == 3 and parts[0] == "prov":
-        return parts[1]
-    return ""
+    """Return the slot portion of a canonical ``prov-{slot}-{id}`` id, or "".
+
+    Legacy ids such as ``prov-auto`` and ``prov-{id}`` do not name a slot.
+    Control characters are rejected outright: downstream URL parsing
+    normalizes them, which could turn a checked string into another target.
+    """
+    match = _PROV_TAB_RE.match(str(tab_id or ""))
+    return match.group(1) if match else ""
 
 
 def oauth_prov_tab_allowed(

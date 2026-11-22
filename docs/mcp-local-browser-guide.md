@@ -333,7 +333,7 @@ cdp_provision_cleanup                 # all slots
 - Provisioned Chrome runs as a separate process with a copy of the profile
 - The original Chrome profile is not modified
 - `list_chrome_profiles` reads the same inventory as the web app: profiles signed into a Google account
-- OAuth connectors may list profiles and launch their own provisioned Chromes; they only see slots their grant launched, and never another caller's
+- OAuth connectors may list profiles and launch their own provisioned Chromes; they only see slots their grant launched, and never another caller's. Connectors target `auto`, a concrete tab id, or one of their own `prov-` ids; tab aliases are not available to them.
 - Connectors approved before profile access existed must reconnect: the updated consent adds the `mcp:provision` scope, and older grants are told to re-approve
 - Tab IDs use `prov-{slot}-{chrome_id}` format — pass these to any MCP tool's `tab_id` parameter
 - `ddm --tabs` with a prov-prefixed `tab_id` auto-prefixes tab IDs in the output

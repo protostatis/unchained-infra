@@ -34,6 +34,7 @@ import cloud_tools
 from auth import Auth
 from mcp_identity import (
     IdentityError,
+    OAUTH_CONCRETE_TARGET_REQUIRED,
     OAUTH_PROV_TAB_DENIED,
     OAUTH_PROV_TAB_UNVERIFIED,
     PROVISION_RECONSENT_REQUIRED,
@@ -247,58 +248,15 @@ async def _oauth_prov_tab_verdict(principal: Principal, tab_id: str) -> bool | N
     return oauth_prov_tab_allowed(principal, tab_id, slots)
 
 
-async def _oauth_alias_map(principal: Principal) -> dict | None:
-    """Return the alias map for the grant's browser, or None if unreadable."""
-    if not principal.agent_id:
-        return None
-    try:
-        raw = await cloud_tools.list_tab_aliases(principal.agent_id)
-    except Exception as exc:
-        print(
-            "[mcp] alias ownership lookup failed "
-            f"({type(exc).__name__}): {exc}"
-        )
-        return None
-    if str(raw or "").strip() == "No tab aliases set":
-        return {}
-    try:
-        aliases = json.loads(raw)
-    except Exception:
-        return None
-    return aliases if isinstance(aliases, dict) else None
-
-
-async def _oauth_tab_target(principal: Principal, tab_id: str) -> tuple[bool | None, str]:
-    """Authorize an OAuth tab target and return the id to execute against.
-
-    Aliases live per browser agent, not per caller, so the alias map is
-    consulted first: an alias set by an API-key client could otherwise point
-    at its provisioned Chrome and bypass the ``prov-`` check. The resolved
-    target, not the alias name, is what gets authorized and forwarded.
-    """
-    raw = str(tab_id or "")
-    if raw in ("", "auto"):
-        return True, raw
-    aliases = await _oauth_alias_map(principal)
-    if aliases is None:
-        return None, raw
-    resolved = aliases.get(raw.lower())
-    if isinstance(resolved, str) and resolved and resolved != raw:
-        # The private core would follow this alias, so authorize and use the
-        # target it points to. Refuse chains that would resolve again.
-        if aliases.get(resolved.lower()) not in (None, resolved):
-            return False, raw
-        return await _oauth_prov_tab_verdict(principal, resolved), resolved
-    return await _oauth_prov_tab_verdict(principal, raw), raw
-
-
 class OAuthToolScopeMiddleware(Middleware):
     """Hold OAuth callers to their granted browser and their own provisions.
 
     Registered on the server so a new tool that accepts ``tab_id`` is covered
-    without another call-site check. Provisioning tools stay available to
-    connectors; the bridge scopes launch, cleanup and status by the grant's
-    caller tag.
+    without another call-site check. Connectors may target ``auto``, a
+    concrete tab id, or their own provisioned tab id. Tab aliases are resolved
+    per agent in the private core, after this check, so a connector cannot use
+    one: a name authorized here could be rebound to another caller's slot
+    before execution.
     """
 
     async def on_call_tool(self, context, call_next):
@@ -306,7 +264,11 @@ class OAuthToolScopeMiddleware(Middleware):
         arguments = getattr(context.message, "arguments", None) or {}
         tab_id = str(arguments.get("tab_id") or "")
         if principal is not None and principal.is_oauth and tab_id not in ("", "auto"):
-            verdict, canonical = await _oauth_tab_target(principal, tab_id)
+            if not tab_id.startswith("prov-") and not _CONCRETE_TAB_ID_RE.match(tab_id):
+                from fastmcp.exceptions import ToolError
+
+                raise ToolError(OAUTH_CONCRETE_TARGET_REQUIRED)
+            verdict = await _oauth_prov_tab_verdict(principal, tab_id)
             if verdict is not True:
                 from fastmcp.exceptions import ToolError
 
@@ -314,10 +276,6 @@ class OAuthToolScopeMiddleware(Middleware):
                     OAUTH_PROV_TAB_DENIED if verdict is False
                     else OAUTH_PROV_TAB_UNVERIFIED
                 )
-            if canonical != tab_id:
-                # Bind execution to the target that was authorized instead of
-                # letting the tool resolve the alias again.
-                context.message.arguments = {**arguments, "tab_id": canonical}
         return await call_next(context)
 
 

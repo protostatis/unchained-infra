@@ -520,7 +520,43 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("belongs to another client", str(ctx.exception))
         self.assertFalse(called)
 
-    async def test_middleware_fails_closed_when_aliases_are_unreadable(self):
+    async def test_middleware_denies_alias_names(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        called = []
+
+        async def call_next(context):
+            called.append(True)
+            return "ok"
+
+        with patch(
+            "mcp_server._principal_or_error",
+            return_value=(self._oauth(), ""),
+        ):
+            with self.assertRaises(Exception) as ctx:
+                await middleware.on_call_tool(
+                    self._ctx({"tab_id": "reddit"}), call_next
+                )
+        self.assertIn("aliases are not available", str(ctx.exception))
+        self.assertFalse(called)
+
+    async def test_middleware_allows_a_concrete_tab_id(self):
+        middleware = mcp_server.OAuthToolScopeMiddleware()
+        seen = []
+
+        async def call_next(context):
+            seen.append(dict(context.message.arguments))
+            return "ok"
+
+        with patch(
+            "mcp_server._principal_or_error",
+            return_value=(self._oauth(), ""),
+        ):
+            await middleware.on_call_tool(
+                self._ctx({"tab_id": "A" * 32}), call_next
+            )
+        self.assertEqual(seen[0]["tab_id"], "A" * 32)
+
+    async def test_middleware_fails_closed_when_status_is_unreadable(self):
         middleware = mcp_server.OAuthToolScopeMiddleware()
         called = []
 
@@ -534,67 +570,16 @@ class TestProvisionScopeTools(unittest.IsolatedAsyncioTestCase):
                 return_value=(self._oauth(), ""),
             ),
             patch(
-                "cloud_tools.list_tab_aliases",
+                "cloud_tools.provision_status",
                 new=AsyncMock(side_effect=RuntimeError("private core down")),
             ),
         ):
             with self.assertRaises(Exception) as ctx:
                 await middleware.on_call_tool(
-                    self._ctx({"tab_id": "reddit"}), call_next
+                    self._ctx({"tab_id": "prov-dc31-AA"}), call_next
                 )
         self.assertIn("Could not verify", str(ctx.exception))
         self.assertFalse(called)
-
-    async def test_middleware_binds_an_alias_to_its_authorized_target(self):
-        middleware = mcp_server.OAuthToolScopeMiddleware()
-        seen = []
-
-        async def call_next(context):
-            seen.append(dict(context.message.arguments))
-            return "ok"
-
-        status = {"slots": {"dc31": {"caller_tag": "oauth-deadbeef"}}}
-        with (
-            patch(
-                "mcp_server._principal_or_error",
-                return_value=(self._oauth(), ""),
-            ),
-            patch(
-                "cloud_tools.list_tab_aliases",
-                new=AsyncMock(return_value='{"reddit": "prov-dc31-AA"}'),
-            ),
-            patch(
-                "cloud_tools.provision_status",
-                new=AsyncMock(return_value=status),
-            ),
-        ):
-            await middleware.on_call_tool(
-                self._ctx({"tab_id": "reddit", "expr": "1"}), call_next
-            )
-        self.assertEqual(seen[0]["tab_id"], "prov-dc31-AA")
-
-    async def test_middleware_denies_an_alias_to_a_foreign_slot(self):
-        middleware = mcp_server.OAuthToolScopeMiddleware()
-        status = {"slots": {"ab12": {"caller_tag": "abc123"}}}
-        with (
-            patch(
-                "mcp_server._principal_or_error",
-                return_value=(self._oauth(), ""),
-            ),
-            patch(
-                "cloud_tools.list_tab_aliases",
-                new=AsyncMock(return_value='{"reddit": "prov-ab12-AA"}'),
-            ),
-            patch(
-                "cloud_tools.provision_status",
-                new=AsyncMock(return_value=status),
-            ),
-        ):
-            with self.assertRaises(Exception) as ctx:
-                await middleware.on_call_tool(
-                    self._ctx({"tab_id": "reddit"}), AsyncMock()
-                )
-        self.assertIn("belongs to another client", str(ctx.exception))
 
     async def test_oauth_cleanup_refuses_an_unowned_slot(self):
         status = {"slots": {"ab12": {"caller_tag": ""}}}

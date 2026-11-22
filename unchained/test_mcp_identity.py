@@ -399,6 +399,10 @@ class ToolScopeTests(unittest.TestCase):
         self.assertEqual(provision_slot_from_tab_id("ABC123"), "")
         self.assertEqual(provision_slot_from_tab_id(""), "")
 
+    def test_rejects_control_characters_in_prov_ids(self):
+        for tab in ("pr\nov-dc31-AA", "prov-dc31-\nAA", "prov-dc31-AA\t"):
+            self.assertEqual(provision_slot_from_tab_id(tab), "", repr(tab))
+
     def test_oauth_can_drive_its_own_slot(self):
         self.assertIs(
             oauth_prov_tab_allowed(self.oauth, "prov-dc31-AABB", self.slots), True

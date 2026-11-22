@@ -84,9 +84,11 @@ Key properties:
   different browser and is refused.
 - **Provisioned Chromes are grant-scoped.** A connector may list local Chrome
   profiles and launch copies, but it can only see and drive slots its own
-  grant launched. Ownership rides a grant-stable caller tag; aliases are
-  resolved before the target check, tab-shaped alias names are refused, and
-  an unverifiable target fails closed.
+  grant launched. Ownership rides a grant-stable caller tag; direct targets
+  are `auto`, a concrete tab id, or one of the grant's own `prov-` ids.
+  Aliases are not available to connectors: the private core resolves them per
+  agent, after the grant check, so a name could be rebound between check and
+  execution. Legacy `prov-auto` ids and unverifiable targets fail closed.
 - **Key revocation is immediate.** Transport-level token verification and each
   tool call both confirm the grant's backing API key is still active, so
   revoking a key cuts connector access at once rather than waiting out the
