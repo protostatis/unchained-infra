@@ -53,6 +53,12 @@ APPROVAL_TICKET_TTL = 2 * 60
 AUTHORIZATION_CODE_TTL = 2 * 60
 ACCESS_TOKEN_TTL = 15 * 60
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60
+# A refresh family has an absolute lifetime, so rotation cannot renew a
+# connection forever. Documented separately from the sliding refresh TTL.
+FAMILY_TTL = 90 * 24 * 60 * 60
+# How long revoked/expired family state is retained for replay detection and
+# audit before pruning.
+REVOKED_RETENTION = 7 * 24 * 60 * 60
 
 # Terminal states for an authorization request.
 STATUS_PENDING = "pending"
@@ -201,6 +207,15 @@ class OAuthStore:
                     consumed_at REAL
                 );
 
+                CREATE TABLE IF NOT EXISTS mcp_oauth_families (
+                    family_id TEXT PRIMARY KEY,
+                    grant_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    revoked_at REAL
+                );
+
                 CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scheme TEXT NOT NULL,
@@ -227,11 +242,26 @@ class OAuthStore:
                     ON mcp_oauth_tokens (grant_id);
                 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family
                     ON mcp_oauth_tokens (family_id);
+                CREATE INDEX IF NOT EXISTS idx_oauth_families_expiry
+                    ON mcp_oauth_families (expires_at);
                 CREATE INDEX IF NOT EXISTS idx_oauth_grants_user
                     ON mcp_oauth_grants (user_id);
                 CREATE INDEX IF NOT EXISTS idx_oauth_grants_client
                     ON mcp_oauth_grants (client_id);
                 """
+            )
+            # Additive migration: give any pre-existing token rows a family so
+            # the joins below keep working on an older database.
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO mcp_oauth_families
+                    (family_id, grant_id, client_id, created_at, expires_at)
+                SELECT family_id, grant_id, client_id, MIN(created_at),
+                       MAX(expires_at) + ?
+                  FROM mcp_oauth_tokens
+                 GROUP BY family_id
+                """,
+                (FAMILY_TTL,),
             )
             self._seed_policies(conn)
 
@@ -1024,11 +1054,53 @@ class OAuthStore:
                     "UPDATE mcp_oauth_tokens SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL",
                     (now, grant_id),
                 )
+                conn.execute(
+                    "UPDATE mcp_oauth_families SET revoked_at = ? "
+                    "WHERE grant_id = ? AND revoked_at IS NULL",
+                    (now, grant_id),
+                )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
         return True
+
+    def revoke_grants_for_user(self, user_id: str) -> int:
+        """Revoke every connector an account delegated."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                grant_ids = [
+                    r["id"]
+                    for r in conn.execute(
+                        "SELECT id FROM mcp_oauth_grants WHERE user_id = ? AND revoked_at IS NULL",
+                        (user_id,),
+                    ).fetchall()
+                ]
+                if not grant_ids:
+                    conn.execute("ROLLBACK")
+                    return 0
+                placeholders = ",".join("?" for _ in grant_ids)
+                conn.execute(
+                    f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({placeholders})",
+                    (now, *grant_ids),
+                )
+                conn.execute(
+                    f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                    f"WHERE revoked_at IS NULL AND grant_id IN ({placeholders})",
+                    (now, *grant_ids),
+                )
+                conn.execute(
+                    f"UPDATE mcp_oauth_families SET revoked_at = ? "
+                    f"WHERE revoked_at IS NULL AND grant_id IN ({placeholders})",
+                    (now, *grant_ids),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return len(grant_ids)
 
     def revoke_grants_for_key(self, key_fingerprint: str) -> int:
         """Key rotation/revocation invalidates the connectors bound to it."""
@@ -1058,6 +1130,13 @@ class OAuthStore:
                     """,
                     (now, *grant_ids),
                 )
+                conn.execute(
+                    f"""
+                    UPDATE mcp_oauth_families SET revoked_at = ?
+                     WHERE revoked_at IS NULL AND grant_id IN ({placeholders})
+                    """,
+                    (now, *grant_ids),
+                )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -1065,6 +1144,66 @@ class OAuthStore:
         return len(grant_ids)
 
     # -- tokens ------------------------------------------------------------
+
+    def _insert_tokens(
+        self,
+        conn,
+        *,
+        grant_id: str,
+        client_id: str,
+        family_id: str,
+        family_expires_at: float,
+        scopes: Iterable[str],
+        resource: str | None,
+    ) -> dict:
+        """Insert an access/refresh pair inside an existing transaction."""
+        access = _new_token(ACCESS_TOKEN_PREFIX)
+        refresh = _new_token(REFRESH_TOKEN_PREFIX)
+        now = _now()
+        scope_json = _json(list(scopes))
+        refresh_expiry = min(now + REFRESH_TOKEN_TTL, family_expires_at)
+        conn.execute(
+            """
+            INSERT INTO mcp_oauth_tokens
+                (token_hash, kind, family_id, grant_id, client_id,
+                 scopes, resource, created_at, expires_at)
+            VALUES (?, 'access', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _hash(access),
+                family_id,
+                grant_id,
+                client_id,
+                scope_json,
+                resource,
+                now,
+                now + ACCESS_TOKEN_TTL,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO mcp_oauth_tokens
+                (token_hash, kind, family_id, grant_id, client_id,
+                 scopes, resource, created_at, expires_at)
+            VALUES (?, 'refresh', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _hash(refresh),
+                family_id,
+                grant_id,
+                client_id,
+                scope_json,
+                resource,
+                now,
+                refresh_expiry,
+            ),
+        )
+        return {
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_in": ACCESS_TOKEN_TTL,
+            "family_id": family_id,
+        }
 
     def issue_tokens(
         self,
@@ -1075,60 +1214,64 @@ class OAuthStore:
         resource: str | None,
         family_id: str | None = None,
     ) -> dict:
-        access = _new_token(ACCESS_TOKEN_PREFIX)
-        refresh = _new_token(REFRESH_TOKEN_PREFIX)
-        family = family_id or secrets.token_urlsafe(18)
+        """Issue a token pair against a live grant.
+
+        Rejects a revoked or missing grant even when starting a new family, so
+        an authorization-code exchange cannot race grant revocation.
+        """
         now = _now()
-        scope_json = _json(list(scopes))
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                conn.execute(
-                    """
-                    INSERT INTO mcp_oauth_tokens
-                        (token_hash, kind, family_id, grant_id, client_id,
-                         scopes, resource, created_at, expires_at)
-                    VALUES (?, 'access', ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        _hash(access),
-                        family,
-                        grant_id,
-                        client_id,
-                        scope_json,
-                        resource,
-                        now,
-                        now + ACCESS_TOKEN_TTL,
-                    ),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO mcp_oauth_tokens
-                        (token_hash, kind, family_id, grant_id, client_id,
-                         scopes, resource, created_at, expires_at)
-                    VALUES (?, 'refresh', ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        _hash(refresh),
-                        family,
-                        grant_id,
-                        client_id,
-                        scope_json,
-                        resource,
-                        now,
-                        now + REFRESH_TOKEN_TTL,
-                    ),
+                grant = conn.execute(
+                    "SELECT id, client_id, revoked_at FROM mcp_oauth_grants WHERE id = ?",
+                    (grant_id,),
+                ).fetchone()
+                if grant is None or grant["revoked_at"] is not None:
+                    raise ValueError("grant is not active")
+                if grant["client_id"] != client_id:
+                    raise ValueError("grant belongs to another client")
+
+                if family_id is None:
+                    family_id = secrets.token_urlsafe(18)
+                    family_expires = now + FAMILY_TTL
+                    conn.execute(
+                        """
+                        INSERT INTO mcp_oauth_families
+                            (family_id, grant_id, client_id, created_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (family_id, grant_id, client_id, now, family_expires),
+                    )
+                else:
+                    family = conn.execute(
+                        "SELECT * FROM mcp_oauth_families WHERE family_id = ?",
+                        (family_id,),
+                    ).fetchone()
+                    if family is None:
+                        raise ValueError("token family is unknown")
+                    if family["revoked_at"] is not None:
+                        raise ValueError("token family is revoked")
+                    if family["expires_at"] < now:
+                        raise ValueError("token family has expired")
+                    if family["grant_id"] != grant_id:
+                        raise ValueError("token family belongs to another grant")
+                    family_expires = family["expires_at"]
+
+                issued = self._insert_tokens(
+                    conn,
+                    grant_id=grant_id,
+                    client_id=client_id,
+                    family_id=family_id,
+                    family_expires_at=family_expires,
+                    scopes=scopes,
+                    resource=resource,
                 )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
-        return {
-            "access_token": access,
-            "refresh_token": refresh,
-            "expires_in": ACCESS_TOKEN_TTL,
-            "family_id": family,
-        }
+        return issued
 
     def load_access_token(self, token: str) -> dict | None:
         now = _now()
@@ -1136,9 +1279,12 @@ class OAuthStore:
             row = conn.execute(
                 """
                 SELECT t.*, g.agent_id, g.user_id, g.key_hash,
-                       g.key_fingerprint, g.revoked_at AS grant_revoked_at
+                       g.key_fingerprint, g.revoked_at AS grant_revoked_at,
+                       f.revoked_at AS family_revoked_at,
+                       f.expires_at AS family_expires_at
                   FROM mcp_oauth_tokens t
                   JOIN mcp_oauth_grants g ON g.id = t.grant_id
+                  LEFT JOIN mcp_oauth_families f ON f.family_id = t.family_id
                  WHERE t.token_hash = ? AND t.kind = 'access'
                 """,
                 (_hash(token),),
@@ -1146,6 +1292,10 @@ class OAuthStore:
             if row is None:
                 return None
             if row["revoked_at"] is not None or row["grant_revoked_at"] is not None:
+                return None
+            if row["family_revoked_at"] is not None:
+                return None
+            if row["family_expires_at"] is not None and row["family_expires_at"] < now:
                 return None
             if row["consumed_at"] is not None or row["expires_at"] < now:
                 return None
@@ -1169,36 +1319,40 @@ class OAuthStore:
             "expires_at": row["expires_at"],
         }
 
-    def load_refresh_token(self, token: str) -> dict | None:
-        """Read a refresh token without consuming it.
+    def load_refresh_token(self, token: str, *, client_id: str | None = None) -> dict | None:
+        """Read a refresh token without mutating anything.
 
-        A token that was already rotated and is presented again is treated as a
-        replay: the whole family is revoked, per OAuth 2.1 guidance for public
-        clients.  This is the only place that can happen, because the SDK asks
-        for the token here first and stops if it is unknown.
+        Replay handling lives in :meth:`rotate_refresh_token`, so that a token
+        presented by the wrong client never causes a revocation.  A consumed
+        token is still returned (``consumed=True``) because the SDK asks here
+        first and would otherwise answer invalid_grant before the exchange that
+        performs the revocation.
         """
+        now = _now()
         with self._conn() as conn:
             row = conn.execute(
                 """
-                SELECT t.*, g.revoked_at AS grant_revoked_at
+                SELECT t.*, g.revoked_at AS grant_revoked_at,
+                       f.revoked_at AS family_revoked_at,
+                       f.expires_at AS family_expires_at
                   FROM mcp_oauth_tokens t
                   JOIN mcp_oauth_grants g ON g.id = t.grant_id
+                  LEFT JOIN mcp_oauth_families f ON f.family_id = t.family_id
                  WHERE t.token_hash = ? AND t.kind = 'refresh'
                 """,
                 (_hash(token),),
             ).fetchone()
-            if row is None:
-                return None
-            if row["consumed_at"] is not None:
-                conn.execute(
-                    "UPDATE mcp_oauth_tokens SET revoked_at = ? "
-                    "WHERE family_id = ? AND revoked_at IS NULL",
-                    (_now(), row["family_id"]),
-                )
-                return None
+        if row is None:
+            return None
+        if client_id is not None and row["client_id"] != client_id:
+            return None
         if row["revoked_at"] is not None or row["grant_revoked_at"] is not None:
             return None
-        if row["expires_at"] < _now():
+        if row["family_revoked_at"] is not None:
+            return None
+        if row["family_expires_at"] is not None and row["family_expires_at"] < now:
+            return None
+        if row["expires_at"] < now:
             return None
         return {
             "grant_id": row["grant_id"],
@@ -1207,10 +1361,22 @@ class OAuthStore:
             "resource": row["resource"],
             "family_id": row["family_id"],
             "expires_at": row["expires_at"],
+            "consumed": row["consumed_at"] is not None,
         }
 
-    def consume_refresh_token(self, token: str, *, client_id: str) -> dict | None:
-        """Rotate a refresh token, revoking the family on replay."""
+    def rotate_refresh_token(
+        self,
+        token: str,
+        *,
+        client_id: str,
+        scopes: Iterable[str],
+    ) -> dict | None:
+        """Consume a refresh token and issue its successor in one transaction.
+
+        Returns ``{"replay": True}`` when an already-consumed token is presented
+        by its own client; the family is revoked in that same transaction.  Any
+        other refusal returns ``None`` without mutating state.
+        """
         now = _now()
         token_hash = _hash(token)
         with self._conn() as conn:
@@ -1218,30 +1384,32 @@ class OAuthStore:
             try:
                 row = conn.execute(
                     """
-                    SELECT t.*, g.revoked_at AS grant_revoked_at
+                    SELECT t.*, g.revoked_at AS grant_revoked_at,
+                           f.revoked_at AS family_revoked_at,
+                           f.expires_at AS family_expires_at
                       FROM mcp_oauth_tokens t
                       JOIN mcp_oauth_grants g ON g.id = t.grant_id
+                      LEFT JOIN mcp_oauth_families f ON f.family_id = t.family_id
                      WHERE t.token_hash = ? AND t.kind = 'refresh'
                     """,
                     (token_hash,),
                 ).fetchone()
-                if row is None:
-                    conn.execute("ROLLBACK")
-                    return None
-                if row["client_id"] != client_id:
+                if row is None or row["client_id"] != client_id:
                     conn.execute("ROLLBACK")
                     return None
 
                 if row["consumed_at"] is not None:
-                    # Replay of a rotated token: the family is compromised.
-                    conn.execute(
-                        "UPDATE mcp_oauth_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
-                        (now, row["family_id"]),
-                    )
+                    self._revoke_family_tx(conn, row["family_id"], now)
                     conn.execute("COMMIT")
-                    return None
+                    return {"replay": True}
 
                 if row["revoked_at"] is not None or row["grant_revoked_at"] is not None:
+                    conn.execute("ROLLBACK")
+                    return None
+                if row["family_revoked_at"] is not None:
+                    conn.execute("ROLLBACK")
+                    return None
+                if row["family_expires_at"] is not None and row["family_expires_at"] < now:
                     conn.execute("ROLLBACK")
                     return None
                 if row["expires_at"] < now:
@@ -1249,58 +1417,103 @@ class OAuthStore:
                     return None
 
                 cur = conn.execute(
-                    """
-                    UPDATE mcp_oauth_tokens SET consumed_at = ?
-                     WHERE token_hash = ? AND consumed_at IS NULL
-                    """,
+                    "UPDATE mcp_oauth_tokens SET consumed_at = ? "
+                    "WHERE token_hash = ? AND consumed_at IS NULL",
                     (now, token_hash),
                 )
                 if (cur.rowcount or 0) != 1:
                     conn.execute("ROLLBACK")
                     return None
+
+                issued = self._insert_tokens(
+                    conn,
+                    grant_id=row["grant_id"],
+                    client_id=client_id,
+                    family_id=row["family_id"],
+                    family_expires_at=row["family_expires_at"] or (now + FAMILY_TTL),
+                    scopes=scopes,
+                    resource=row["resource"],
+                )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
         return {
+            "access_token": issued["access_token"],
+            "refresh_token": issued["refresh_token"],
+            "expires_in": issued["expires_in"],
+            "family_id": issued["family_id"],
             "grant_id": row["grant_id"],
-            "client_id": row["client_id"],
-            "scopes": _loads(row["scopes"], []),
-            "resource": row["resource"],
-            "family_id": row["family_id"],
         }
 
-    def revoke_token(self, token: str) -> bool:
-        """RFC 7009 revocation: kill the token, and its family if a refresh."""
+    def _revoke_family_tx(self, conn, family_id: str, now: float) -> None:
+        conn.execute(
+            "UPDATE mcp_oauth_families SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
+            (now, family_id),
+        )
+        conn.execute(
+            "UPDATE mcp_oauth_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
+            (now, family_id),
+        )
+
+    def revoke_family(self, family_id: str) -> bool:
         now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._revoke_family_tx(conn, family_id, now)
+                cur = conn.execute(
+                    "SELECT 1 FROM mcp_oauth_tokens WHERE family_id = ? LIMIT 1",
+                    (family_id,),
+                ).fetchone()
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return cur is not None
+
+    def revoke_token(self, token: str) -> bool:
+        """RFC 7009 revocation: a refresh token kills its family; an access
+        token is revoked on its own and does not stop future refreshes."""
+        now = _now()
+        token_hash = _hash(token)
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT family_id, kind FROM mcp_oauth_tokens WHERE token_hash = ?",
-                (_hash(token),),
+                (token_hash,),
             ).fetchone()
             if row is None:
                 return False
-            if row["kind"] == "refresh":
-                conn.execute(
-                    "UPDATE mcp_oauth_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
-                    (now, row["family_id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE mcp_oauth_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
-                    (now, _hash(token)),
-                )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if row["kind"] == "refresh":
+                    self._revoke_family_tx(conn, row["family_id"], now)
+                else:
+                    conn.execute(
+                        "UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                        "WHERE token_hash = ? AND revoked_at IS NULL",
+                        (now, token_hash),
+                    )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
         return True
 
     # -- maintenance -------------------------------------------------------
 
     def prune(self) -> dict:
-        """Delete expired one-shot state.  Cheap enough to run opportunistically."""
+        """Delete expired state with family-aware retention.
+
+        Consumed ancestors stay while their family is alive, because that is
+        what makes refresh replay detectable.  Revoked or expired families are
+        retained for ``REVOKED_RETENTION`` and then removed with their tokens.
+        """
         now = _now()
         with self._conn() as conn:
             requests = conn.execute(
-                "DELETE FROM mcp_oauth_requests WHERE expires_at < ? AND status IN (?, ?, ?)",
-                (now, STATUS_PENDING, STATUS_APPROVED, STATUS_CONSUMED),
+                "DELETE FROM mcp_oauth_requests WHERE expires_at < ?",
+                (now - APPROVAL_TICKET_TTL,),
             ).rowcount or 0
             approvals = conn.execute(
                 "DELETE FROM mcp_oauth_approvals WHERE expires_at < ?",
@@ -1311,14 +1524,30 @@ class OAuthStore:
                 (now,),
             ).rowcount or 0
             tokens = conn.execute(
-                "DELETE FROM mcp_oauth_tokens WHERE expires_at < ? AND kind = 'access'",
+                "DELETE FROM mcp_oauth_tokens WHERE kind = 'access' AND expires_at < ?",
                 (now,),
+            ).rowcount or 0
+            families = conn.execute(
+                """
+                DELETE FROM mcp_oauth_families
+                 WHERE expires_at < ?
+                    OR (revoked_at IS NOT NULL AND revoked_at < ?)
+                """,
+                (now - REVOKED_RETENTION, now - REVOKED_RETENTION),
+            ).rowcount or 0
+            orphans = conn.execute(
+                """
+                DELETE FROM mcp_oauth_tokens
+                 WHERE family_id NOT IN (SELECT family_id FROM mcp_oauth_families)
+                """
             ).rowcount or 0
         return {
             "requests": requests,
             "approvals": approvals,
             "codes": codes,
             "access_tokens": tokens,
+            "families": families,
+            "orphan_tokens": orphans,
         }
 
 

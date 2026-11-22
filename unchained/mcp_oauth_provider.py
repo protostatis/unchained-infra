@@ -40,6 +40,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 
 from fastmcp.server.auth import OAuthProvider
 
+from mcp_identity import user_is_eligible
 from mcp_oauth_store import (
     ACCESS_TOKEN_PREFIX,
     BudgetExceeded,
@@ -75,6 +76,16 @@ class _StoredCode(AuthorizationCode):
     """Authorization code plus the raw value needed to consume it."""
 
     raw_code: str
+
+
+class _ReplayedRefreshToken(RefreshToken):
+    """A refresh token that was already rotated.
+
+    Returning it (rather than ``None``) lets the exchange step revoke the
+    family; answering invalid_grant at load time would skip that.
+    """
+
+    family_id: str
 
 
 class MCPOAuthProvider(OAuthProvider):
@@ -262,11 +273,12 @@ class MCPOAuthProvider(OAuthProvider):
                 error="invalid_grant",
                 error_description="authorization code is invalid or already used",
             )
-        # The pinned key must still exist; a revoked key invalidates the grant.
-        if not self._grant_key_still_active(consumed.get("grant_id")):
+        # The grant is only as valid as its account and its backing key.
+        if not self._grant_still_valid(consumed.get("grant_id")):
+            self.store.revoke_grant(consumed["grant_id"])
             raise TokenError(
                 error="invalid_grant",
-                error_description="the linked API key was revoked",
+                error_description="the linked account or API key is no longer active",
             )
         issued = self.store.issue_tokens(
             grant_id=consumed["grant_id"],
@@ -281,9 +293,19 @@ class MCPOAuthProvider(OAuthProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        row = self.store.load_refresh_token(refresh_token)
-        if row is None or row["client_id"] != client.client_id:
+        row = self.store.load_refresh_token(
+            refresh_token, client_id=client.client_id
+        )
+        if row is None:
             return None
+        if row["consumed"]:
+            return _ReplayedRefreshToken(
+                token=refresh_token,
+                client_id=row["client_id"],
+                scopes=row["scopes"],
+                expires_at=int(row["expires_at"]),
+                family_id=row["family_id"],
+            )
         return RefreshToken(
             token=refresh_token,
             client_id=row["client_id"],
@@ -297,28 +319,33 @@ class MCPOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> Any:
-        rotated = self.store.consume_refresh_token(
-            refresh_token.token, client_id=client.client_id
+        if isinstance(refresh_token, _ReplayedRefreshToken):
+            # Same client presenting a spent token: treat the family as
+            # compromised. No grace window; forked successors are worse.
+            self.store.revoke_family(refresh_token.family_id)
+            raise TokenError(
+                error="invalid_grant",
+                error_description="refresh token was already used; reconnect the app",
+            )
+
+        rotated = self.store.rotate_refresh_token(
+            refresh_token.token,
+            client_id=client.client_id,
+            scopes=scopes or refresh_token.scopes,
         )
-        if rotated is None:
+        if rotated is None or rotated.get("replay"):
             raise TokenError(
                 error="invalid_grant",
                 error_description="refresh token is invalid or expired",
             )
-        if not self._grant_key_still_active(rotated["grant_id"]):
+        granted = rotated.get("scopes") or scopes or refresh_token.scopes
+        if not self._grant_still_valid(rotated["grant_id"]):
+            self.store.revoke_grant(rotated["grant_id"])
             raise TokenError(
                 error="invalid_grant",
-                error_description="the linked API key was revoked",
+                error_description="the linked account or API key is no longer active",
             )
-        granted = [s for s in scopes if s in rotated["scopes"]] or rotated["scopes"]
-        issued = self.store.issue_tokens(
-            grant_id=rotated["grant_id"],
-            client_id=client.client_id,
-            scopes=granted,
-            resource=rotated["resource"],
-            family_id=rotated["family_id"],
-        )
-        return _token_response(issued, granted)
+        return _token_response(rotated, granted)
 
     # -- verification ------------------------------------------------------
 
@@ -326,6 +353,10 @@ class MCPOAuthProvider(OAuthProvider):
         if token.startswith(ACCESS_TOKEN_PREFIX):
             row = self.store.load_access_token(token)
             if row is None:
+                return None
+            # Transport-level check must match the tool-level one: a revoked
+            # account or key has to fail here too, not only on tool dispatch.
+            if not self._grant_still_valid(row["grant_id"]):
                 return None
             if row["resource"] and row["resource"].rstrip("/") != self.resource.rstrip("/"):
                 return None
@@ -357,14 +388,16 @@ class MCPOAuthProvider(OAuthProvider):
 
     # -- helpers -----------------------------------------------------------
 
-    def _grant_key_still_active(self, grant_id: str | None) -> bool:
-        """True when the grant's backing API key still exists and is active."""
+    def _grant_still_valid(self, grant_id: str | None) -> bool:
+        """Grant is live, its account is eligible, and its key is still active."""
         if not grant_id:
             return False
         grant = self.store.get_grant(grant_id)
         if grant is None:
             return False
         auth = _auth()
+        if not user_is_eligible(auth, grant["user_id"]):
+            return False
         try:
             keys = auth.get_keys_for_user(grant["user_id"])
         except Exception:

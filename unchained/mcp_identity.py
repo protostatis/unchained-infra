@@ -81,6 +81,8 @@ def resolve_principal(
         # A grant is only as valid as the API key it was pinned to.  Checking
         # here (not just at refresh time) means revoking a key cuts connector
         # access immediately instead of waiting out the access-token TTL.
+        if not user_is_eligible(auth, row["user_id"]):
+            return None
         if not _grant_key_active(auth, row["user_id"], row["key_fingerprint"]):
             return None
         # Cheap constant-time-ish tag so provisioning cleanup can never collide
@@ -104,6 +106,22 @@ def resolve_principal(
         caller_tag=hashlib.sha256(token.encode()).hexdigest()[:12],
         api_key=token,
     )
+
+
+def user_is_eligible(auth, user_id: str) -> bool:
+    """Whether an account may still act through a delegated connector.
+
+    OAuth delegation requires an approved account.  A key-only identity (no
+    ``users`` row) predates accounts and is preserved.  API-key callers are
+    checked separately so this cannot silently change trial access.
+    """
+    try:
+        user = auth.find_user_by_id(user_id)
+    except Exception:
+        return False
+    if user is None:
+        return True
+    return (user.get("status") or "approved") == "approved"
 
 
 def _grant_key_active(auth, user_id: str, key_fingerprint: str) -> bool:

@@ -2036,7 +2036,27 @@ async def handle_admin_reject(request: web.Request) -> web.Response:
     email = body.get("email", "").strip().lower()
     if not email:
         return web.json_response({"error": "email required"}, status=400)
+    user = core._auth.find_user_by_email(email)
     if core._auth.reject_user(email):
+        # Keys are already dead; also detach any connector delegated by this
+        # account so no grant outlives the decision.  Request-time eligibility
+        # enforces the same rule even if this best-effort cleanup fails.
+        if user:
+            try:
+                from mcp_oauth_store import OAuthStore
+
+                revoked = OAuthStore(core._auth.db_path).revoke_grants_for_user(
+                    user["user_id"]
+                )
+                core._track_event(
+                    request,
+                    "admin_user_rejected",
+                    user_id=user["user_id"],
+                    meta={"oauth_grants_revoked": revoked},
+                    status_code=200,
+                )
+            except Exception:
+                pass
         return web.json_response({"ok": True})
     return web.json_response({"error": f"User {email} not found"}, status=404)
 

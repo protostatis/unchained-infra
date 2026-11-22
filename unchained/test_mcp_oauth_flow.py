@@ -658,6 +658,66 @@ class OAuthFlowTests(unittest.TestCase):
         )
         self.assertEqual(after.status_code, 401)
 
+    # -- account lifecycle -------------------------------------------------
+
+    async def _reject_user(self):
+        with self.auth._conn() as conn:
+            conn.execute(
+                "UPDATE users SET status = 'rejected' WHERE user_id = ?", (self.user_id,)
+            )
+
+    async def _case_rejected_account_loses_mcp_access(self):
+        _client, tokens, _, _, _ = await self._full_flow()
+        await self._reject_user()
+        resp = await self.client.post(
+            "/mcp",
+            json=_initialize_payload(9),
+            headers={
+                **JSON_HEADERS,
+                "Authorization": f"Bearer {tokens['access_token']}",
+            },
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+
+    async def _case_rejected_account_cannot_refresh(self):
+        client, tokens, _, _, grant_id = await self._full_flow()
+        await self._reject_user()
+        refreshed = await self.client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"],
+            },
+        )
+        self.assertEqual(refreshed.status_code, 400, refreshed.text)
+        self.assertEqual(refreshed.json()["error"], "invalid_grant")
+        # The connector is detached, not merely paused.
+        self.assertIsNone(self.store.get_grant(grant_id))
+
+    async def _case_key_revocation_kills_the_connector(self):
+        client, tokens, _, _, grant_id = await self._full_flow()
+        self.auth.revoke_key(self.api_key)
+        resp = await self.client.post(
+            "/mcp",
+            json=_initialize_payload(10),
+            headers={
+                **JSON_HEADERS,
+                "Authorization": f"Bearer {tokens['access_token']}",
+            },
+        )
+        self.assertEqual(resp.status_code, 401, resp.text)
+        refreshed = await self.client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"],
+            },
+        )
+        self.assertEqual(refreshed.status_code, 400)
+        self.assertIsNone(self.store.get_grant(grant_id))
+
     # -- registration switch ----------------------------------------------
 
     async def _case_dcr_can_be_disabled(self):
@@ -718,6 +778,9 @@ for _name in (
     "refresh_rotation_and_replay",
     "revocation_stops_access",
     "grant_revocation_stops_access",
+    "rejected_account_loses_mcp_access",
+    "rejected_account_cannot_refresh",
+    "key_revocation_kills_the_connector",
     "dcr_can_be_disabled",
 ):
     setattr(OAuthFlowTests, "test_" + _name, _make_test(_name))

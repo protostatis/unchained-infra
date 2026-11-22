@@ -18,8 +18,9 @@ from mcp_oauth_store import OAuthStore, agent_id_for_key, fingerprint_key
 
 
 class _FakeAuth:
-    def __init__(self, keys_by_user):
+    def __init__(self, keys_by_user, status="approved"):
         self._keys = keys_by_user
+        self.status = status
 
     def validate_key(self, key):
         for user_id, keys in self._keys.items():
@@ -29,6 +30,11 @@ class _FakeAuth:
 
     def get_keys_for_user(self, user_id):
         return list(self._keys.get(user_id, []))
+
+    def find_user_by_id(self, user_id):
+        if user_id not in self._keys and self.status is None:
+            return None
+        return {"user_id": user_id, "status": self.status}
 
 
 class ResolvePrincipalTests(unittest.TestCase):
@@ -144,6 +150,27 @@ class ResolvePrincipalTests(unittest.TestCase):
         self.assertIsNone(
             resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
         )
+
+    def test_rejected_account_token_resolves_to_nothing(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = "rejected"
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_pending_account_token_resolves_to_nothing(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = "pending"
+        self.assertIsNone(
+            resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        )
+
+    def test_legacy_key_without_user_row_still_resolves(self):
+        _grant_id, token = self._issue_token(fingerprint_key("uc_live_a"))
+        self.auth.status = None  # find_user_by_id -> None
+        self.auth._keys = {"user-1": ["uc_live_a"]}
+        principal = resolve_principal(f"Bearer {token}", auth=self.auth, store=self.store)
+        self.assertIsNotNone(principal)
 
     def test_grant_for_unknown_key_resolves_to_nothing(self):
         _grant_id, token = self._issue_token("f" * 64)

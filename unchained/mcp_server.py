@@ -20,6 +20,10 @@ import json
 import os
 import sys
 
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
+
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
@@ -39,8 +43,38 @@ from private_core_client import DEFAULT_CATCH_LIMIT, PrivateCoreError
 # MCP Server
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def _maintenance_lifespan(server):
+    """Prune expired OAuth state while the server is running.
+
+    Runs inside FastMCP's lifespan so startup/shutdown are defined and tests can
+    enter it.  Pruning is blocking SQLite work, so it runs off the event loop.
+    """
+    task = None
+    if _oauth_enabled():
+        task = asyncio.create_task(_prune_forever())
+    try:
+        yield {}
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def _prune_forever(interval: int = 600) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_oauth_store().prune)
+        except Exception:
+            # Maintenance must never take the server down.
+            continue
+
+
 mcp = FastMCP(
     "unchained",
+    lifespan=_maintenance_lifespan,
     instructions=(
         "Unchained browser automation tools. Use DDM (dom density map) for "
         "page orientation (~500 tokens), intel for extraction strategy "

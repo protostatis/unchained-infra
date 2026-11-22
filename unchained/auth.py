@@ -314,13 +314,30 @@ class Auth:
             return {"user_id": row[0], "key": key}
 
     def create_key(self, user_id: str) -> str:
-        """Generate and store a new API key. Returns the key string."""
+        """Generate and store a new API key. Returns the key string.
+
+        Refuses for a rejected account.  The status check and the insert share
+        one write transaction so a rejection cannot race key creation and leave
+        a fresh active key behind.  A missing user row is allowed: some
+        identities predate the users table.
+        """
         key = KEY_PREFIX + secrets.token_hex(KEY_RAND_BYTES)
         with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)",
-                (key, user_id, time.time()),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT status FROM users WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                if row is not None and (row[0] or "approved") == "rejected":
+                    raise ValueError(f"User {user_id} is rejected")
+                conn.execute(
+                    "INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)",
+                    (key, user_id, time.time()),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
         return key
 
     def revoke_key(self, key: str) -> bool:
@@ -331,6 +348,14 @@ class Auth:
                 (key,),
             )
             return cur.rowcount > 0
+
+    def is_key_active(self, key: str) -> bool:
+        """True when the key exists and has not been deactivated."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT active FROM api_keys WHERE key = ?", (key,)
+            ).fetchone()
+        return bool(row and row[0])
 
     def get_keys_for_user(self, user_id: str) -> list[str]:
         """Get all active API keys belonging to a user."""
@@ -730,36 +755,85 @@ class Auth:
                 "api_key": None, "status": "pending", "user_type": user_type}
 
     def approve_user(self, email: str) -> dict | None:
-        """Approve a pending user by setting status='approved'.
+        """Approve a pending or rejected user by setting status='approved'.
 
-        If the user already has an API key (for example, pending trial/demo
-        access), keep that key. Otherwise create one.
+        Re-approval after a rejection must not hand back the deactivated key:
+        a fresh one is issued in the same transaction.
         """
         email = email.lower()
-        user = self.find_user_by_email(email)
-        if not user:
-            return None
-        api_key = user.get("api_key")
-        if not api_key:
-            api_key = self.create_key(user["user_id"])
         with self._conn() as conn:
-            conn.execute(
-                "UPDATE users SET status = 'approved', api_key = ? WHERE email = ?",
-                (api_key, email),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT user_id, api_key FROM users WHERE email = ?", (email,)
+                ).fetchone()
+                if row is None:
+                    conn.execute("ROLLBACK")
+                    return None
+                user_id = row[0]
+                api_key = row[1]
+                active = False
+                if api_key:
+                    key_row = conn.execute(
+                        "SELECT active FROM api_keys WHERE key = ?", (api_key,)
+                    ).fetchone()
+                    active = bool(key_row and key_row[0])
+                if api_key and active:
+                    conn.execute(
+                        "UPDATE users SET status = 'approved' WHERE user_id = ?",
+                        (user_id,),
+                    )
+                else:
+                    api_key = KEY_PREFIX + secrets.token_hex(KEY_RAND_BYTES)
+                    conn.execute(
+                        "INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)",
+                        (api_key, user_id, time.time()),
+                    )
+                    conn.execute(
+                        "UPDATE users SET status = 'approved', api_key = ? WHERE user_id = ?",
+                        (api_key, user_id),
+                    )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+
+        user = self.find_user_by_email(email)
+        if user is None:
+            return None
         user["status"] = "approved"
         user["api_key"] = api_key
         return user
 
     def reject_user(self, email: str) -> bool:
-        """Reject a user. Returns True if user existed."""
+        """Reject a user and deactivate every key they hold.
+
+        Status and keys change in one transaction: a rejected account must not
+        keep a working credential even if a later cleanup step fails.
+        """
         email = email.lower()
         with self._conn() as conn:
-            cur = conn.execute(
-                "UPDATE users SET status = 'rejected' WHERE email = ?",
-                (email,),
-            )
-            return cur.rowcount > 0
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT user_id FROM users WHERE email = ?", (email,)
+                ).fetchone()
+                if row is None:
+                    conn.execute("ROLLBACK")
+                    return False
+                user_id = row[0]
+                conn.execute(
+                    "UPDATE users SET status = 'rejected' WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute(
+                    "UPDATE api_keys SET active = 0 WHERE user_id = ?", (user_id,)
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return True
 
     def list_pending_users(self) -> list[dict]:
         """Return all users with status='pending'."""

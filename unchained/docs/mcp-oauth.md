@@ -50,17 +50,30 @@ Key properties:
 - **Opaque tokens, hashed at rest.** Access (`uco_at_`), refresh (`uco_rt_`) and
   codes (`uco_ac_`) are random 256-bit values; only SHA-256 hashes are stored.
   Revocation is a row update, not a JWT blacklist.
-- **Refresh rotation with replay detection.** A rotated refresh token presented
-  again revokes the whole token family, including live access tokens.
+- **Refresh rotation with replay detection.** Rotation consumes the old token
+  and issues its successor inside one transaction. A rotated token presented
+  again by its own client revokes the whole family, including live access
+  tokens. There is deliberately **no grace window**: tolerating a re-submitted
+  token would fork the family and let a thief keep rotating independently.
+- **Bounded connection lifetime.** A family expires 90 days after it was
+  created, regardless of rotation, while each refresh token still has a sliding
+  30-day lifetime. Rotation cannot renew a connection forever.
 - **One grant, one browser.** The consent screen pins the exact `agent_id`.
   Every tool call re-checks the pin; another profile of the same key is a
   different browser and is refused.
 - **Provisioned Chromes are out of scope.** A connector cannot list, launch or
   target `prov-` tabs; a middleware applies that to every tool call, so a new
   tool is covered without another call-site check.
-- **Key revocation is immediate.** Each OAuth call confirms the grant's backing
-  API key is still active, so revoking a key cuts connector access at once
-  rather than waiting out the 15-minute access token.
+- **Key revocation is immediate.** Transport-level token verification and each
+  tool call both confirm the grant's backing API key is still active, so
+  revoking a key cuts connector access at once rather than waiting out the
+  15-minute access token.
+- **Account rejection is immediate and total.** Rejecting a user deactivates
+  every key and revokes every connector grant in one transaction; the admin
+  action also detaches grants explicitly. Re-approval issues a *fresh* key and
+  never resurrects the old one or its grants.
+- **OAuth requires an approved account.** API-key callers are unchanged, so
+  pending trial access keeps working exactly as before.
 - **No bearer upgrade.** Only a real browser session can approve; an API key
   sent to `/oauth/consent` cannot mint a grant.
 - **The master switch gates credentials, not just routes.** With
@@ -171,6 +184,28 @@ loopback allowed only for native clients an operator registered.
 - Browser provisioning (`cdp_provision_launch`) is denied for OAuth callers: a
   new Chrome from another profile would widen what consent promised.
 
+## Account lifecycle
+
+| Event | Effect |
+|---|---|
+| Admin rejects a user | Status set, **all keys deactivated**, grants revoked — atomically |
+| User re-approved | Status set, a **new** key issued if the stored one is inactive |
+| Key revoked | Its grants are revoked on the next OAuth call (transport + tool layer) |
+| Grant disconnected at `/oauth/connections` | Grants, tokens and token families revoked immediately |
+| Rejected/pending account holds a token | OAuth refused; API-key behaviour unchanged |
+
+Key creation is refused for a rejected account, inside the same write
+transaction as the insert, so a rejection cannot race a fresh key into
+existence.
+
+## Maintenance
+
+The MCP server runs a prune task inside FastMCP's lifespan (every 10 minutes,
+off the event loop). It removes expired authorization requests, approvals and
+codes, expired access tokens, and token families that have been expired or
+revoked for more than 7 days. Consumed refresh ancestors are kept while their
+family is alive — that is what makes replay detectable.
+
 ## Deliberately not built
 
 - JWTs, JWKS or distributed signing.
@@ -182,6 +217,9 @@ loopback allowed only for native clients an operator registered.
 
 ## Known interop details
 
+- Source-IP rate limiting on `/authorize` is not implemented yet; it needs
+  trusted-proxy handling in the MCP service, which currently has none. The
+  per-client and global outstanding-request ceilings are the current bound.
 - The MCP SDK's `RevocationRequest` requires a `client_secret` field in the form
   even for public clients; clients that omit it get `400 invalid_request` from
   `/revoke`. Revoking from `/oauth/connections` is unaffected.
@@ -201,6 +239,7 @@ python test_mcp_oauth_flow.py      # discovery -> consent -> code -> token -> /m
 python test_mcp_oauth_policy.py    # URI validation, policy matching, labels
 python test_mcp_oauth_consent.py   # the handler a browser actually hits
 python test_mcp_identity.py        # credential -> principal -> pinned agent
+python test_auth_lifecycle.py      # rejection, re-approval, key creation
 python test_mcp_oauth_gate.py      # the master switch gates credentials
 python test_mcp_server.py          # existing tool behaviour unchanged
 ```
