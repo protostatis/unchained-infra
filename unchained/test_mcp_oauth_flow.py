@@ -556,8 +556,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "code_verifier": verifier,
             },
         )
-        self.assertEqual(replay.status_code, 400)
-        self.assertEqual(replay.json()["error"], "invalid_grant")
+        self._assert_token_error(replay)
 
     async def _case_wrong_verifier_is_rejected(self):
         client = await self._register()
@@ -574,8 +573,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "code_verifier": other_verifier,
             },
         )
-        self.assertEqual(wrong.status_code, 400)
-        self.assertEqual(wrong.json()["error"], "invalid_grant")
+        self._assert_token_error(wrong)
 
     async def _case_complete_rejects_unknown_ticket(self):
         resp = await self.client.get("/oauth/complete", params={"ticket": "nope"})
@@ -609,8 +607,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(replay.status_code, 400)
-        self.assertEqual(replay.json()["error"], "invalid_grant")
+        self._assert_token_error(replay)
 
         # Replay revokes the whole family, including the rotated token.
         after = await self.client.post(
@@ -621,7 +618,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(after.status_code, 400)
+        self._assert_token_error(after)
 
     async def _case_revocation_stops_access(self):
         client, tokens, _, _, _ = await self._full_flow()
@@ -660,6 +657,13 @@ class OAuthFlowTests(unittest.TestCase):
 
     # -- account lifecycle -------------------------------------------------
 
+    def _assert_token_error(self, response, code="invalid_grant"):
+        # FastMCP 4 returns 401 for token errors (MCP spec: invalid or expired
+        # tokens MUST be 401); the 2.x line returned 400 from the SDK. The
+        # error code in the body is the stable contract.
+        self.assertIn(response.status_code, (400, 401), response.text)
+        self.assertEqual(response.json().get("error"), code)
+
     async def _reject_user(self):
         with self.auth._conn() as conn:
             conn.execute(
@@ -692,8 +696,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(refreshed.status_code, 400, refreshed.text)
-        self.assertEqual(refreshed.json()["error"], "invalid_grant")
+        self._assert_token_error(refreshed)
         # The connector is detached, not merely paused.
         self.assertIsNone(self.store.get_grant(grant_id))
 
@@ -717,7 +720,7 @@ class OAuthFlowTests(unittest.TestCase):
                 "client_id": client["client_id"],
             },
         )
-        self.assertEqual(refreshed.status_code, 400)
+        self._assert_token_error(refreshed)
         self.assertIsNone(self.store.get_grant(grant_id))
 
     # -- registration switch ----------------------------------------------

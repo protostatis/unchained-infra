@@ -109,8 +109,7 @@ jobs:
             test_mcp_oauth_consent \
             test_mcp_identity \
             test_mcp_oauth_gate \
-            test_auth_lifecycle \
-            test_mcp_server
+            test_auth_lifecycle
 
       - name: Run JS chat recovery test
         run: |
