@@ -1651,11 +1651,13 @@ done
 # land them beside relay.py where the Dockerfile does not look.
 echo "==> Uploading operator scripts..."
 SCRIPT_UPLOAD_FILES=()
+nullglob_was_set=0
+shopt -q nullglob && nullglob_was_set=1
 shopt -s nullglob
 for script_path in unchained/scripts/*.py; do
     SCRIPT_UPLOAD_FILES+=("$script_path")
 done
-shopt -u nullglob
+[[ "$nullglob_was_set" -eq 1 ]] || shopt -u nullglob
 if [[ "${#SCRIPT_UPLOAD_FILES[@]}" -eq 0 ]]; then
     echo "    (no operator scripts to upload)"
 else

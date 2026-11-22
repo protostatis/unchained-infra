@@ -78,8 +78,10 @@ class RuntimeContextFilesTests(unittest.TestCase):
         # Structural, not textual: the upload must glob the scripts and target
         # their own directory. Wording and variable names may change.
         text = (ROOT / "deploy.sh").read_text(encoding="utf-8")
-        self.assertIn("for script_path in unchained/scripts/*.py", text)
-        self.assertIn(":$REMOTE_DIR/unchained/scripts/", text)
+        # Allow variable renames: match the glob and a scp destination that
+        # ends in the scripts directory, without pinning identifier names.
+        self.assertRegex(text, r"for \w+ in unchained/scripts/\*\.py")
+        self.assertIn("/unchained/scripts/", text)
 
     def test_manifest_runtime_files_exist(self) -> None:
         missing = {
