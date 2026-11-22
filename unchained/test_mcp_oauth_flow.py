@@ -496,6 +496,37 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(complete.status_code, 403, complete.text)
         self.assertNotIn("code=", complete.headers.get("location", ""))
 
+    async def _case_changed_callback_cannot_receive_a_code(self):
+        self.store.save_client(
+            client_id="manual-1",
+            client_name="Manual",
+            redirect_uris=[REDIRECT_URI],
+            source="manual",
+        )
+        client = {"client_id": "manual-1"}
+        resp, _verifier = await self._authorize(client)
+        request_id = resp.headers["location"].split("request=", 1)[1]
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id=self.user_id,
+            agent_id="claude-deadbeef",
+            key_hash="deadbeef",
+            key_fingerprint=hashlib.sha256(self.api_key.encode()).hexdigest(),
+            scopes=["mcp:browser"],
+            resource=RESOURCE,
+        )
+        # Operator re-registers the client with a different callback while the
+        # approval is still live.
+        self.store.save_client(
+            client_id="manual-1",
+            client_name="Manual",
+            redirect_uris=["https://connector.test/other"],
+            source="manual",
+        )
+        complete = await self.client.get("/oauth/complete", params={"ticket": ticket})
+        self.assertEqual(complete.status_code, 403, complete.text)
+        self.assertNotIn("code=", complete.headers.get("location", ""))
+
     async def _case_authorize_allocation_is_bounded(self):
         import mcp_oauth_provider as provider_module
 
@@ -678,6 +709,7 @@ for _name in (
     "one_bad_callback_blocks_the_whole_registration",
     "withdrawing_a_policy_blocks_the_client",
     "withdrawn_policy_cannot_deliver_a_code",
+    "changed_callback_cannot_receive_a_code",
     "authorize_allocation_is_bounded",
     "code_cannot_be_reused",
     "wrong_verifier_is_rejected",

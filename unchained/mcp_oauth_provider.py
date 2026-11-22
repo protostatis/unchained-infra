@@ -460,6 +460,12 @@ def install_complete_route(mcp, provider: "MCPOAuthProvider") -> None:
             return PlainTextResponse(
                 "This app's callback address is no longer approved.", status_code=403
             )
+        # The request was authorized against a callback on record at that time;
+        # if the registration has since changed, do not send the code there.
+        if pending is not None and pending["redirect_uri"] not in client["redirect_uris"]:
+            return PlainTextResponse(
+                "This app's callback address changed; reconnect it.", status_code=403
+            )
         try:
             payload = provider.store.complete_request(ticket)
         except ValueError as exc:

@@ -56,7 +56,9 @@ DEFAULT_POLICIES: tuple[dict, ...] = (
 )
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
-_BAD_PERCENT = re.compile(r"%(?:2f|5c|00|3f|23)", re.IGNORECASE)
+# Encoded separators, dots and double-encoding: a browser decodes these before
+# navigating, so a string compared literally here could land somewhere else.
+_BAD_PERCENT = re.compile(r"%(?:2e|2f|25|5c|00|3f|23)", re.IGNORECASE)
 _PUNYCODE = "xn--"
 
 
@@ -106,6 +108,8 @@ def validate_redirect_uri(
     host = parsed.hostname.lower()
     if _PUNYCODE in host:
         raise RedirectURIError("redirect URI host must not be punycode-encoded")
+    if "%" in host:
+        raise RedirectURIError("redirect URI host must not contain percent-encoding")
     if host.endswith("."):
         raise RedirectURIError("redirect URI host must not end with a dot")
 
@@ -120,7 +124,7 @@ def validate_redirect_uri(
         raise RedirectURIError("redirect URI path must be absolute")
     if _BAD_PERCENT.search(parsed.path) or _BAD_PERCENT.search(parsed.query):
         raise RedirectURIError("redirect URI contains an encoded separator or control byte")
-    if ".." in parsed.path.split("/"):
+    if any(segment in (".", "..") for segment in parsed.path.split("/")):
         raise RedirectURIError("redirect URI path must not contain dot segments")
     if parsed.query and not allow_query:
         raise RedirectURIError("redirect URI must not contain a query string")

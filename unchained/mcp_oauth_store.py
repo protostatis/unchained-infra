@@ -555,13 +555,16 @@ class OAuthStore:
         unauthenticated caller can create rows. Bounded so a large backlog is
         drained across requests instead of holding the write lock.
         """
+        # An approval ticket outlives its request by APPROVAL_TICKET_TTL, so a
+        # request must not be swept while a ticket minted from it is still
+        # usable; completion needs the request row.
         conn.execute(
             """
             DELETE FROM mcp_oauth_requests WHERE rowid IN (
                 SELECT rowid FROM mcp_oauth_requests WHERE expires_at < ? LIMIT 200
             )
             """,
-            (now,),
+            (now - APPROVAL_TICKET_TTL,),
         )
         conn.execute(
             """

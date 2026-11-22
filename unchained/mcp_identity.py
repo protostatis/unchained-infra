@@ -183,9 +183,10 @@ def target_agent(principal: Principal, requested: str, *, auth=None) -> str:
     # reachable without a fresh consent.
     if requested == agent_profile(pinned):
         return pinned
+    wanted = agent_label(requested) if is_full_agent_id(requested) else requested
     raise IdentityError(
         f"This connector is limited to {agent_label(pinned)}; "
-        f"reconnect it to use {agent_label(requested) or requested}."
+        f"reconnect it to use {wanted}."
     )
 
 

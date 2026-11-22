@@ -100,6 +100,18 @@ class ValidateRedirectURITests(unittest.TestCase):
     def test_allows_query_when_permitted(self):
         self.check_ok("https://example.test/cb?next=/x", allow_query=True)
 
+    def test_rejects_percent_encoded_host(self):
+        self.check_bad("https://%75nchainedsky.com/cb", "percent")
+
+    def test_rejects_encoded_dot_segments(self):
+        self.check_bad("https://example.test/allowed/%2e%2e/cb", "encoded")
+
+    def test_rejects_double_encoded_values(self):
+        self.check_bad("https://example.test/cb%252fnext", "encoded")
+
+    def test_rejects_single_dot_segment(self):
+        self.check_bad("https://example.test/./cb", "dot segments")
+
     def test_rejects_empty(self):
         self.check_bad("", "empty")
 

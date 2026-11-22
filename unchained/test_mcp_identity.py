@@ -228,6 +228,22 @@ class TargetAgentTests(unittest.TestCase):
         with self.assertRaises(IdentityError):
             target_agent(oauth, agent_id_for_key(self.key, "work"))
 
+    def test_oauth_error_names_the_requested_profile(self):
+        oauth = Principal(
+            kind=KIND_OAUTH,
+            user_id=self.user_id,
+            caller_tag="tag",
+            agent_id="claude-deadbeef-facebook",
+            grant_id="g1",
+            scopes=("mcp:browser",),
+        )
+        with self.assertRaises(IdentityError) as ctx:
+            target_agent(oauth, "work")
+        message = str(ctx.exception)
+        self.assertIn("facebook", message)
+        self.assertIn("work", message)
+        self.assertNotIn("Default browser", message)
+
     def test_oauth_without_pinned_agent_rejected(self):
         oauth = Principal(
             kind=KIND_OAUTH,

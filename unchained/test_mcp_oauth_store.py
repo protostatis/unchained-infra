@@ -497,6 +497,29 @@ class RequestBudgetTests(StoreTestBase):
             remaining = conn.execute("SELECT COUNT(*) AS n FROM mcp_oauth_requests").fetchone()
         self.assertEqual(int(remaining["n"]), 1)
 
+    def test_sweep_keeps_requests_with_a_live_approval_ticket(self):
+        self._client()
+        request_id = self._create()
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id="user-1",
+            agent_id="claude-aaaaaaaa",
+            key_hash="aaaaaaaa",
+            key_fingerprint="f" * 64,
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+        # Request row is past its own expiry but the ticket (2 min) is still live.
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE mcp_oauth_requests SET expires_at = ? WHERE id = ?",
+                (time.time() - 5, request_id),
+            )
+        self._create()  # triggers the sweep
+        self.assertIsNotNone(self.store.get_request(request_id))
+        payload = self.store.complete_request(ticket)
+        self.assertTrue(payload["code"].startswith(AUTHORIZATION_CODE_PREFIX))
+
     def test_expired_pending_rows_do_not_count(self):
         self._client()
         request_id = self._create(max_per_client=1)
