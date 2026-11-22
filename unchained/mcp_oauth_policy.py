@@ -30,10 +30,12 @@ from urllib.parse import urlsplit
 
 MAX_REDIRECT_URI_LEN = 2048
 
-# Verified destinations only.  A connector whose callback is not listed can
-# still be added by an operator; automatic registration simply refuses it.
-# ChatGPT's callback is intentionally absent until it is verified by a real
-# connection attempt.
+# Static provider callbacks, seeded from code.  Each entry records the seed
+# version it arrived in, so an existing database receives only the entries it
+# has not seen: removing a policy stays removed across restarts, and a new
+# provider can still be shipped without re-adding anything an operator dropped.
+STATIC_POLICY_SET_VERSION = 2
+
 DEFAULT_POLICIES: tuple[dict, ...] = (
     {
         "scheme": "https",
@@ -43,6 +45,7 @@ DEFAULT_POLICIES: tuple[dict, ...] = (
         "match": "exact",
         "allow_query": 0,
         "note": "Claude custom connectors (Use Claude's published identity / own client)",
+        "since": 1,
     },
     {
         "scheme": "https",
@@ -52,6 +55,27 @@ DEFAULT_POLICIES: tuple[dict, ...] = (
         "match": "exact",
         "allow_query": 0,
         "note": "Gemini Enterprise custom MCP data store",
+        "since": 1,
+    },
+    {
+        "scheme": "https",
+        "host": "chatgpt.com",
+        "port": 443,
+        "path": "/connector/oauth/",
+        "match": "prefix",
+        "allow_query": 0,
+        "note": "ChatGPT custom MCP connector",
+        "since": 2,
+    },
+    {
+        "scheme": "https",
+        "host": "agent.meta.ai",
+        "port": 443,
+        "path": "/api/hatch/oauth/callback",
+        "match": "exact",
+        "allow_query": 0,
+        "note": "Meta Muse custom connector",
+        "since": 2,
     },
 )
 

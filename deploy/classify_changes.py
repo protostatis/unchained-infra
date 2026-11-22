@@ -119,6 +119,8 @@ UNCHAINED_OWNERSHIP: dict[str, set[str]] = {
     "unchained/mcp_oauth_policy.py": {"mcp", "web"},
     "unchained/mcp_oauth_store.py": {"mcp", "web"},
     "unchained/mcp_oauth_provider.py": {"mcp"},
+    "unchained/scripts/register_mcp_oauth_client.py": {"mcp"},
+    "unchained/scripts/manage_mcp_oauth_policy.py": {"mcp"},
 
     # hosted unbrowser MCP egress proxy image
     "unchained/unbrowser_ssrf_proxy.py": {"unbrowser-egress", "unbrowser-mcp"},

@@ -23,6 +23,7 @@ operation.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -58,7 +59,20 @@ def cmd_list(store: OAuthStore) -> int:
     return 0
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _loopback_host(host: str) -> bool:
+    """Policies gate automatic registration, and native loopback clients are
+    registered by an operator instead. A loopback policy can never admit
+    anything useful, so refuse it rather than storing a dead row."""
+    return str(host or "").strip().lower() in _LOOPBACK_HOSTS
+
+
 def cmd_add(store: OAuthStore, args) -> int:
+    if _loopback_host(args.host):
+        print("Refusing to add policy: loopback callbacks are registered manually, not by policy.")
+        return 2
     try:
         validate_redirect_uri(
             f"{args.scheme}://{args.host}{args.path}",
@@ -132,6 +146,86 @@ def cmd_revalidate(store: OAuthStore, args) -> int:
     return 0
 
 
+def cmd_export(store: OAuthStore, args) -> int:
+    fields = ("scheme", "host", "port", "path", "match", "allow_query", "note")
+    data = [{f: p[f] for f in fields} for p in store.list_policies()]
+    text = json.dumps(data, indent=2) + "\n"
+    if args.file:
+        with open(args.file, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print(f"Wrote {len(data)} policies to {args.file}")
+    else:
+        print(text, end="")
+    return 0
+
+
+def cmd_import(store: OAuthStore, args) -> int:
+    try:
+        with open(args.file, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Could not read {args.file}: {exc}")
+        return 2
+    if not isinstance(data, list):
+        print("Expected a JSON array of policies.")
+        return 2
+
+    # Normalise both sides: the store lowercases scheme and host on insert, but
+    # a row written by hand may not be canonical, and dedup must not depend on
+    # that.
+    existing = {
+        (
+            str(p["scheme"]).lower(),
+            str(p["host"]).lower(),
+            int(p["port"]),
+            str(p["path"]),
+            str(p["match"]),
+            int(p["allow_query"]),
+        )
+        for p in store.list_policies()
+    }
+    to_add = []
+    for entry in data:
+        try:
+            scheme = str(entry["scheme"]).lower()
+            host = str(entry["host"]).lower()
+            port = int(entry["port"])
+            path = str(entry["path"])
+            match = str(entry.get("match", "exact"))
+            allow_query = int(entry.get("allow_query", 0))
+        except (KeyError, TypeError, ValueError):
+            print(f"Skipping malformed entry: {entry!r}")
+            continue
+        if match not in ("exact", "prefix"):
+            print(f"Skipping entry with invalid match mode: {entry!r}")
+            continue
+        if _loopback_host(host):
+            print(f"Skipping {host}: loopback callbacks are registered manually, not by policy.")
+            continue
+        uri = f"{scheme}://{host}" + ("" if port in (443, 80) else f":{port}") + path
+        try:
+            validate_redirect_uri(uri, issuer=_issuer(), allow_loopback=False)
+        except RedirectURIError as exc:
+            print(f"Skipping {uri}: {exc}")
+            continue
+        key = (scheme, host, port, path, match, allow_query)
+        if key not in existing:
+            to_add.append(dict(scheme=scheme, host=host, port=port, path=path,
+                               match=match, allow_query=allow_query,
+                               note=str(entry.get("note", ""))))
+
+    print(f"{len(data)} entries in file; {len(to_add)} not present in this database.")
+    for entry in to_add:
+        print("  +", describe_policy(entry))
+    if not args.apply:
+        print("Dry run. Re-run with --apply to add them.")
+        return 0
+    for entry in to_add:
+        store.add_policy(**entry)
+    print(f"Added {len(to_add)} policies.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", help="SQLite path (default: UNCHAINED_DB_PATH)")
@@ -156,6 +250,13 @@ def main() -> int:
     )
     revalidate.add_argument("--apply", action="store_true")
 
+    export = sub.add_parser("export", help="dump policies as JSON (backup or review)")
+    export.add_argument("--file", help="write to this file instead of stdout")
+
+    imp = sub.add_parser("import", help="add policies from a JSON export")
+    imp.add_argument("--file", required=True)
+    imp.add_argument("--apply", action="store_true")
+
     args = parser.parse_args()
     store = _store(args)
     if args.command == "list":
@@ -164,6 +265,10 @@ def main() -> int:
         return cmd_add(store, args)
     if args.command == "remove":
         return cmd_remove(store, args)
+    if args.command == "export":
+        return cmd_export(store, args)
+    if args.command == "import":
+        return cmd_import(store, args)
     return cmd_revalidate(store, args)
 
 
