@@ -75,10 +75,11 @@ class RuntimeContextFilesTests(unittest.TestCase):
             )
 
     def test_operator_scripts_keep_their_subdirectory(self) -> None:
+        # Structural, not textual: the upload must glob the scripts and target
+        # their own directory. Wording and variable names may change.
         text = (ROOT / "deploy.sh").read_text(encoding="utf-8")
-        self.assertIn('mkdir -p "$remote_dir/unchained/scripts"', text)
-        self.assertIn("unchained/scripts/*.py", text)
-        self.assertIn("$REMOTE_DIR/unchained/scripts/", text)
+        self.assertIn("for script_path in unchained/scripts/*.py", text)
+        self.assertIn(":$REMOTE_DIR/unchained/scripts/", text)
 
     def test_manifest_runtime_files_exist(self) -> None:
         missing = {

@@ -1650,18 +1650,20 @@ done
 # the flat module upload above cannot create paths, and scp would otherwise
 # land them beside relay.py where the Dockerfile does not look.
 echo "==> Uploading operator scripts..."
-remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-remote_dir="$1"
-mkdir -p "$remote_dir/unchained/scripts"
-EOF
 SCRIPT_UPLOAD_FILES=()
 shopt -s nullglob
 for script_path in unchained/scripts/*.py; do
     SCRIPT_UPLOAD_FILES+=("$script_path")
 done
 shopt -u nullglob
-if [[ "${#SCRIPT_UPLOAD_FILES[@]}" -gt 0 ]]; then
+if [[ "${#SCRIPT_UPLOAD_FILES[@]}" -eq 0 ]]; then
+    echo "    (no operator scripts to upload)"
+else
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/scripts"
+EOF
     "${SCP_CMD[@]}" "${SCRIPT_UPLOAD_FILES[@]}" \
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/scripts/"
 fi
