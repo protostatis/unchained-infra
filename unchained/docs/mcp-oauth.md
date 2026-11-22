@@ -20,6 +20,27 @@ requires PKCE, Authorization Server Metadata and Dynamic Client Registration
 consoles for an arbitrary header or a static bearer token, so the endpoint has
 to become an authorization server.
 
+## Supported surfaces
+
+| Surface | Position |
+|---|---|
+| **Claude** custom connector | Supported OAuth path; exact callback allowlisted |
+| **Gemini CLI** | Supported bearer header (`gemini mcp add … --header`); no OAuth |
+| **Gemini web** (`gemini.google.com`) | Assisted preview; add via Settings → Connected apps in a normal browser |
+| **Gemini mobile** | No setup promise; use a connection created on the web if Google offers it |
+| **Gemini desktop** | **Embedded setup is not supported.** Its webview has no WebAuthn, so passkey accounts fail at Google's own sign-in before `/authorize` is ever reached |
+| **ChatGPT** | Not enabled; its callback is not in the policy table until verified by a real connection |
+| **Gemini Enterprise** | Assisted manual client (`scripts/register_mcp_oauth_client.py`) |
+
+Google's own help page documents custom apps as added in the web app and
+available in web and mobile. Do not promise desktop inheritance; the desktop
+app may present the same settings surface, but that flow is not documented and
+is where the embedded-webview failure occurs.
+
+Consumer custom apps are also restricted by Google to personal Google accounts,
+US, 18+, English, with History enabled. Link those restrictions rather than
+promising general availability.
+
 ## Shape of the solution
 
 The MCP server owns the protocol; the website owns the login. Both already
@@ -129,10 +150,13 @@ uv run scripts/manage_mcp_oauth_policy.py add \
     --note "ChatGPT custom MCP server"
 ```
 
-Removing a policy does not silently take effect: automatic clients whose stored
-callbacks no longer match are reported by `revalidate`, and only withdrawn with
-`--apply`, which revokes their grants and discards their pending requests in one
-transaction.
+Removing a policy takes effect **immediately for admission**: an automatic
+client whose stored callbacks no longer match is refused at `get_client`, so
+authorization, token and consent operations stop working for it. `revalidate`
+reports those clients, and `revalidate --apply` additionally revokes their
+grants and tokens, discards pending requests and deletes the client rows in one
+transaction. Running it is cleanup; not running it leaves unusable clients
+behind.
 
 Manual clients (registered by an operator) skip admission but never syntax
 validation: https only, no userinfo, no fragments, no issuer-host callbacks, and
@@ -226,6 +250,18 @@ family is alive — that is what makes replay detectable.
 - The 401 challenge includes `error="invalid_token"` alongside
   `resource_metadata`. Discovery works, but if a connector is strict about a
   bare challenge this is the first thing to adjust.
+- **Google Persistent Linking may require a stable refresh token.** Google's
+  Connected Apps guide describes returning the same refresh token rather than
+  rotating it. That conflicts with rotation here and is untested against a real
+  Gemini connection. Do not weaken rotation globally to satisfy an assumption;
+  measure it during the assisted Gemini-web test.
+- **A placeholder secret is not confidential-client authentication.** Manual and
+  Enterprise clients are registered as public (`token_endpoint_auth_method=none`),
+  and the secret field is ignored. Verify the console actually works that way
+  before describing it as supported.
+- **Embedded webviews cannot do WebAuthn.** Any client that signs the user in
+  through an in-app browser will fail for passkey-only Google accounts before
+  reaching this server.
 - The SDK requires `client_id` in the token request body. That matches RFC 6749
   §3.2.1 for public clients, so Basic-only client authentication is out of
   scope by design.
