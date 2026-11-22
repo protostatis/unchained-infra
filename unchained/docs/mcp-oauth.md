@@ -24,12 +24,12 @@ to become an authorization server.
 
 | Surface | Position |
 |---|---|
-| **Claude** custom connector | Supported OAuth path; exact callback allowlisted |
+| **Claude** custom connector | **Verified** (Claude Desktop): exact callback allowlisted, DCR, refresh rotation observed |
 | **Gemini CLI** | Supported bearer header (`gemini mcp add … --header`); no OAuth |
-| **Gemini web** (`gemini.google.com`) | Assisted preview; add via Settings → Connected apps in a normal browser |
+| **Gemini web** (`gemini.google.com`) | **Verified** (assisted): six exact callbacks per Google account binding; four refreshes observed over an hour |
 | **Gemini mobile** | No setup promise; use a connection created on the web if Google offers it |
 | **Gemini desktop** | **Embedded setup is not supported.** Its webview has no WebAuthn, so passkey accounts fail at Google's own sign-in before `/authorize` is ever reached |
-| **ChatGPT** | Not enabled; its callback is not in the policy table until verified by a real connection |
+| **ChatGPT** | **Verified** (chatgpt.com custom connector): dynamic `https://chatgpt.com/connector/oauth/` path admitted as a prefix |
 | **Gemini Enterprise** | Assisted manual client (`scripts/register_mcp_oauth_client.py`) |
 
 Google's own help page documents custom apps as added in the web app and
@@ -250,11 +250,13 @@ family is alive — that is what makes replay detectable.
 - The 401 challenge includes `error="invalid_token"` alongside
   `resource_metadata`. Discovery works, but if a connector is strict about a
   bare challenge this is the first thing to adjust.
-- **Google Persistent Linking may require a stable refresh token.** Google's
-  Connected Apps guide describes returning the same refresh token rather than
-  rotating it. That conflicts with rotation here and is untested against a real
-  Gemini connection. Do not weaken rotation globally to satisfy an assumption;
-  measure it during the assisted Gemini-web test.
+- **Refresh rotation is compatible with the tested providers.** Gemini consumer
+  accepted four rotations across an hour and ChatGPT rotated once, with no
+  family revoked by replay detection. Google's Persistent Linking guidance
+  describes returning a stable refresh token; the observed behaviour did not
+  require it. Other Google surfaces may differ, so do not treat this as a
+  blanket guarantee. The 90-day absolute family lifetime means an intentional
+  reconnect roughly quarterly.
 - **A placeholder secret is not confidential-client authentication.** Manual and
   Enterprise clients are registered as public (`token_endpoint_auth_method=none`),
   and the secret field is ignored. Verify the console actually works that way
