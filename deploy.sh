@@ -1478,6 +1478,7 @@ emit_deployed_paths() {
     done
     find unchained/web_app -type f \
         -not -path "*/__pycache__/*" -not -name "*.pyc" 2>/dev/null
+    find unchained/scripts -maxdepth 1 -type f -name "*.py" 2>/dev/null
     find unchained/installers -maxdepth 1 -type f 2>/dev/null
     for f in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do
         printf '%s\n' "research_desk_vendor/$f"
@@ -1644,6 +1645,30 @@ for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do
     BENCHMARK_UPLOAD_FILES+=("unchained/benchmark/$rel")
 done
 "${SCP_CMD[@]}" "${BENCHMARK_UPLOAD_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
+
+# Upload operator scripts shipped in the image. They keep their subdirectory:
+# the flat module upload above cannot create paths, and scp would otherwise
+# land them beside relay.py where the Dockerfile does not look.
+echo "==> Uploading operator scripts..."
+SCRIPT_UPLOAD_FILES=()
+nullglob_was_set=0
+shopt -q nullglob && nullglob_was_set=1
+shopt -s nullglob
+for script_path in unchained/scripts/*.py; do
+    SCRIPT_UPLOAD_FILES+=("$script_path")
+done
+[[ "$nullglob_was_set" -eq 1 ]] || shopt -u nullglob
+if [[ "${#SCRIPT_UPLOAD_FILES[@]}" -eq 0 ]]; then
+    echo "    (no operator scripts to upload)"
+else
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/scripts"
+EOF
+    "${SCP_CMD[@]}" "${SCRIPT_UPLOAD_FILES[@]}" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/scripts/"
+fi
 
 # Upload modular web_app package extracted from web.py
 echo "==> Uploading web_app package..."

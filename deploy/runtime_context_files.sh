@@ -44,8 +44,6 @@ UNCHAINED_RUNTIME_FILES=(
     "mcp_oauth_policy.py"
     "mcp_oauth_store.py"
     "mcp_oauth_provider.py"
-    "scripts/register_mcp_oauth_client.py"
-    "scripts/manage_mcp_oauth_policy.py"
     "unbrowser_mcp_router.py"
     "unbrowser_mcp_healthcheck.py"
     "unbrowser_ssrf_proxy.py"
