@@ -40,12 +40,11 @@ from mcp.shared.auth import OAuthClientInformationFull
 
 from fastmcp.server.auth import OAuthProvider
 
-from mcp_identity import user_is_eligible
+from mcp_identity import GRANT_VALID, grant_state, revoke_if_detached
 from mcp_oauth_store import (
     ACCESS_TOKEN_PREFIX,
     BudgetExceeded,
     OAuthStore,
-    fingerprint_key,
 )
 from mcp_oauth_policy import (
     RedirectURIError,
@@ -274,8 +273,9 @@ class MCPOAuthProvider(OAuthProvider):
                 error_description="authorization code is invalid or already used",
             )
         # The grant is only as valid as its account and its backing key.
-        if not self._grant_still_valid(consumed.get("grant_id")):
-            self.store.revoke_grant(consumed["grant_id"])
+        state = grant_state(_auth(), self.store, consumed.get("grant_id"))
+        if state != GRANT_VALID:
+            revoke_if_detached(self.store, consumed.get("grant_id"), state)
             raise TokenError(
                 error="invalid_grant",
                 error_description="the linked account or API key is no longer active",
@@ -339,8 +339,9 @@ class MCPOAuthProvider(OAuthProvider):
                 error_description="refresh token is invalid or expired",
             )
         granted = rotated.get("scopes") or scopes or refresh_token.scopes
-        if not self._grant_still_valid(rotated["grant_id"]):
-            self.store.revoke_grant(rotated["grant_id"])
+        state = grant_state(_auth(), self.store, rotated["grant_id"])
+        if state != GRANT_VALID:
+            revoke_if_detached(self.store, rotated["grant_id"], state)
             raise TokenError(
                 error="invalid_grant",
                 error_description="the linked account or API key is no longer active",
@@ -355,8 +356,12 @@ class MCPOAuthProvider(OAuthProvider):
             if row is None:
                 return None
             # Transport-level check must match the tool-level one: a revoked
-            # account or key has to fail here too, not only on tool dispatch.
-            if not self._grant_still_valid(row["grant_id"]):
+            # account or key has to fail here too, not only on tool dispatch,
+            # and a confirmed detachment revokes the grant rather than merely
+            # refusing this request.
+            state = grant_state(_auth(), self.store, row["grant_id"])
+            if state != GRANT_VALID:
+                revoke_if_detached(self.store, row["grant_id"], state)
                 return None
             if row["resource"] and row["resource"].rstrip("/") != self.resource.rstrip("/"):
                 return None
@@ -388,21 +393,9 @@ class MCPOAuthProvider(OAuthProvider):
 
     # -- helpers -----------------------------------------------------------
 
-    def _grant_still_valid(self, grant_id: str | None) -> bool:
-        """Grant is live, its account is eligible, and its key is still active."""
-        if not grant_id:
-            return False
-        grant = self.store.get_grant(grant_id)
-        if grant is None:
-            return False
-        auth = _auth()
-        if not user_is_eligible(auth, grant["user_id"]):
-            return False
-        try:
-            keys = auth.get_keys_for_user(grant["user_id"])
-        except Exception:
-            return False
-        return any(fingerprint_key(k) == grant["key_fingerprint"] for k in keys)
+    # Grant eligibility lives in mcp_identity.grant_state, shared with the
+    # tool layer so transport and dispatch cannot disagree.
+
 
 
 _AUTH: list[Any] = []

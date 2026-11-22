@@ -81,9 +81,9 @@ def resolve_principal(
         # A grant is only as valid as the API key it was pinned to.  Checking
         # here (not just at refresh time) means revoking a key cuts connector
         # access immediately instead of waiting out the access-token TTL.
-        if not user_is_eligible(auth, row["user_id"]):
-            return None
-        if not _grant_key_active(auth, row["user_id"], row["key_fingerprint"]):
+        state = grant_state(auth, store, row["grant_id"])
+        if state != GRANT_VALID:
+            revoke_if_detached(store, row["grant_id"], state)
             return None
         # Cheap constant-time-ish tag so provisioning cleanup can never collide
         # with an API-key caller's tag.
@@ -108,6 +108,13 @@ def resolve_principal(
     )
 
 
+GRANT_VALID = "valid"
+GRANT_GONE = "gone"
+GRANT_ACCOUNT = "account"
+GRANT_KEY = "key"
+GRANT_UNKNOWN = "unknown"
+
+
 def user_is_eligible(auth, user_id: str) -> bool:
     """Whether an account may still act through a delegated connector.
 
@@ -124,17 +131,37 @@ def user_is_eligible(auth, user_id: str) -> bool:
     return (user.get("status") or "approved") == "approved"
 
 
-def _grant_key_active(auth, user_id: str, key_fingerprint: str) -> bool:
-    if not key_fingerprint:
-        return False
+def grant_state(auth, store, grant_id: str | None) -> str:
+    """Classify a grant without side effects.
+
+    ``GRANT_UNKNOWN`` exists so a transient database failure cannot be mistaken
+    for a revoked account and trigger a destructive cleanup.
+    """
+    if not grant_id:
+        return GRANT_GONE
     try:
-        keys = auth.get_keys_for_user(user_id)
+        grant = store.get_grant(grant_id)
+        if grant is None:
+            return GRANT_GONE
+        user = auth.find_user_by_id(grant["user_id"])
+        if user is not None and (user.get("status") or "approved") != "approved":
+            return GRANT_ACCOUNT
+        keys = auth.get_keys_for_user(grant["user_id"])
+        for key in keys:
+            if hashlib.sha256(key.encode()).hexdigest() == grant["key_fingerprint"]:
+                return GRANT_VALID
+        return GRANT_KEY
     except Exception:
-        return False
-    for key in keys:
-        if hashlib.sha256(key.encode()).hexdigest() == key_fingerprint:
-            return True
-    return False
+        return GRANT_UNKNOWN
+
+
+def revoke_if_detached(store, grant_id: str | None, state: str) -> None:
+    """Drop a grant once its account or key is confirmed to be gone."""
+    if state in (GRANT_ACCOUNT, GRANT_KEY):
+        try:
+            store.revoke_grant(grant_id)
+        except Exception:
+            pass
 
 
 # Provisioned Chromes are temporary browsers launched with an arbitrary local

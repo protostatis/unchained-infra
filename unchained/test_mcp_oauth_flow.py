@@ -667,7 +667,7 @@ class OAuthFlowTests(unittest.TestCase):
             )
 
     async def _case_rejected_account_loses_mcp_access(self):
-        _client, tokens, _, _, _ = await self._full_flow()
+        _client, tokens, _, _, grant_id = await self._full_flow()
         await self._reject_user()
         resp = await self.client.post(
             "/mcp",
@@ -678,6 +678,8 @@ class OAuthFlowTests(unittest.TestCase):
             },
         )
         self.assertEqual(resp.status_code, 401, resp.text)
+        # Request-time enforcement detaches the connector, not just the call.
+        self.assertIsNone(self.store.get_grant(grant_id))
 
     async def _case_rejected_account_cannot_refresh(self):
         client, tokens, _, _, grant_id = await self._full_flow()
