@@ -103,6 +103,7 @@ jobs:
             test_trial_new_chat \
             test_web_contracts \
             test_workbench_shell_regression \
+            test_dockerfile_copies \
             test_mcp_oauth_policy \
             test_mcp_oauth_store \
             test_mcp_oauth_flow \

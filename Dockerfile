@@ -25,6 +25,10 @@ COPY unchained/challenge_detection.py .
 COPY unchained/domain_policy.py .
 COPY unchained/api.py .
 COPY unchained/mcp_server.py .
+COPY unchained/mcp_identity.py .
+COPY unchained/mcp_oauth_policy.py .
+COPY unchained/mcp_oauth_store.py .
+COPY unchained/mcp_oauth_provider.py .
 COPY unchained/orchestrator.py .
 COPY unchained/cdp.py .
 COPY unchained/ddm.py .
