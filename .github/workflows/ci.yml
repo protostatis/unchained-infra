@@ -102,6 +102,7 @@ jobs:
             test_web_routes \
             test_trial_new_chat \
             test_web_contracts \
+            test_template_transforms \
             test_workbench_shell_regression \
             test_dockerfile_copies \
             test_mcp_oauth_policy \

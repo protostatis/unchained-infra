@@ -319,6 +319,10 @@ class TestTemplateTransforms(unittest.TestCase):
             "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #profile-note",
             html,
         )
+        self.assertIn(
+            "body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #agent-bar{display:none!important}",
+            html,
+        )
         # Touch copy button must not paint over assistant text.
         self.assertIn(
             "body.agent-view-open #main .bubble.asst{padding-right:80px!important}",
@@ -341,15 +345,20 @@ class TestTemplateTransforms(unittest.TestCase):
             "#archive-panel .archive-close{width:44px;min-width:44px;height:44px;min-height:44px;display:grid;place-items:center;padding:0}",
             html,
         )
-        # Mobile keeps the hosted banner to one line while leaving the full
-        # explanation in the accessibility tree (and the banner title).
+        # Mobile keeps the ordinary funded banner to one line while leaving the
+        # full explanation in the accessibility tree (and the banner title).
+        # Exceptional states (exhausted/unavailable/capped) keep visible copy.
         self.assertIn(
-            "body.hosted-workspace #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;",
+            "body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;",
             html,
+        )
+        self.assertIn("compactCopy = available > 0;", html)
+        self.assertIn(
+            "notice.classList.toggle('hosted-compact-copy', compactCopy);", html
         )
         self.assertIn("notice.title = copyText;", html)
         self.assertIn(
-            "window.matchMedia('(max-width:760px)').matches",
+            "!(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;",
             html,
         )
         # The browser chat sheet does not show the model/profile selector, so it

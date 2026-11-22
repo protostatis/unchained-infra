@@ -9793,7 +9793,8 @@ function _setHostedAccessCopy(copy, message, autoDismiss) {
   const expectedMessage = nextMessage;
   copy._dismissTimer = setTimeout(function() {
     copy._dismissTimer = null;
-    if (copy.textContent === expectedMessage) copy.hidden = true;
+    if (copy.textContent === expectedMessage &&
+        !(window.matchMedia && window.matchMedia('(max-width:760px)').matches)) copy.hidden = true;
   }, 30000);
 }
 
@@ -9813,6 +9814,7 @@ function _renderHostedAccessUi() {
   notice.classList.toggle('funded', funded);
   let copyText = '';
   let autoDismissCopy = false;
+  let compactCopy = false;
   if (!_creditState || _creditState.available === false) {
     label.textContent = 'Hosted access';
     copyText = 'Credit status is temporarily unavailable. Retrying automatically.';
@@ -9824,6 +9826,7 @@ function _renderHostedAccessUi() {
       : 'Credit is exhausted. Free hosted models remain available.';
     autoDismissCopy = available > 0;
     if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) autoDismissCopy = false;
+    compactCopy = available > 0;
   } else if (_openrouterUsage && _openrouterUsage.capped) {
     label.textContent = 'Free trial limit reached';
     copyText = 'Free hosted models remain available, or switch to local provider mode.';
@@ -9832,6 +9835,7 @@ function _renderHostedAccessUi() {
     copyText = 'Lightweight hosted models with a dedicated browser workspace. No provider API key required.';
   }
   _setHostedAccessCopy(copy, copyText, autoDismissCopy);
+  notice.classList.toggle('hosted-compact-copy', compactCopy);
   notice.title = copyText;
   if (hintTitle) hintTitle.textContent = hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat';
   if (hintSub) {
@@ -21853,7 +21857,7 @@ body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #new-chat-feedback,
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-open):not(.agent-view-chat-expanded) #main #agent-bar{display:none!important}
   body.agent-view-open #main .bubble.asst{padding-right:80px!important}
-  body.hosted-workspace #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+  body.hosted-workspace #model-notice.hosted-compact-copy #hosted-access-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
   body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only):not(.agent-view-chat-expanded) #main #profile-note{display:none!important}
   body.agent-shell-task .agent-view-chat-toggle{font-size:11px!important}
   body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:11px!important}
