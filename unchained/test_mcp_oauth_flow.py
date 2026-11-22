@@ -203,15 +203,32 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400, resp.text)
         self.assertEqual(resp.json()["error"], "invalid_redirect_uri")
 
-    async def _case_registration_rejects_confidential_client(self):
+    async def _case_confidential_registration_is_accepted_as_public(self):
+        """Consoles register with client_secret_post; we treat them as public."""
         resp = await self.client.post(
             "/register",
             json={
-                "client_name": "Secret Client",
+                "client_name": "Gemini",
+                "redirect_uris": ["https://connector.test/callback"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "client_secret_post",
+            },
+        )
+        self.assertEqual(resp.status_code, 201, resp.text)
+        client_id = resp.json()["client_id"]
+        stored = self.store.get_client(client_id)
+        self.assertEqual(stored["token_endpoint_auth_method"], "none")
+
+    async def _case_registration_rejects_unknown_auth_method(self):
+        resp = await self.client.post(
+            "/register",
+            json={
+                "client_name": "Odd Client",
                 "redirect_uris": [REDIRECT_URI],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
-                "token_endpoint_auth_method": "client_secret_basic",
+                "token_endpoint_auth_method": "private_key_jwt",
             },
         )
         self.assertEqual(resp.status_code, 400, resp.text)
@@ -758,7 +775,8 @@ for _name in (
     "oauth_prefix_lookalike_is_rejected",
     "dynamic_registration",
     "registration_rejects_http_redirect",
-    "registration_rejects_confidential_client",
+    "confidential_registration_is_accepted_as_public",
+    "registration_rejects_unknown_auth_method",
     "registration_rejects_loopback_http",
     "authorize_redirects_to_consent",
     "authorize_rejects_foreign_resource",

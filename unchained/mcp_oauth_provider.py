@@ -176,12 +176,16 @@ class MCPOAuthProvider(OAuthProvider):
                     ),
                 )
 
-        # Public clients only: a secret we never issue cannot be leaked.
+        # Every Unchained client is public: PKCE binds the exchange and no
+        # secret is ever checked.  Consoles still register with a confidential
+        # method because the MCP SDK advertises client_secret_post/basic in
+        # discovery, so accept those spellings and store the client as public.
+        # The secret the console believes it has is ignored by get_client().
         method = client_info.token_endpoint_auth_method or "none"
-        if method != "none":
+        if method not in ("none", "client_secret_post", "client_secret_basic"):
             raise RegistrationError(
                 error="invalid_client_metadata",
-                error_description="only public clients (token_endpoint_auth_method=none) are supported",
+                error_description=f"unsupported token_endpoint_auth_method: {method}",
             )
 
         try:
