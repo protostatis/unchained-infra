@@ -1411,10 +1411,9 @@ EOF
 }
 
 prune_remote_deploy_backups() {
-    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+    remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
-current_backup="$2"
 backup_root="$remote_dir/.deploy-backups"
 [[ -d "$backup_root" ]] || exit 0
 # Keep the three newest snapshots (the current release is the newest) for
@@ -1439,26 +1438,36 @@ soft_gb="$2"
 hard_gb="$3"
 avail_gb() {
     # Bytes, then floor to GiB: `df -BG` rounds fractional blocks up, which
-    # would let 1.5GiB pass a 2GB floor and skip pruning at 4.5GiB.
+    # would let 1.5GiB pass a 2GB floor and skip pruning at 4.5GiB. Keep the
+    # sign so a full filesystem with reserved blocks reports negative space.
     local bytes
-    bytes="$(df --output=avail -B1 / | tail -1 | tr -dc '0-9')"
+    bytes="$(df --output=avail -B1 / | awk 'NR==2 {print $1}')"
     echo $(( bytes / 1024 / 1024 / 1024 ))
 }
 free_gb="$(avail_gb)"
+if [[ ! "$free_gb" =~ ^-?[0-9]+$ ]]; then
+    echo "ERROR: could not read free space on the host root volume." >&2
+    exit 1
+fi
 if (( free_gb >= soft_gb )); then
     echo "    ${free_gb}GB free."
     exit 0
 fi
 echo "    ${free_gb}GB free (< ${soft_gb}GB); reclaiming docker space and old snapshots..."
 docker builder prune -af >/dev/null 2>&1 || true
-docker image prune -af >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
 backup_root="$remote_dir/.deploy-backups"
 if [[ -d "$backup_root" ]]; then
     { ls -1dt "$backup_root"/*/ 2>/dev/null || true; } | tail -n +4 | xargs -r rm -rf
 fi
 free_gb="$(avail_gb)"
+if [[ "$free_gb" =~ ^-?[0-9]+$ ]] && (( free_gb < soft_gb )); then
+    # Still tight: escalate to unused images. Running containers keep theirs.
+    docker image prune -af >/dev/null 2>&1 || true
+    free_gb="$(avail_gb)"
+fi
 echo "    ${free_gb}GB free after reclaiming."
-if (( free_gb < hard_gb )); then
+if [[ ! "$free_gb" =~ ^-?[0-9]+$ ]] || (( free_gb < hard_gb )); then
     echo "ERROR: only ${free_gb}GB free on the host root volume (< ${hard_gb}GB)." >&2
     echo "ERROR: free space on the host before deploying; refusing to build." >&2
     exit 1
