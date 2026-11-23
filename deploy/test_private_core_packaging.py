@@ -27,28 +27,52 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "tools" / "install_private_core.sh"
 DOCKERFILE = ROOT / "Dockerfile"
+DEPLOY = ROOT / "deploy.sh"
 
 # Overlaid for the working tree/operator, deliberately not baked into the image.
 NON_RUNTIME_FILES = {"CLAUDE.md", "LABEL_RESOLUTION.md"}
 
 # Floors that make a parser regression fail instead of vacuously passing.
 MIN_OVERLAY_ENTRIES = 9
+MIN_OVERLAY_LOOPS = 2
 MIN_DOCKERFILE_COPIES = 20
+MIN_RESTORE_ENTRIES = 12
+
+
+def overlay_file_loops() -> list[list[str]]:
+    """File entries from every ``for f in ...; do`` loop in the overlay script."""
+    text = OVERLAY.read_text(encoding="utf-8")
+    loops: list[list[str]] = []
+    for match in re.finditer(r"for\s+f\s+in\s+(.*?)\bdo\b", text, re.S):
+        entries: list[str] = []
+        for line in match.group(1).splitlines():
+            line = line.split("#", 1)[0].replace("\\", " ")
+            entries.extend(
+                token for token in (t.strip(";") for t in line.split()) if token
+            )
+        loops.append(entries)
+    return loops
 
 
 def overlay_files() -> list[str]:
-    """Entries in install_private_core.sh's `for f in ...; do` list."""
-    text = OVERLAY.read_text(encoding="utf-8")
-    match = re.search(r"for\s+f\s+in\s+(.*?)\bdo\b", text, re.S)
-    if not match:
+    """Entries in install_private_core.sh's main `for f in ...; do` list."""
+    loops = overlay_file_loops()
+    if not loops:
         raise AssertionError(
             "could not find the overlay file list; update this parser rather "
             "than deleting it")
-    entries: list[str] = []
-    for line in match.group(1).splitlines():
-        line = line.split("#", 1)[0].replace("\\", " ")
-        entries.extend(token for token in line.split() if token)
-    return entries
+    return loops[0]
+
+
+def restore_files() -> set[str]:
+    """Entries in deploy.sh's ``overlay_files=(...)`` restore list."""
+    text = DEPLOY.read_text(encoding="utf-8")
+    match = re.search(r"overlay_files=\((.*?)\)", text, re.S)
+    if not match:
+        raise AssertionError(
+            "could not find deploy.sh's overlay_files restore list; update "
+            "this parser rather than deleting it")
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 
 def dockerfile_copies() -> set[str]:
@@ -75,7 +99,25 @@ def dockerfile_copies() -> set[str]:
 class PrivateCorePackagingTests(unittest.TestCase):
     def test_parsers_find_a_plausible_number_of_entries(self):
         self.assertGreaterEqual(len(overlay_files()), MIN_OVERLAY_ENTRIES)
+        self.assertGreaterEqual(len(overlay_file_loops()), MIN_OVERLAY_LOOPS)
         self.assertGreaterEqual(len(dockerfile_copies()), MIN_DOCKERFILE_COPIES)
+        self.assertGreaterEqual(len(restore_files()), MIN_RESTORE_ENTRIES)
+
+    def test_every_overlaid_file_is_restored_after_deploy(self):
+        # deploy.sh restores the working tree after the overlay; a file that
+        # is installed but not restored leaves proprietary code sitting in the
+        # public checkout. jev_client.py was missing from the restore list.
+        expected = {
+            f"unchained/{name}"
+            for loop in overlay_file_loops()
+            for name in loop
+        }
+        missing = sorted(expected - restore_files())
+        self.assertEqual(
+            missing, [],
+            "install_private_core.sh overlays these but deploy.sh never "
+            "restores them: " + ", ".join(missing),
+        )
 
     def test_every_runtime_overlay_file_is_copied_into_the_image(self):
         missing = sorted(
