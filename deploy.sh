@@ -1411,16 +1411,67 @@ EOF
 }
 
 prune_remote_deploy_backups() {
-    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+    remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
-current_backup="$2"
 backup_root="$remote_dir/.deploy-backups"
 [[ -d "$backup_root" ]] || exit 0
-# Keep recent snapshots for diagnosis and manual recovery, but prevent source
-# archives from consuming the small production root disk indefinitely.
-find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
-    ! -path "$current_backup" -mtime +14 -exec rm -rf {} +
+# Keep the three newest snapshots (the current release is the newest) for
+# diagnosis and manual recovery. Time-based retention let frequent deploys
+# pile up hundreds of megabytes of source archives on the small root volume.
+# `ls` fails when the glob has no matches; tolerate that under pipefail.
+{ ls -1dt "$backup_root"/*/ 2>/dev/null || true; } | tail -n +4 | xargs -r rm -rf
+EOF
+}
+
+ensure_remote_disk_space() {
+    # The production root volume is small. A full disk fails the image build
+    # and can also break the automatic rollback (which then loses files such
+    # as .env), so reclaim space BEFORE any upload or build. Normal deploys
+    # skip the prune and keep their docker layer cache.
+    local soft_gb="${DEPLOY_DISK_SOFT_GB:-5}"
+    local hard_gb="${DEPLOY_DISK_HARD_GB:-2}"
+    remote_bash "$REMOTE_DIR" "$soft_gb" "$hard_gb" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+soft_gb="$2"
+hard_gb="$3"
+avail_gb() {
+    # Bytes, then floor to GiB: `df -BG` rounds fractional blocks up, which
+    # would let 1.5GiB pass a 2GB floor and skip pruning at 4.5GiB. Keep the
+    # sign so a full filesystem with reserved blocks reports negative space.
+    local bytes
+    bytes="$(df --output=avail -B1 / | awk 'NR==2 {print $1}')"
+    echo $(( bytes / 1024 / 1024 / 1024 ))
+}
+free_gb="$(avail_gb)"
+if [[ ! "$free_gb" =~ ^-?[0-9]+$ ]]; then
+    echo "ERROR: could not read free space on the host root volume." >&2
+    exit 1
+fi
+if (( free_gb >= soft_gb )); then
+    echo "    ${free_gb}GB free."
+    exit 0
+fi
+echo "    ${free_gb}GB free (< ${soft_gb}GB); reclaiming docker space and old snapshots..."
+docker builder prune -af >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
+backup_root="$remote_dir/.deploy-backups"
+if [[ -d "$backup_root" ]]; then
+    { ls -1dt "$backup_root"/*/ 2>/dev/null || true; } | tail -n +4 | xargs -r rm -rf
+fi
+free_gb="$(avail_gb)"
+if [[ "$free_gb" =~ ^-?[0-9]+$ ]] && (( free_gb < soft_gb )); then
+    # Still tight: escalate to unused images. Running containers keep theirs.
+    docker image prune -af >/dev/null 2>&1 || true
+    free_gb="$(avail_gb)"
+fi
+echo "    ${free_gb}GB free after reclaiming."
+if [[ ! "$free_gb" =~ ^-?[0-9]+$ ]] || (( free_gb < hard_gb )); then
+    echo "ERROR: only ${free_gb}GB free on the host root volume (< ${hard_gb}GB)." >&2
+    echo "ERROR: free space on the host before deploying; refusing to build." >&2
+    exit 1
+fi
 EOF
 }
 
@@ -1580,6 +1631,8 @@ DEPLOYED_PATHS_COUNT=$(wc -l < "$DEPLOYED_PATHS_FILE" | awk '{print $1}')
 echo "==> Acquiring exclusive deployment lock..."
 acquire_remote_deploy_lock
 echo "    Lock acquired."
+echo "==> Checking remote disk space..."
+ensure_remote_disk_space
 echo "==> Verifying public terminal pilot is disabled..."
 assert_public_pilot_disabled_for_deploy
 echo "    Public terminal pilot is disabled."
