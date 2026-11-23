@@ -1420,7 +1420,8 @@ backup_root="$remote_dir/.deploy-backups"
 # Keep the three newest snapshots (the current release is the newest) for
 # diagnosis and manual recovery. Time-based retention let frequent deploys
 # pile up hundreds of megabytes of source archives on the small root volume.
-ls -1dt "$backup_root"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+# `ls` fails when the glob has no matches; tolerate that under pipefail.
+{ ls -1dt "$backup_root"/*/ 2>/dev/null || true; } | tail -n +4 | xargs -r rm -rf
 EOF
 }
 
@@ -1437,7 +1438,11 @@ remote_dir="$1"
 soft_gb="$2"
 hard_gb="$3"
 avail_gb() {
-    df --output=avail -BG / | tail -1 | tr -dc '0-9'
+    # Bytes, then floor to GiB: `df -BG` rounds fractional blocks up, which
+    # would let 1.5GiB pass a 2GB floor and skip pruning at 4.5GiB.
+    local bytes
+    bytes="$(df --output=avail -B1 / | tail -1 | tr -dc '0-9')"
+    echo $(( bytes / 1024 / 1024 / 1024 ))
 }
 free_gb="$(avail_gb)"
 if (( free_gb >= soft_gb )); then
@@ -1449,7 +1454,7 @@ docker builder prune -af >/dev/null 2>&1 || true
 docker image prune -af >/dev/null 2>&1 || true
 backup_root="$remote_dir/.deploy-backups"
 if [[ -d "$backup_root" ]]; then
-    ls -1dt "$backup_root"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+    { ls -1dt "$backup_root"/*/ 2>/dev/null || true; } | tail -n +4 | xargs -r rm -rf
 fi
 free_gb="$(avail_gb)"
 echo "    ${free_gb}GB free after reclaiming."
