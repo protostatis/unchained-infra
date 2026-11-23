@@ -1417,10 +1417,47 @@ remote_dir="$1"
 current_backup="$2"
 backup_root="$remote_dir/.deploy-backups"
 [[ -d "$backup_root" ]] || exit 0
-# Keep recent snapshots for diagnosis and manual recovery, but prevent source
-# archives from consuming the small production root disk indefinitely.
-find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
-    ! -path "$current_backup" -mtime +14 -exec rm -rf {} +
+# Keep the three newest snapshots (the current release is the newest) for
+# diagnosis and manual recovery. Time-based retention let frequent deploys
+# pile up hundreds of megabytes of source archives on the small root volume.
+ls -1dt "$backup_root"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+EOF
+}
+
+ensure_remote_disk_space() {
+    # The production root volume is small. A full disk fails the image build
+    # and can also break the automatic rollback (which then loses files such
+    # as .env), so reclaim space BEFORE any upload or build. Normal deploys
+    # skip the prune and keep their docker layer cache.
+    local soft_gb="${DEPLOY_DISK_SOFT_GB:-5}"
+    local hard_gb="${DEPLOY_DISK_HARD_GB:-2}"
+    remote_bash "$REMOTE_DIR" "$soft_gb" "$hard_gb" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+soft_gb="$2"
+hard_gb="$3"
+avail_gb() {
+    df --output=avail -BG / | tail -1 | tr -dc '0-9'
+}
+free_gb="$(avail_gb)"
+if (( free_gb >= soft_gb )); then
+    echo "    ${free_gb}GB free."
+    exit 0
+fi
+echo "    ${free_gb}GB free (< ${soft_gb}GB); reclaiming docker space and old snapshots..."
+docker builder prune -af >/dev/null 2>&1 || true
+docker image prune -af >/dev/null 2>&1 || true
+backup_root="$remote_dir/.deploy-backups"
+if [[ -d "$backup_root" ]]; then
+    ls -1dt "$backup_root"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+fi
+free_gb="$(avail_gb)"
+echo "    ${free_gb}GB free after reclaiming."
+if (( free_gb < hard_gb )); then
+    echo "ERROR: only ${free_gb}GB free on the host root volume (< ${hard_gb}GB)." >&2
+    echo "ERROR: free space on the host before deploying; refusing to build." >&2
+    exit 1
+fi
 EOF
 }
 
@@ -1580,6 +1617,8 @@ DEPLOYED_PATHS_COUNT=$(wc -l < "$DEPLOYED_PATHS_FILE" | awk '{print $1}')
 echo "==> Acquiring exclusive deployment lock..."
 acquire_remote_deploy_lock
 echo "    Lock acquired."
+echo "==> Checking remote disk space..."
+ensure_remote_disk_space
 echo "==> Verifying public terminal pilot is disabled..."
 assert_public_pilot_disabled_for_deploy
 echo "    Public terminal pilot is disabled."
