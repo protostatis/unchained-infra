@@ -173,6 +173,7 @@ restore_private_core_worktree() {
         "unchained/private_core_engine.py"
         "unchained/private_core_server.py"
         "unchained/private_core_contracts.py"
+        "unchained/jev_client.py"
         "unchained/challenge_detection.py"
         "unchained/domain_policy.py"
         "unchained/CLAUDE.md"
