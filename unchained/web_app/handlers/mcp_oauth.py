@@ -26,7 +26,7 @@ from urllib.parse import quote, urlencode, urlparse
 from aiohttp import web
 
 from mcp_identity import agent_label
-from mcp_oauth_policy import client_callback_status, uri_owner_allows
+from mcp_oauth_policy import callback_owner_state, client_callback_status
 from web_app.core import get_core as _core
 
 _CSRF_COOKIE = "uc_oauth_csrf"
@@ -209,17 +209,17 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
             "to connect again.</p>",
             status=400,
         )
-    status = client_callback_status(client, store.list_policies())
-    if not uri_owner_allows(
-        pending["redirect_uri"], store.list_policies(), user["user_id"]
-    ):
-        return _page(
-            "Enrolled to another account",
-            "<p class='muted'>This connector is enrolled to a different Unchained "
-            "account, so it cannot be authorized here. Sign in as the account that "
-            "enrolled it, or enroll this one from your own account.</p>",
-            status=403,
-        )
+    csrf = secrets.token_urlsafe(24)
+    policies = store.list_policies()
+    bindings = store.bindings_map()
+    allowed, reason = callback_owner_state(
+        pending["redirect_uri"], policies, bindings, user["user_id"]
+    )
+    if not allowed:
+        response = _mismatch_page(request_id, csrf, reason)
+        _set_cookie(response, request, csrf)
+        return response
+    status = client_callback_status(client, policies, bindings)
     if status == "blocked":
         return _page(
             "Callback address not approved",
@@ -237,7 +237,6 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
             "Unchained agent and connect a Chrome profile, then retry from your assistant.</p>",
         )
 
-    csrf = secrets.token_urlsafe(24)
     callback = pending["redirect_uri"]
     callback_host = urlparse(callback).netloc
 
@@ -311,6 +310,42 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
     return response
 
 
+_MISMATCH_REASONS = {
+    "owner_mismatch": "This connector is linked to a different Unchained account.",
+    "unbound_personal": (
+        "This connector has not been enrolled for any Unchained account yet. "
+        "Ask the operator to enroll it."
+    ),
+    "missing": "This connector's enrollment is missing. Ask the operator to enroll it.",
+    "inactive": "This connector's enrollment is not active.",
+    "conflict": "This connector's enrollment is ambiguous. Ask the operator to review it.",
+    "not_admitted": "This connector's callback is not allowed.",
+}
+
+
+def _mismatch_page(request_id: str, csrf: str, reason: str) -> web.Response:
+    """Refuse without rendering the browser picker, and offer a way forward.
+
+    The owner's account is deliberately not shown: a request holder should not
+    learn which account a binding belongs to.
+    """
+    message = _MISMATCH_REASONS.get(reason, "This connector cannot be authorized here.")
+    body = f"""
+<h1>Cannot authorize this connector</h1>
+<p class='muted'>{_escape(message)} Nothing was granted.</p>
+<form method="post" action="/oauth/consent">
+  <input type="hidden" name="request" value="{_escape(request_id)}">
+  <input type="hidden" name="csrf" value="{_escape(csrf)}">
+  <input type="hidden" name="decision" value="switch">
+  <div class='actions'>
+    <button type="submit" class='primary'>Switch Unchained account</button>
+    <a class="button" href="/oauth/connections">Cancel</a>
+  </div>
+</form>
+"""
+    return _page("Cannot authorize this connector", body, status=403)
+
+
 # -- POST /oauth/consent ---------------------------------------------------
 
 
@@ -366,19 +401,17 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             status=400,
         )
 
-    if not uri_owner_allows(
-        pending["redirect_uri"], store.list_policies(), user["user_id"]
-    ):
-        return _page(
-            "Enrolled to another account",
-            "<p class='muted'>This connector is enrolled to a different Unchained "
-            "account. Nothing was granted.</p>",
-            status=403,
-        )
+    policies = store.list_policies()
+    bindings = store.bindings_map()
+    allowed, reason = callback_owner_state(
+        pending["redirect_uri"], policies, bindings, user["user_id"]
+    )
+    if not allowed:
+        response = _mismatch_page(request_id, csrf, reason)
+        _set_cookie(response, request, csrf)
+        return response
     client = store.get_client(pending["client_id"])
-    if client is None or client_callback_status(
-        client, store.list_policies()
-    ) == "blocked":
+    if client is None or client_callback_status(client, policies, bindings) == "blocked":
         return _page(
             "App no longer approved",
             "<p class='muted'>This app's callback address is no longer approved. "
@@ -569,6 +602,8 @@ _PAGE = """<!DOCTYPE html>
   button{{font:inherit;font-size:.9rem;padding:.55rem 1.1rem;border-radius:8px;cursor:pointer;
           border:1px solid #30363d;background:#161b22;color:#c9d1d9}}
   button.primary{{background:#238636;border-color:#2ea043;color:#fff}}
+  a.button{{font-size:.9rem;padding:.55rem 1.1rem;border-radius:8px;border:1px solid #30363d;
+           color:#c9d1d9;text-decoration:none;display:inline-block}}
   .account{{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.85rem;color:#8b949e;margin-bottom:1rem}}
   .account form{{margin:0}}
   button.link{{background:none;border:0;padding:0;color:#58a6ff;font:inherit;cursor:pointer;text-decoration:underline}}

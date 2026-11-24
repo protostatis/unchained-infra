@@ -2045,14 +2045,14 @@ async def handle_admin_reject(request: web.Request) -> web.Response:
             try:
                 from mcp_oauth_store import OAuthStore
 
-                revoked = OAuthStore(core._auth.db_path).revoke_grants_for_user(
-                    user["user_id"]
-                )
+                store = OAuthStore(core._auth.db_path)
+                revoked = store.revoke_grants_for_user(user["user_id"])
+                blocked = store.block_bindings_for_user(user["user_id"])
                 core._track_event(
                     request,
                     "admin_user_rejected",
                     user_id=user["user_id"],
-                    meta={"oauth_grants_revoked": revoked},
+                    meta={"oauth_grants_revoked": revoked, "oauth_bindings_blocked": blocked},
                     status_code=200,
                 )
             except Exception:

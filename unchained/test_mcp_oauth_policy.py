@@ -171,29 +171,73 @@ class MatchPolicyTests(unittest.TestCase):
 
 class OwnerTests(unittest.TestCase):
     def setUp(self):
-        self.policy = dict(CLAUDE, owner_user_id="u-1")
-        self.uri = "https://claude.ai/api/mcp/auth_callback"
+        self.uri = "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-abc"
+        self.policy = dict(
+            CLAUDE,
+            host="oauth-redirect.googleusercontent.com",
+            path="/r/user_bound_custom-mcp-abc",
+            binding_id="user_bound_custom-mcp-abc",
+        )
+        self.binding = {
+            "binding_id": "user_bound_custom-mcp-abc",
+            "owner_user_id": "u-1",
+            "status": "active",
+        }
+
+    def check(self, user="u-1", bindings=None, policies=None):
+        from mcp_oauth_policy import callback_owner_state
+
+        return callback_owner_state(
+            self.uri,
+            policies if policies is not None else [self.policy],
+            bindings if bindings is not None else {self.binding["binding_id"]: self.binding},
+            user,
+        )
 
     def test_owner_can_authorize(self):
-        from mcp_oauth_policy import uri_owner_allows
-
-        self.assertTrue(uri_owner_allows(self.uri, [self.policy], "u-1"))
+        allowed, reason = self.check()
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "bound")
 
     def test_other_account_cannot_authorize(self):
-        from mcp_oauth_policy import uri_owner_allows
+        self.assertEqual(self.check(user="u-2"), (False, "owner_mismatch"))
 
-        self.assertFalse(uri_owner_allows(self.uri, [self.policy], "u-2"))
+    def test_missing_binding_fails_closed(self):
+        self.assertEqual(self.check(bindings={}), (False, "missing"))
 
-    def test_unowned_policy_allows_anyone(self):
-        from mcp_oauth_policy import uri_owner_allows
+    def test_inactive_binding_fails_closed(self):
+        self.assertEqual(
+            self.check(bindings={self.binding["binding_id"]: dict(self.binding, status="blocked")}),
+            (False, "inactive"),
+        )
 
-        unowned = dict(self.policy, owner_user_id=None)
-        self.assertTrue(uri_owner_allows(self.uri, [unowned], "u-2"))
+    def test_personal_callback_without_binding_fails_closed(self):
+        policy = dict(self.policy)
+        policy.pop("binding_id")
+        self.assertEqual(self.check(policies=[policy]), (False, "unbound_personal"))
 
-    def test_no_policy_allows(self):
-        from mcp_oauth_policy import uri_owner_allows
+    def test_overlapping_bound_and_unbound_policies_fail_closed(self):
+        loose = dict(self.policy, binding_id=None)
+        self.assertEqual(self.check(policies=[self.policy, loose]), (False, "conflict"))
 
-        self.assertTrue(uri_owner_allows(self.uri, [], "u-2"))
+    def test_static_callback_allows_any_account(self):
+        from mcp_oauth_policy import callback_owner_state
+
+        allowed, reason = callback_owner_state(
+            "https://claude.ai/api/mcp/auth_callback",
+            [dict(CLAUDE)],
+            {},
+            "u-9",
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "static")
+
+    def test_inactive_binding_makes_the_client_blocked(self):
+        from mcp_oauth_policy import client_callback_status
+
+        client = {"source": "dcr", "redirect_uris": [self.uri]}
+        bindings = {self.binding["binding_id"]: dict(self.binding, status="blocked")}
+        self.assertEqual(client_callback_status(client, [self.policy], bindings), "blocked")
 
 
 class ClientCallbackStatusTests(unittest.TestCase):

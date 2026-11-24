@@ -49,9 +49,9 @@ from mcp_oauth_store import (
 )
 from mcp_oauth_policy import (
     RedirectURIError,
+    callback_owner_state,
     client_callback_status,
     match_policy,
-    uri_owner_allows,
     validate_redirect_uri,
 )
 
@@ -135,7 +135,9 @@ class MCPOAuthProvider(OAuthProvider):
         # A client whose callback is no longer admitted must look nonexistent,
         # otherwise the SDK can still redirect a code to it before authorize()
         # is ever called.
-        if client_callback_status(row, self.store.list_policies()) == "blocked":
+        if client_callback_status(
+            row, self.store.list_policies(), self.store.bindings_map()
+        ) == "blocked":
             return None
         return OAuthClientInformationFull(
             client_id=row["client_id"],
@@ -236,7 +238,9 @@ class MCPOAuthProvider(OAuthProvider):
         # was in flight cannot still receive a code. The failure target is our
         # own page: never redirect to a callback we no longer trust.
         row = self.store.get_client(client.client_id)
-        if row is None or client_callback_status(row, self.store.list_policies()) == "blocked":
+        if row is None or client_callback_status(
+            row, self.store.list_policies(), self.store.bindings_map()
+        ) == "blocked":
             return f"{self.issuer}/oauth/error?reason=client_not_approved"
 
         # RFC 8707: the token must be for this resource, and nothing else.
@@ -506,21 +510,24 @@ def install_complete_route(mcp, provider: "MCPOAuthProvider") -> None:
             return PlainTextResponse("This approval is invalid or expired.", status_code=400)
         pending = provider.store.get_request(approval["request_id"])
         client = provider.store.get_client(pending["client_id"]) if pending else None
-        if client is None or client_callback_status(
-            client, provider.store.list_policies()
-        ) == "blocked":
+        policies = provider.store.list_policies()
+        bindings = provider.store.bindings_map()
+        if client is None or client_callback_status(client, policies, bindings) == "blocked":
             return PlainTextResponse(
                 "This app's callback address is no longer approved.", status_code=403
             )
         # A per-account binding may only deliver to the account it belongs to.
-        if pending is not None and not uri_owner_allows(
-            pending["redirect_uri"],
-            provider.store.list_policies(),
-            pending.get("user_id") or "",
-        ):
-            return PlainTextResponse(
-                "This connector is enrolled to a different account.", status_code=403
+        if pending is not None:
+            allowed, _reason = callback_owner_state(
+                pending["redirect_uri"],
+                policies,
+                bindings,
+                pending.get("user_id") or "",
             )
+            if not allowed:
+                return PlainTextResponse(
+                    "This connector cannot deliver to this account.", status_code=403
+                )
         # The request was authorized against a callback on record at that time;
         # if the registration has since changed, do not send the code there.
         if pending is not None and pending["redirect_uri"] not in client["redirect_uris"]:

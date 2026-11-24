@@ -216,6 +216,18 @@ class OAuthStore:
                     revoked_at REAL
                 );
 
+                CREATE TABLE IF NOT EXISTS mcp_oauth_bindings (
+                    provider TEXT NOT NULL,
+                    binding_id TEXT NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'blocked', 'retired')),
+                    authorization_version INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (provider, binding_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scheme TEXT NOT NULL,
@@ -225,6 +237,8 @@ class OAuthStore:
                     match TEXT NOT NULL CHECK (match IN ('exact', 'prefix')),
                     allow_query INTEGER NOT NULL DEFAULT 0,
                     note TEXT NOT NULL DEFAULT '',
+                    owner_user_id TEXT,
+                    binding_id TEXT,
                     created_at REAL NOT NULL,
                     UNIQUE (scheme, host, port, path, match, allow_query)
                 );
@@ -244,6 +258,7 @@ class OAuthStore:
                     ON mcp_oauth_tokens (family_id);
                 CREATE INDEX IF NOT EXISTS idx_oauth_families_expiry
                     ON mcp_oauth_families (expires_at);
+
                 CREATE INDEX IF NOT EXISTS idx_oauth_grants_user
                     ON mcp_oauth_grants (user_id);
                 CREATE INDEX IF NOT EXISTS idx_oauth_grants_client
@@ -269,6 +284,15 @@ class OAuthStore:
                 conn.execute(
                     "ALTER TABLE mcp_oauth_policies ADD COLUMN owner_user_id TEXT"
                 )
+            if "binding_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE mcp_oauth_policies ADD COLUMN binding_id TEXT"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_oauth_policies_binding "
+                "ON mcp_oauth_policies (binding_id)"
+            )
+            self._migrate_bindings(conn)
             self._seed_policies(conn)
 
     def _seed_policies(self, conn) -> None:
@@ -410,6 +434,294 @@ class OAuthStore:
                 )
             return cur.rowcount or 0
 
+    # -- callback bindings -------------------------------------------------
+
+    def _migrate_bindings(self, conn) -> None:
+        """Promote owned personal callbacks into canonical binding rows.
+
+        Ownership used to be duplicated across the six policy rows of a
+        binding.  A binding row is now authoritative; policies reference it.
+        A binding whose rows disagree keeps a blocked tombstone instead of
+        silently choosing an owner, and an unowned personal callback stays
+        unbound, which callers treat as blocked.
+        """
+        from mcp_oauth_policy import binding_id_from_uri
+
+        rows = conn.execute(
+            "SELECT id, path, owner_user_id FROM mcp_oauth_policies "
+            "WHERE path LIKE '%user_bound_custom-mcp-%'"
+        ).fetchall()
+        groups: dict[str, list] = {}
+        for row in rows:
+            binding_id = binding_id_from_uri(row["path"])
+            if binding_id:
+                groups.setdefault(binding_id, []).append(row)
+
+        now = _now()
+        for binding_id, members in groups.items():
+            owners = sorted({str(r["owner_user_id"]) for r in members if r["owner_user_id"]})
+            if not owners:
+                continue
+            status = "active" if len(owners) == 1 else "blocked"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO mcp_oauth_bindings
+                    (provider, binding_id, owner_user_id, status,
+                     authorization_version, created_at, updated_at)
+                VALUES ('google', ?, ?, ?, 1, ?, ?)
+                """,
+                (binding_id, owners[0], status, now, now),
+            )
+            ids = [int(r["id"]) for r in members]
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"UPDATE mcp_oauth_policies SET binding_id = ? WHERE id IN ({placeholders})",
+                (binding_id, *ids),
+            )
+
+    def bindings_map(self) -> dict[str, dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM mcp_oauth_bindings").fetchall()
+        return {
+            r["binding_id"]: {
+                "binding_id": r["binding_id"],
+                "provider": r["provider"],
+                "owner_user_id": r["owner_user_id"],
+                "status": r["status"],
+                "authorization_version": int(r["authorization_version"]),
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        }
+
+    def get_binding(self, binding_id: str) -> dict | None:
+        return self.bindings_map().get(binding_id)
+
+    def upsert_binding(self, binding_id: str, owner_user_id: str, *, status: str = "active") -> dict:
+        """Create the binding, or refuse to silently change its owner."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM mcp_oauth_bindings WHERE binding_id = ?",
+                    (binding_id,),
+                ).fetchone()
+                if row is not None:
+                    if row["owner_user_id"] != owner_user_id:
+                        raise ValueError(
+                            "binding is enrolled to another account; use transfer-binding"
+                        )
+                    conn.execute(
+                        "UPDATE mcp_oauth_bindings SET status = ?, updated_at = ? "
+                        "WHERE binding_id = ?",
+                        (status, now, binding_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO mcp_oauth_bindings
+                            (provider, binding_id, owner_user_id, status,
+                             authorization_version, created_at, updated_at)
+                        VALUES ('google', ?, ?, ?, 1, ?, ?)
+                        """,
+                        (binding_id, owner_user_id, status, now, now),
+                    )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return self.get_binding(binding_id)
+
+    def attach_policies_to_binding(self, binding_id: str) -> int:
+        """Point matching policy rows at their binding record."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE mcp_oauth_policies SET binding_id = ? "
+                "WHERE path LIKE ? AND (binding_id IS NULL OR binding_id = '')",
+                (binding_id, f"%{binding_id}%"),
+            )
+            return cur.rowcount or 0
+
+    def binding_impact(self, binding_id: str) -> dict:
+        client_ids = self.clients_for_binding(binding_id)
+        if not client_ids:
+            return {"clients": 0, "active_grants": 0, "pending_requests": 0}
+        placeholders = ",".join("?" for _ in client_ids)
+        with self._conn() as conn:
+            grants = conn.execute(
+                f"SELECT COUNT(*) AS n FROM mcp_oauth_grants "
+                f"WHERE client_id IN ({placeholders}) AND revoked_at IS NULL",
+                tuple(client_ids),
+            ).fetchone()["n"]
+            pending = conn.execute(
+                f"SELECT COUNT(*) AS n FROM mcp_oauth_requests "
+                f"WHERE client_id IN ({placeholders}) AND status = ? AND expires_at > ?",
+                (*client_ids, STATUS_PENDING, _now()),
+            ).fetchone()["n"]
+        return {
+            "clients": len(client_ids),
+            "active_grants": int(grants),
+            "pending_requests": int(pending),
+        }
+
+    def clients_for_binding(self, binding_id: str) -> set[str]:
+        """Clients whose registered callbacks belong to this binding."""
+        policies = [
+            p for p in self.list_policies() if p.get("binding_id") == binding_id
+        ]
+        if not policies:
+            return set()
+        from mcp_oauth_policy import match_policy
+
+        result = set()
+        for client in self.dcr_clients():
+            if any(
+                match_policy(uri, policy)
+                for uri in client["redirect_uris"]
+                for policy in policies
+            ):
+                result.add(client["client_id"])
+        return result
+
+    def revoke_client_authorizations(self, client_ids: Iterable[str]) -> dict:
+        """Revoke grants, tokens, families and pending state for clients."""
+        ids = [c for c in client_ids if c]
+        if not ids:
+            return {"grants_revoked": 0, "requests_discarded": 0}
+        now = _now()
+        placeholders = ",".join("?" for _ in ids)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                grants = conn.execute(
+                    f"SELECT id FROM mcp_oauth_grants WHERE client_id IN ({placeholders}) "
+                    f"AND revoked_at IS NULL",
+                    tuple(ids),
+                ).fetchall()
+                grant_ids = [r["id"] for r in grants]
+                if grant_ids:
+                    gph = ",".join("?" for _ in grant_ids)
+                    conn.execute(
+                        f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({gph})",
+                        (now, *grant_ids),
+                    )
+                    conn.execute(
+                        f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                        f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
+                        (now, *grant_ids),
+                    )
+                    conn.execute(
+                        f"UPDATE mcp_oauth_families SET revoked_at = ? "
+                        f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
+                        (now, *grant_ids),
+                    )
+                requests = conn.execute(
+                    f"SELECT id FROM mcp_oauth_requests WHERE client_id IN ({placeholders})",
+                    tuple(ids),
+                ).fetchall()
+                request_ids = [r["id"] for r in requests]
+                if request_ids:
+                    rph = ",".join("?" for _ in request_ids)
+                    conn.execute(
+                        f"DELETE FROM mcp_oauth_approvals WHERE request_id IN ({rph})",
+                        tuple(request_ids),
+                    )
+                conn.execute(
+                    f"DELETE FROM mcp_oauth_codes WHERE client_id IN ({placeholders})",
+                    tuple(ids),
+                )
+                conn.execute(
+                    f"DELETE FROM mcp_oauth_requests WHERE client_id IN ({placeholders})",
+                    tuple(ids),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return {"grants_revoked": len(grant_ids), "requests_discarded": len(request_ids)}
+
+    def transfer_binding(
+        self,
+        binding_id: str,
+        *,
+        from_owner: str,
+        to_owner: str,
+        actor: str = "",
+        reason: str = "",
+    ) -> dict:
+        """Move a binding to another account, revoking everything it authorized.
+
+        The previous owner must match, which makes two operators racing the same
+        transfer fail instead of overwriting each other.
+        """
+        now = _now()
+        client_ids = self.clients_for_binding(binding_id)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT owner_user_id, status FROM mcp_oauth_bindings WHERE binding_id = ?",
+                    (binding_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("binding not found")
+                if row["owner_user_id"] != from_owner:
+                    raise ValueError("binding owner changed; re-run the preview")
+                if row["status"] == "retired":
+                    raise ValueError("binding is retired")
+                conn.execute(
+                    """
+                    UPDATE mcp_oauth_bindings
+                       SET owner_user_id = ?, status = 'active',
+                           authorization_version = authorization_version + 1,
+                           updated_at = ?
+                     WHERE binding_id = ?
+                    """,
+                    (to_owner, now, binding_id),
+                )
+                conn.execute(
+                    "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE binding_id = ?",
+                    (to_owner, binding_id),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+
+        revoked = self.revoke_client_authorizations(client_ids)
+        return {
+            "binding_id": binding_id,
+            "from_owner": from_owner,
+            "to_owner": to_owner,
+            "version": (self.get_binding(binding_id) or {}).get("authorization_version", 0),
+            "clients": len(client_ids),
+            **revoked,
+        }
+
+    def block_bindings_for_user(self, user_id: str) -> int:
+        """Tombstone an account's bindings and revoke what they authorized."""
+        now = _now()
+        with self._conn() as conn:
+            bindings = [
+                r["binding_id"]
+                for r in conn.execute(
+                    "SELECT binding_id FROM mcp_oauth_bindings "
+                    "WHERE owner_user_id = ? AND status = 'active'",
+                    (user_id,),
+                ).fetchall()
+            ]
+            cur = conn.execute(
+                "UPDATE mcp_oauth_bindings SET status = 'blocked', updated_at = ? "
+                "WHERE owner_user_id = ? AND status = 'active'",
+                (now, user_id),
+            )
+            count = cur.rowcount or 0
+        for binding_id in bindings:
+            self.revoke_client_authorizations(self.clients_for_binding(binding_id))
+        return count
+
     # -- callback policies -------------------------------------------------
 
     def list_policies(self) -> list[dict]:
@@ -420,7 +732,7 @@ class OAuthStore:
         return [dict(r) for r in rows]
 
     @staticmethod
-    def _upsert_policy(conn, entry: dict, owner_user_id: str) -> int:
+    def _upsert_policy(conn, entry: dict, owner_user_id: str, binding_id: str = "") -> int:
         scheme = str(entry["scheme"]).lower()
         host = str(entry["host"]).lower()
         port = int(entry["port"])
@@ -431,8 +743,8 @@ class OAuthStore:
             """
             INSERT OR IGNORE INTO mcp_oauth_policies
                 (scheme, host, port, path, match, allow_query, note,
-                 owner_user_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 owner_user_id, binding_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scheme,
@@ -443,12 +755,13 @@ class OAuthStore:
                 allow_query,
                 str(entry.get("note", "")),
                 owner_user_id or None,
+                binding_id or None,
                 _now(),
             ),
         )
         row = conn.execute(
             """
-            SELECT id, owner_user_id FROM mcp_oauth_policies
+            SELECT id, owner_user_id, binding_id FROM mcp_oauth_policies
              WHERE scheme = ? AND host = ? AND port = ? AND path = ?
                AND match = ? AND allow_query = ?
             """,
@@ -461,6 +774,11 @@ class OAuthStore:
             conn.execute(
                 "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE id = ?",
                 (owner_user_id, row["id"]),
+            )
+        if binding_id and not row["binding_id"]:
+            conn.execute(
+                "UPDATE mcp_oauth_policies SET binding_id = ? WHERE id = ?",
+                (binding_id, row["id"]),
             )
         return int(row["id"])
 
@@ -475,6 +793,7 @@ class OAuthStore:
         allow_query: int = 0,
         note: str = "",
         owner_user_id: str = "",
+        binding_id: str = "",
     ) -> int:
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -484,6 +803,7 @@ class OAuthStore:
                     dict(scheme=scheme, host=host, port=port, path=path,
                          match=match, allow_query=allow_query, note=note),
                     owner_user_id,
+                    binding_id,
                 )
             except Exception:
                 conn.execute("ROLLBACK")
@@ -491,12 +811,21 @@ class OAuthStore:
             conn.execute("COMMIT")
         return policy_id
 
-    def add_policy_group(self, entries: Iterable[dict], *, owner_user_id: str) -> list[int]:
+    def add_policy_group(
+        self,
+        entries: Iterable[dict],
+        *,
+        owner_user_id: str,
+        binding_id: str = "",
+    ) -> list[int]:
         """Add a bundle of callbacks for one owner in a single transaction."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                ids = [self._upsert_policy(conn, entry, owner_user_id) for entry in entries]
+                ids = [
+                    self._upsert_policy(conn, entry, owner_user_id, binding_id)
+                    for entry in entries
+                ]
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
