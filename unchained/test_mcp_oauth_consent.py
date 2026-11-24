@@ -193,6 +193,37 @@ class ConsentHandlerTests(unittest.TestCase):
         response = self._get(self.request_id)
         self.assertNotIn("Unverified connector", response.text)
 
+    def _enroll_owner(self, user_id):
+        self.store.add_policy(
+            scheme="https",
+            host="connector.test",
+            port=443,
+            path="/cb",
+            match="exact",
+            allow_query=0,
+            owner_user_id=user_id,
+        )
+
+    def test_connector_enrolled_to_another_account_is_blocked(self):
+        self._enroll_owner("someone-else")
+        response = self._get(self.request_id)
+        self.assertEqual(response.status, 403)
+        self.assertIn("different Unchained account", response.text)
+
+    def test_connector_enrolled_to_this_account_is_allowed(self):
+        self._enroll_owner("user-1")
+        self.assertEqual(self._get(self.request_id).status, 200)
+
+    def test_post_rejected_when_enrolled_to_another_account(self):
+        self._enroll_owner("someone-else")
+        request = _post(
+            {"request": self.request_id, "decision": "approve",
+             "agent_id": "claude-deadbeef-facebook"}
+        )
+        response = self._approve(request)
+        self.assertEqual(response.status, 403)
+        self.assertEqual(self.store.get_request(self.request_id)["status"], "pending")
+
     def test_browser_requires_an_explicit_choice(self):
         agents = [
             {"agent_id": "claude-deadbeef-facebook", "profile": "facebook", "key": "uc_live_a", "connected": True},

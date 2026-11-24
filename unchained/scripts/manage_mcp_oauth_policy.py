@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,6 +34,7 @@ from mcp_oauth_policy import (  # noqa: E402
     RedirectURIError,
     client_callback_status,
     describe_policy,
+    match_policy,
     validate_redirect_uri,
 )
 from mcp_oauth_store import OAuthStore  # noqa: E402
@@ -60,6 +62,14 @@ def cmd_list(store: OAuthStore) -> int:
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+GEMINI_HOSTS = (
+    "oauth-redirect.googleusercontent.com",
+    "oauth-redirect-sandbox.googleusercontent.com",
+    "oauth-redirect-test.googleusercontent.com",
+)
+
+_BINDING_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
 def _loopback_host(host: str) -> bool:
@@ -226,6 +236,107 @@ def cmd_import(store: OAuthStore, args) -> int:
     return 0
 
 
+def _auth():
+    from auth import Auth
+
+    return Auth()
+
+
+def _user_id_for_email(email: str) -> str:
+    user = _auth().find_user_by_email(str(email or "").strip().lower())
+    return str(user["user_id"]) if user else ""
+
+
+def _gemini_bundle(binding: str, reason: str) -> list[dict]:
+    uid = f"user_bound_custom-mcp-{binding}"
+    note = "Gemini consumer enrollment" + (f": {reason}" if reason else "")
+    return [
+        dict(
+            scheme="https",
+            host=host,
+            port=443,
+            path=f"/{prefix}/{uid}",
+            match="exact",
+            allow_query=0,
+            note=note,
+        )
+        for host in GEMINI_HOSTS
+        for prefix in ("r", "a")
+    ]
+
+
+def cmd_enroll_gemini(store: OAuthStore, args) -> int:
+    binding = str(args.binding or "").strip()
+    if binding.startswith("user_bound_custom-mcp-"):
+        binding = binding[len("user_bound_custom-mcp-"):]
+    if not _BINDING_RE.match(binding):
+        print("Refusing: --binding must be the id after user_bound_custom-mcp- (hex/underscore/dash).")
+        return 2
+
+    owner_id = _user_id_for_email(args.owner)
+    if not owner_id:
+        print(f"No Unchained account for {args.owner!r}.")
+        return 2
+
+    bundle = _gemini_bundle(binding, args.reason or "")
+    existing = {
+        (p["scheme"], p["host"], p["port"], p["path"], p["match"], p["allow_query"])
+        for p in store.list_policies()
+    }
+    new = [e for e in bundle if (e["scheme"], e["host"], e["port"], e["path"], e["match"], e["allow_query"]) not in existing]
+
+    print(f"Owner: {args.owner} ({owner_id})")
+    print(f"Binding: user_bound_custom-mcp-{binding}")
+    print(f"{len(bundle)} callbacks in the bundle; {len(new)} not present.")
+    for entry in bundle:
+        print("  ", describe_policy(entry))
+    if not args.apply:
+        print("Dry run. Re-run with --apply to enroll.")
+        return 0
+
+    ids = store.add_policy_group(bundle, owner_user_id=owner_id)
+    print(f"Enrolled {len(ids)} policies.")
+    return 0
+
+
+def cmd_backfill_owners(store: OAuthStore, args) -> int:
+    """Infer owners for per-account bindings from existing grants.
+
+    Only unambiguous cases are reported: one distinct active user across every
+    client whose callbacks match the policy.
+    """
+    policies = store.list_policies()
+    clients = store.dcr_clients()
+    proposed: dict[int, str] = {}
+    for policy in policies:
+        if policy.get("owner_user_id"):
+            continue
+        if "user_bound_custom-mcp-" not in str(policy.get("path") or ""):
+            continue
+        users: set[str] = set()
+        for client in clients:
+            if any(match_policy(uri, policy) for uri in client["redirect_uris"]):
+                users |= store.active_grant_users_for_client(client["client_id"])
+        if len(users) == 1:
+            proposed[int(policy["id"])] = next(iter(users))
+
+    if not proposed:
+        print("No unambiguous bindings to backfill.")
+        return 0
+
+    auth = _auth()
+    for policy_id, user_id in sorted(proposed.items()):
+        user = auth.find_user_by_id(user_id)
+        print(f"  policy {policy_id} -> {user['email'] if user else user_id}")
+    if not args.apply:
+        print("Dry run. Re-run with --apply to set these owners.")
+        return 0
+    for policy_id, user_id in proposed.items():
+        store.set_policy_owner(policy_id, user_id)
+    print(f"Set owners on {len(proposed)} policies.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", help="SQLite path (default: UNCHAINED_DB_PATH)")
@@ -257,6 +368,21 @@ def main() -> int:
     imp.add_argument("--file", required=True)
     imp.add_argument("--apply", action="store_true")
 
+    enroll = sub.add_parser(
+        "enroll-gemini",
+        help="enroll one Google account's six Gemini callbacks for a single owner",
+    )
+    enroll.add_argument("--binding", required=True, help="id after user_bound_custom-mcp-")
+    enroll.add_argument("--owner", required=True, help="Unchained account email")
+    enroll.add_argument("--reason", default="")
+    enroll.add_argument("--apply", action="store_true")
+
+    backfill = sub.add_parser(
+        "backfill-owners",
+        help="infer owners for per-account bindings from existing grants",
+    )
+    backfill.add_argument("--apply", action="store_true")
+
     args = parser.parse_args()
     store = _store(args)
     if args.command == "list":
@@ -269,6 +395,10 @@ def main() -> int:
         return cmd_export(store, args)
     if args.command == "import":
         return cmd_import(store, args)
+    if args.command == "enroll-gemini":
+        return cmd_enroll_gemini(store, args)
+    if args.command == "backfill-owners":
+        return cmd_backfill_owners(store, args)
     return cmd_revalidate(store, args)
 
 

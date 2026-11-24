@@ -263,6 +263,12 @@ class OAuthStore:
                 """,
                 (FAMILY_TTL,),
             )
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(mcp_oauth_policies)")}
+            if "owner_user_id" not in columns:
+                # Additive: older databases gain the column without a rewrite.
+                conn.execute(
+                    "ALTER TABLE mcp_oauth_policies ADD COLUMN owner_user_id TEXT"
+                )
             self._seed_policies(conn)
 
     def _seed_policies(self, conn) -> None:
@@ -413,6 +419,51 @@ class OAuthStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    @staticmethod
+    def _upsert_policy(conn, entry: dict, owner_user_id: str) -> int:
+        scheme = str(entry["scheme"]).lower()
+        host = str(entry["host"]).lower()
+        port = int(entry["port"])
+        path = str(entry["path"])
+        match = str(entry.get("match", "exact"))
+        allow_query = int(entry.get("allow_query", 0))
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO mcp_oauth_policies
+                (scheme, host, port, path, match, allow_query, note,
+                 owner_user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scheme,
+                host,
+                port,
+                path,
+                match,
+                allow_query,
+                str(entry.get("note", "")),
+                owner_user_id or None,
+                _now(),
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT id, owner_user_id FROM mcp_oauth_policies
+             WHERE scheme = ? AND host = ? AND port = ? AND path = ?
+               AND match = ? AND allow_query = ?
+            """,
+            (scheme, host, port, path, match, allow_query),
+        ).fetchone()
+        if row is None:
+            return 0
+        # Enrollment may revisit a row that was added before owners existed.
+        if owner_user_id and not row["owner_user_id"]:
+            conn.execute(
+                "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE id = ?",
+                (owner_user_id, row["id"]),
+            )
+        return int(row["id"])
+
     def add_policy(
         self,
         *,
@@ -423,36 +474,51 @@ class OAuthStore:
         match: str = "exact",
         allow_query: int = 0,
         note: str = "",
+        owner_user_id: str = "",
     ) -> int:
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                policy_id = self._upsert_policy(
+                    conn,
+                    dict(scheme=scheme, host=host, port=port, path=path,
+                         match=match, allow_query=allow_query, note=note),
+                    owner_user_id,
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return policy_id
+
+    def add_policy_group(self, entries: Iterable[dict], *, owner_user_id: str) -> list[int]:
+        """Add a bundle of callbacks for one owner in a single transaction."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                ids = [self._upsert_policy(conn, entry, owner_user_id) for entry in entries]
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return ids
+
+    def set_policy_owner(self, policy_id: int, user_id: str) -> bool:
+        with self._conn() as conn:
             cur = conn.execute(
-                """
-                INSERT OR IGNORE INTO mcp_oauth_policies
-                    (scheme, host, port, path, match, allow_query, note, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    scheme.lower(),
-                    host.lower(),
-                    int(port),
-                    path,
-                    match,
-                    int(allow_query),
-                    note,
-                    _now(),
-                ),
+                "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE id = ?",
+                (user_id or None, int(policy_id)),
             )
-            if (cur.rowcount or 0) == 0:
-                row = conn.execute(
-                    """
-                    SELECT id FROM mcp_oauth_policies
-                     WHERE scheme = ? AND host = ? AND port = ? AND path = ?
-                       AND match = ? AND allow_query = ?
-                    """,
-                    (scheme.lower(), host.lower(), int(port), path, match, int(allow_query)),
-                ).fetchone()
-                return int(row["id"]) if row else 0
-            return int(cur.lastrowid or 0)
+            return (cur.rowcount or 0) == 1
+
+    def active_grant_users_for_client(self, client_id: str) -> set[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT user_id FROM mcp_oauth_grants "
+                "WHERE client_id = ? AND revoked_at IS NULL",
+                (client_id,),
+            ).fetchall()
+        return {str(r["user_id"]) for r in rows}
 
     def remove_policy(self, policy_id: int) -> bool:
         with self._conn() as conn:

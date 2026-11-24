@@ -611,6 +611,34 @@ class PolicySeedTests(StoreTestBase):
         fresh = OAuthStore(self.db_path)
         self.assertEqual(len(fresh.list_policies()), remaining)
 
+    def test_policy_owner_round_trip(self):
+        policy_id = self.store.add_policy(
+            scheme="https", host="x.test", port=443, path="/cb", owner_user_id="u-1"
+        )
+        row = next(p for p in self.store.list_policies() if p["id"] == policy_id)
+        self.assertEqual(row["owner_user_id"], "u-1")
+
+    def test_policy_group_is_idempotent_and_keeps_the_first_owner(self):
+        entries = [
+            dict(scheme="https", host="g.test", port=443, path=f"/{p}/x", match="exact", allow_query=0)
+            for p in ("r", "a")
+        ]
+        first = self.store.add_policy_group(entries, owner_user_id="u-1")
+        second = self.store.add_policy_group(entries, owner_user_id="u-2")
+        self.assertEqual(set(first), set(second))
+        owners = {
+            p["owner_user_id"] for p in self.store.list_policies() if p["id"] in first
+        }
+        self.assertEqual(owners, {"u-1"})
+
+    def test_owner_column_is_added_to_an_older_database(self):
+        with self.store._conn() as conn:
+            conn.execute("ALTER TABLE mcp_oauth_policies DROP COLUMN owner_user_id")
+        fresh = OAuthStore(self.db_path)
+        with fresh._conn() as conn:
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(mcp_oauth_policies)")}
+        self.assertIn("owner_user_id", columns)
+
     def test_add_policy_is_idempotent(self):
         first = self.store.add_policy(
             scheme="https", host="example.test", port=443, path="/cb"

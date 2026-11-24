@@ -26,7 +26,7 @@ from urllib.parse import quote, urlencode, urlparse
 from aiohttp import web
 
 from mcp_identity import agent_label
-from mcp_oauth_policy import client_callback_status
+from mcp_oauth_policy import client_callback_status, uri_owner_allows
 from web_app.core import get_core as _core
 
 _CSRF_COOKIE = "uc_oauth_csrf"
@@ -210,6 +210,16 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
             status=400,
         )
     status = client_callback_status(client, store.list_policies())
+    if not uri_owner_allows(
+        pending["redirect_uri"], store.list_policies(), user["user_id"]
+    ):
+        return _page(
+            "Enrolled to another account",
+            "<p class='muted'>This connector is enrolled to a different Unchained "
+            "account, so it cannot be authorized here. Sign in as the account that "
+            "enrolled it, or enroll this one from your own account.</p>",
+            status=403,
+        )
     if status == "blocked":
         return _page(
             "Callback address not approved",
@@ -356,6 +366,15 @@ async def handle_mcp_oauth_consent_post(request: web.Request) -> web.Response:
             status=400,
         )
 
+    if not uri_owner_allows(
+        pending["redirect_uri"], store.list_policies(), user["user_id"]
+    ):
+        return _page(
+            "Enrolled to another account",
+            "<p class='muted'>This connector is enrolled to a different Unchained "
+            "account. Nothing was granted.</p>",
+            status=403,
+        )
     client = store.get_client(pending["client_id"])
     if client is None or client_callback_status(
         client, store.list_policies()

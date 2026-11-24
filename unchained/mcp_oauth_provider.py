@@ -51,6 +51,7 @@ from mcp_oauth_policy import (
     RedirectURIError,
     client_callback_status,
     match_policy,
+    uri_owner_allows,
     validate_redirect_uri,
 )
 
@@ -510,6 +511,15 @@ def install_complete_route(mcp, provider: "MCPOAuthProvider") -> None:
         ) == "blocked":
             return PlainTextResponse(
                 "This app's callback address is no longer approved.", status_code=403
+            )
+        # A per-account binding may only deliver to the account it belongs to.
+        if pending is not None and not uri_owner_allows(
+            pending["redirect_uri"],
+            provider.store.list_policies(),
+            pending.get("user_id") or "",
+        ):
+            return PlainTextResponse(
+                "This connector is enrolled to a different account.", status_code=403
             )
         # The request was authorized against a callback on record at that time;
         # if the registration has since changed, do not send the code there.
