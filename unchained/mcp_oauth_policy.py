@@ -242,6 +242,27 @@ def describe_policy(policy: Mapping) -> str:
     return f"{policy.get('scheme')}://{policy.get('host')}{port_part}{path}{suffix}{query}"
 
 
+def policy_owners_for_uri(uri: str, policies: Iterable[Mapping]) -> set[str]:
+    """Accounts a callback is enrolled to, via matching policies with an owner."""
+    owners: set[str] = set()
+    for policy in policies:
+        owner = str(policy.get("owner_user_id") or "")
+        if owner and match_policy(uri, policy):
+            owners.add(owner)
+    return owners
+
+
+def uri_owner_allows(uri: str, policies: Iterable[Mapping], user_id: str) -> bool:
+    """True when the callback is unowned or enrolled to this account.
+
+    A per-account binding admits one destination, not one *user*: without this
+    check any signed-in user could authorize a connector enrolled for somebody
+    else and hand it their token.
+    """
+    owners = policy_owners_for_uri(uri, policies)
+    return not owners or str(user_id or "") in owners
+
+
 def client_callback_status(client: Mapping, policies: Iterable[Mapping]) -> str:
     """Classify a client's callbacks: ``manual``, ``policy`` or ``blocked``.
 

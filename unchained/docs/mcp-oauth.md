@@ -151,9 +151,16 @@ Policy provenance is split:
   in `mcp_oauth_policy.py` and are seeded from code with a version marker. A
   fresh database gets all of them; an existing one receives only the entries
   added in newer seed versions, so a policy an operator removed stays removed.
-* **Per-user callbacks** — the six `user_bound_custom-mcp-<hash>` paths a Gemini
-  account registers — are environment-specific and live only in the database.
-  Snapshot them with `export` and restore with `import`.
+* **Per-account callbacks** — the six `user_bound_custom-mcp-<hash>` paths a
+  Google account registers — are environment-specific and live only in the
+  database, **enrolled to one Unchained account**. Snapshot them with `export`
+  and restore with `import`.
+
+A policy's `owner_user_id` is enforced, not decorative: consent and code
+completion refuse when the signed-in account differs from the binding's owner.
+Without that check a per-account binding would admit one destination but any
+user could authorize it and hand its connector a token for their own browser.
+Static provider callbacks have no owner and remain open to any account.
 
 ```bash
 uv run scripts/manage_mcp_oauth_policy.py list
@@ -162,14 +169,25 @@ uv run scripts/manage_mcp_oauth_policy.py add \
     --note "operator-added provider"
 uv run scripts/manage_mcp_oauth_policy.py export --file policies.json
 uv run scripts/manage_mcp_oauth_policy.py import --file policies.json --apply
+
+# One Google account's six Gemini callbacks, enrolled to one Unchained account
+uv run scripts/manage_mcp_oauth_policy.py enroll-gemini \
+    --binding 62d6a28859f17250d5185eb0 --owner you@example.com --apply
+uv run scripts/manage_mcp_oauth_policy.py backfill-owners --apply
 ```
+
+`enroll-gemini` is dry-run by default, validates the binding id, resolves the
+owner, and writes all six rows in one transaction. `backfill-owners` infers an
+owner only when exactly one active user has grants through a matching client.
 
 `export` writes every policy; `import` reports what is missing and only adds,
 so a restore never deletes an operator's newer entries.
 
 Removing a policy takes effect **immediately for admission**: an automatic
 client whose stored callbacks no longer match is refused at `get_client`, so
-authorization, token and consent operations stop working for it. `revalidate`
+authorization, token and consent operations stop working for it. It does **not**
+invalidate access tokens already issued — those keep working until expiry or an
+explicit revocation, which is what `revalidate --apply` performs. `revalidate`
 reports those clients, and `revalidate --apply` additionally revokes their
 grants and tokens, discards pending requests and deletes the client rows in one
 transaction. Running it is cleanup; not running it leaves unusable clients
@@ -213,8 +231,9 @@ loopback allowed only for native clients an operator registered.
 - CSRF on the consent POST is a signed-in session plus a double-submit cookie
   scoped to `/oauth`, SameSite=Lax.
 - The consent page shows the full callback URI and its host, labels the client
-  as operator-registered or policy-matched, and refuses to render an Allow form
-  when the callback is no longer admitted.
+  as operator-registered or policy-matched, refuses to render an Allow form
+  when the callback is no longer admitted, and refuses outright when the
+  binding is enrolled to a different account.
 - Completion and token issuance re-check admission, because a policy can be
   withdrawn between approval and redirect; the failure target is our own error
   page, never the retired callback.

@@ -169,6 +169,33 @@ class MatchPolicyTests(unittest.TestCase):
         self.assertFalse(match_policy("not a url", CLAUDE))
 
 
+class OwnerTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = dict(CLAUDE, owner_user_id="u-1")
+        self.uri = "https://claude.ai/api/mcp/auth_callback"
+
+    def test_owner_can_authorize(self):
+        from mcp_oauth_policy import uri_owner_allows
+
+        self.assertTrue(uri_owner_allows(self.uri, [self.policy], "u-1"))
+
+    def test_other_account_cannot_authorize(self):
+        from mcp_oauth_policy import uri_owner_allows
+
+        self.assertFalse(uri_owner_allows(self.uri, [self.policy], "u-2"))
+
+    def test_unowned_policy_allows_anyone(self):
+        from mcp_oauth_policy import uri_owner_allows
+
+        unowned = dict(self.policy, owner_user_id=None)
+        self.assertTrue(uri_owner_allows(self.uri, [unowned], "u-2"))
+
+    def test_no_policy_allows(self):
+        from mcp_oauth_policy import uri_owner_allows
+
+        self.assertTrue(uri_owner_allows(self.uri, [], "u-2"))
+
+
 class ClientCallbackStatusTests(unittest.TestCase):
     def test_manual_is_approved_by_operator(self):
         client = {"source": "manual", "redirect_uris": ["https://anywhere.test/cb"]}

@@ -548,6 +548,28 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(complete.status_code, 403, complete.text)
         self.assertNotIn("code=", complete.headers.get("location", ""))
 
+    async def _case_connector_enrolled_to_another_account_cannot_complete(self):
+        policy_id = next(
+            p["id"] for p in self.store.list_policies() if p["host"] == "connector.test"
+        )
+        self.store.set_policy_owner(policy_id, "someone-else")
+
+        client = await self._register()
+        resp, _ = await self._authorize(client)
+        request_id = resp.headers["location"].split("request=", 1)[1]
+        _grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id=self.user_id,
+            agent_id="claude-deadbeef",
+            key_hash="deadbeef",
+            key_fingerprint=hashlib.sha256(self.api_key.encode()).hexdigest(),
+            scopes=["mcp:browser"],
+            resource=RESOURCE,
+        )
+        complete = await self.client.get("/oauth/complete", params={"ticket": ticket})
+        self.assertEqual(complete.status_code, 403, complete.text)
+        self.assertNotIn("code=", complete.headers.get("location", ""))
+
     async def _case_authorize_allocation_is_bounded(self):
         import mcp_oauth_provider as provider_module
 
@@ -797,6 +819,7 @@ for _name in (
     "withdrawing_a_policy_blocks_the_client",
     "withdrawn_policy_cannot_deliver_a_code",
     "changed_callback_cannot_receive_a_code",
+    "connector_enrolled_to_another_account_cannot_complete",
     "authorize_allocation_is_bounded",
     "code_cannot_be_reused",
     "wrong_verifier_is_rejected",
