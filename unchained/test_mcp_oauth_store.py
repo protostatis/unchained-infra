@@ -799,6 +799,7 @@ class BindingTests(StoreTestBase):
     def test_enroll_binding_refuses_a_different_owner(self):
         entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
         self.store.enroll_binding("b-enroll", "u-1", [entry])
+        self.assertEqual(self.store.binding_events("b-enroll")[0]["event"], "enrolled")
         with self.assertRaises(ValueError):
             self.store.enroll_binding("b-enroll", "u-2", [entry])
 
@@ -862,6 +863,10 @@ class BindingTests(StoreTestBase):
             )
         )
         self.assertIsNone(self.store.get_authorization_code(code))
+        event = self.store.binding_events("b1")[0]
+        self.assertEqual(event["event"], "transferred")
+        self.assertEqual(event["old_owner"], "u-1")
+        self.assertEqual(event["new_owner"], "u-2")
         self.assertTrue(
             all(
                 p["owner_user_id"] == "u-2"
@@ -932,6 +937,7 @@ class BindingTests(StoreTestBase):
         )
         self.assertEqual(self.store.block_bindings_for_user("u-1"), 1)
         self.assertEqual(self.store.get_binding("b1")["status"], "blocked")
+        self.assertEqual(self.store.binding_events("b1")[0]["event"], "blocked")
         self.assertIsNone(self.store.load_access_token(issued["access_token"]))
         self.assertIsNone(self.store.get_grant(grant_id))
 

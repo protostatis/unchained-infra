@@ -78,10 +78,6 @@ def _chunks(values, size: int = 400):
     for index in range(0, len(values), size):
         yield values[index:index + size]
 
-
-
-
-
 def _hash(value: str) -> str:
     """Hash a bearer secret for storage.  Never store the raw value."""
     return hashlib.sha256(value.encode()).hexdigest()
@@ -234,6 +230,18 @@ class OAuthStore:
                     authorization_version INTEGER NOT NULL DEFAULT 1,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mcp_oauth_binding_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    binding_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    old_owner TEXT,
+                    new_owner TEXT,
+                    version INTEGER,
+                    created_at REAL NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
@@ -449,9 +457,9 @@ class OAuthStore:
 
         Ownership used to be duplicated across the six policy rows of a
         binding.  A binding row is now authoritative; policies reference it.
-        A binding whose rows disagree keeps a blocked tombstone instead of
-        silently choosing an owner, and an unowned personal callback stays
-        unbound, which callers treat as blocked.
+        A binding whose rows disagree is left unbound rather than being given
+        an arbitrary owner, so its personal callbacks fail closed until an
+        operator enrolls it explicitly.
         """
         from mcp_oauth_policy import (
             PERSONAL_CALLBACK_MARKER,
@@ -502,6 +510,44 @@ class OAuthStore:
         conn.execute(
             "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('bindings_migrated', '1')"
         )
+
+    @staticmethod
+    def _record_event(
+        conn,
+        binding_id: str,
+        event: str,
+        *,
+        actor: str = "",
+        reason: str = "",
+        old_owner: str | None = None,
+        new_owner: str | None = None,
+        version: int | None = None,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO mcp_oauth_binding_events
+                (binding_id, event, actor, reason, old_owner, new_owner, version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (binding_id, event, actor or "", reason or "", old_owner, new_owner, version, _now()),
+        )
+
+    @staticmethod
+    def _binding_version_tx(conn, binding_id: str) -> int:
+        row = conn.execute(
+            "SELECT authorization_version FROM mcp_oauth_bindings WHERE binding_id = ?",
+            (binding_id,),
+        ).fetchone()
+        return int(row["authorization_version"]) if row else 0
+
+    def binding_events(self, binding_id: str, limit: int = 10) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM mcp_oauth_binding_events WHERE binding_id = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT ?",
+                (binding_id, int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def bindings_map(self) -> dict[str, dict]:
         with self._conn() as conn:
@@ -604,6 +650,7 @@ class OAuthStore:
         entries: Iterable[dict],
         *,
         provider: str = "google",
+        actor: str = "",
     ) -> list[int]:
         """Create the binding and its policies in one transaction."""
         now = _now()
@@ -638,6 +685,14 @@ class OAuthStore:
                     self._upsert_policy(conn, entry, owner_user_id, binding_id)
                     for entry in entries
                 ]
+                self._record_event(
+                    conn,
+                    binding_id,
+                    "enrolled",
+                    actor=actor,
+                    new_owner=owner_user_id,
+                    version=self._binding_version_tx(conn, binding_id),
+                )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -792,6 +847,16 @@ class OAuthStore:
                 # Revocation shares the transaction: a failure here leaves the
                 # old owner and the old grants intact, never a half-transfer.
                 revoked = self._revoke_clients_tx(conn, client_ids, now)
+                self._record_event(
+                    conn,
+                    binding_id,
+                    "transferred",
+                    actor=actor,
+                    reason=reason,
+                    old_owner=from_owner,
+                    new_owner=to_owner,
+                    version=self._binding_version_tx(conn, binding_id),
+                )
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -829,6 +894,14 @@ class OAuthStore:
                     (now, user_id),
                 )
                 count = cur.rowcount or 0
+                for binding_id in bindings:
+                    self._record_event(
+                        conn,
+                        binding_id,
+                        "blocked",
+                        reason="owner_account_rejected",
+                        version=self._binding_version_tx(conn, binding_id),
+                    )
                 self._revoke_clients_tx(conn, client_ids, now)
             except Exception:
                 conn.execute("ROLLBACK")

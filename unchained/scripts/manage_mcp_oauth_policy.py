@@ -296,7 +296,7 @@ def cmd_enroll_gemini(store: OAuthStore, args) -> int:
 
     binding_key = f"user_bound_custom-mcp-{binding}"
     try:
-        ids = store.enroll_binding(binding_key, owner_id, bundle)
+        ids = store.enroll_binding(binding_key, owner_id, bundle, actor=args.actor or "")
     except ValueError as exc:
         print(f"Refusing: {exc}")
         return 2
@@ -368,11 +368,18 @@ def cmd_list_bindings(store: OAuthStore, args) -> int:
         binding = bindings[key]
         user = auth.find_user_by_id(binding["owner_user_id"])
         impact = store.binding_impact(key)
+        events = store.binding_events(key, 1)
+        last = ""
+        if events:
+            event = events[0]
+            last = f"  last={event['event']}"
+            if event.get("actor"):
+                last += f" by {event['actor']}"
         print(
             f"{key}  [{binding['status']}]  v{binding['authorization_version']}  "
             f"owner={user['email'] if user else binding['owner_user_id']}  "
             f"clients={impact['clients']} grants={impact['active_grants']} "
-            f"pending={impact['pending_requests']}"
+            f"pending={impact['pending_requests']}{last}"
         )
     return 0
 
@@ -457,6 +464,7 @@ def main() -> int:
     enroll.add_argument("--binding", required=True, help="id after user_bound_custom-mcp-")
     enroll.add_argument("--owner", required=True, help="Unchained account email")
     enroll.add_argument("--reason", default="")
+    enroll.add_argument("--actor", default="")
     enroll.add_argument("--apply", action="store_true")
 
     backfill = sub.add_parser(

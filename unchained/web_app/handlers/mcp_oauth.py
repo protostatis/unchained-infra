@@ -319,7 +319,6 @@ _MISMATCH_REASONS = {
     "missing": "This connector's enrollment is missing. Ask the operator to enroll it.",
     "inactive": "This connector's enrollment is not active.",
     "conflict": "This connector's enrollment is ambiguous. Ask the operator to review it.",
-    "not_admitted": "This connector's callback is not allowed.",
 }
 
 
