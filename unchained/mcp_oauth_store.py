@@ -73,6 +73,18 @@ def _now() -> float:
     return time.time()
 
 
+def _chunks(values, size: int = 400):
+    values = list(values)
+    for index in range(0, len(values), size):
+        yield values[index:index + size]
+
+
+def _provider_for_binding(binding_id: str) -> str:
+    if binding_id.startswith("user_bound_custom-mcp-"):
+        return "google"
+    return "unknown"
+
+
 def _hash(value: str) -> str:
     """Hash a bearer secret for storage.  Never store the raw value."""
     return hashlib.sha256(value.encode()).hexdigest()
@@ -462,22 +474,26 @@ class OAuthStore:
             owners = sorted({str(r["owner_user_id"]) for r in members if r["owner_user_id"]})
             if not owners:
                 continue
-            status = "active" if len(owners) == 1 else "blocked"
+            if len(owners) != 1:
+                # Conflicting owners: leave the rows unbound so every personal
+                # callback fails closed until an operator enrolls it explicitly.
+                continue
             conn.execute(
                 """
                 INSERT OR IGNORE INTO mcp_oauth_bindings
                     (provider, binding_id, owner_user_id, status,
                      authorization_version, created_at, updated_at)
-                VALUES ('google', ?, ?, ?, 1, ?, ?)
+                VALUES (?, ?, ?, 'active', 1, ?, ?)
                 """,
-                (binding_id, owners[0], status, now, now),
+                (_provider_for_binding(binding_id), binding_id, owners[0], now, now),
             )
             ids = [int(r["id"]) for r in members]
-            placeholders = ",".join("?" for _ in ids)
-            conn.execute(
-                f"UPDATE mcp_oauth_policies SET binding_id = ? WHERE id IN ({placeholders})",
-                (binding_id, *ids),
-            )
+            for chunk in _chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                conn.execute(
+                    f"UPDATE mcp_oauth_policies SET binding_id = ? WHERE id IN ({placeholders})",
+                    (binding_id, *chunk),
+                )
 
     def bindings_map(self) -> dict[str, dict]:
         with self._conn() as conn:
@@ -498,7 +514,14 @@ class OAuthStore:
     def get_binding(self, binding_id: str) -> dict | None:
         return self.bindings_map().get(binding_id)
 
-    def upsert_binding(self, binding_id: str, owner_user_id: str, *, status: str = "active") -> dict:
+    def upsert_binding(
+        self,
+        binding_id: str,
+        owner_user_id: str,
+        *,
+        provider: str = "google",
+        status: str = "active",
+    ) -> dict:
         """Create the binding, or refuse to silently change its owner."""
         now = _now()
         with self._conn() as conn:
@@ -524,9 +547,9 @@ class OAuthStore:
                         INSERT INTO mcp_oauth_bindings
                             (provider, binding_id, owner_user_id, status,
                              authorization_version, created_at, updated_at)
-                        VALUES ('google', ?, ?, ?, 1, ?, ?)
+                        VALUES (?, ?, ?, ?, 1, ?, ?)
                         """,
-                        (binding_id, owner_user_id, status, now, now),
+                        (provider, binding_id, owner_user_id, status, now, now),
                     )
             except Exception:
                 conn.execute("ROLLBACK")
@@ -585,62 +608,80 @@ class OAuthStore:
                 result.add(client["client_id"])
         return result
 
-    def revoke_client_authorizations(self, client_ids: Iterable[str]) -> dict:
-        """Revoke grants, tokens, families and pending state for clients."""
-        ids = [c for c in client_ids if c]
+    @staticmethod
+    def _revoke_clients_tx(conn, client_ids: Iterable[str], now: float) -> dict:
+        """Revoke a client set inside the caller's transaction.
+
+        Batched: SQLite binds at most ~999 parameters, and one account can own
+        many grants.
+        """
+        ids = list(dict.fromkeys(str(c) for c in client_ids if c))
         if not ids:
             return {"grants_revoked": 0, "requests_discarded": 0}
+
+        grant_ids: list[str] = []
+        request_ids: list[str] = []
+        for chunk in _chunks(ids):
+            ph = ",".join("?" for _ in chunk)
+            grant_ids.extend(
+                r["id"]
+                for r in conn.execute(
+                    f"SELECT id FROM mcp_oauth_grants WHERE client_id IN ({ph}) "
+                    f"AND revoked_at IS NULL",
+                    tuple(chunk),
+                ).fetchall()
+            )
+            request_ids.extend(
+                r["id"]
+                for r in conn.execute(
+                    f"SELECT id FROM mcp_oauth_requests WHERE client_id IN ({ph})",
+                    tuple(chunk),
+                ).fetchall()
+            )
+
+        for chunk in _chunks(grant_ids):
+            gph = ",".join("?" for _ in chunk)
+            conn.execute(
+                f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({gph})",
+                (now, *chunk),
+            )
+            conn.execute(
+                f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
+                (now, *chunk),
+            )
+            conn.execute(
+                f"UPDATE mcp_oauth_families SET revoked_at = ? "
+                f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
+                (now, *chunk),
+            )
+        for chunk in _chunks(request_ids):
+            rph = ",".join("?" for _ in chunk)
+            conn.execute(
+                f"DELETE FROM mcp_oauth_approvals WHERE request_id IN ({rph})",
+                tuple(chunk),
+            )
+        for chunk in _chunks(ids):
+            ph = ",".join("?" for _ in chunk)
+            conn.execute(
+                f"DELETE FROM mcp_oauth_codes WHERE client_id IN ({ph})", tuple(chunk)
+            )
+            conn.execute(
+                f"DELETE FROM mcp_oauth_requests WHERE client_id IN ({ph})", tuple(chunk)
+            )
+        return {"grants_revoked": len(grant_ids), "requests_discarded": len(request_ids)}
+
+    def revoke_client_authorizations(self, client_ids: Iterable[str]) -> dict:
         now = _now()
-        placeholders = ",".join("?" for _ in ids)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                grants = conn.execute(
-                    f"SELECT id FROM mcp_oauth_grants WHERE client_id IN ({placeholders}) "
-                    f"AND revoked_at IS NULL",
-                    tuple(ids),
-                ).fetchall()
-                grant_ids = [r["id"] for r in grants]
-                if grant_ids:
-                    gph = ",".join("?" for _ in grant_ids)
-                    conn.execute(
-                        f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({gph})",
-                        (now, *grant_ids),
-                    )
-                    conn.execute(
-                        f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
-                        f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
-                        (now, *grant_ids),
-                    )
-                    conn.execute(
-                        f"UPDATE mcp_oauth_families SET revoked_at = ? "
-                        f"WHERE revoked_at IS NULL AND grant_id IN ({gph})",
-                        (now, *grant_ids),
-                    )
-                requests = conn.execute(
-                    f"SELECT id FROM mcp_oauth_requests WHERE client_id IN ({placeholders})",
-                    tuple(ids),
-                ).fetchall()
-                request_ids = [r["id"] for r in requests]
-                if request_ids:
-                    rph = ",".join("?" for _ in request_ids)
-                    conn.execute(
-                        f"DELETE FROM mcp_oauth_approvals WHERE request_id IN ({rph})",
-                        tuple(request_ids),
-                    )
-                conn.execute(
-                    f"DELETE FROM mcp_oauth_codes WHERE client_id IN ({placeholders})",
-                    tuple(ids),
-                )
-                conn.execute(
-                    f"DELETE FROM mcp_oauth_requests WHERE client_id IN ({placeholders})",
-                    tuple(ids),
-                )
+                result = self._revoke_clients_tx(conn, client_ids, now)
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
-        return {"grants_revoked": len(grant_ids), "requests_discarded": len(request_ids)}
+        return result
 
     def transfer_binding(
         self,
@@ -685,12 +726,14 @@ class OAuthStore:
                     "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE binding_id = ?",
                     (to_owner, binding_id),
                 )
+                # Revocation shares the transaction: a failure here leaves the
+                # old owner and the old grants intact, never a half-transfer.
+                revoked = self._revoke_clients_tx(conn, client_ids, now)
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
 
-        revoked = self.revoke_client_authorizations(client_ids)
         return {
             "binding_id": binding_id,
             "from_owner": from_owner,
@@ -703,23 +746,28 @@ class OAuthStore:
     def block_bindings_for_user(self, user_id: str) -> int:
         """Tombstone an account's bindings and revoke what they authorized."""
         now = _now()
-        with self._conn() as conn:
-            bindings = [
-                r["binding_id"]
-                for r in conn.execute(
-                    "SELECT binding_id FROM mcp_oauth_bindings "
-                    "WHERE owner_user_id = ? AND status = 'active'",
-                    (user_id,),
-                ).fetchall()
-            ]
-            cur = conn.execute(
-                "UPDATE mcp_oauth_bindings SET status = 'blocked', updated_at = ? "
-                "WHERE owner_user_id = ? AND status = 'active'",
-                (now, user_id),
-            )
-            count = cur.rowcount or 0
+        bindings = [
+            b["binding_id"]
+            for b in self.bindings_map().values()
+            if b["owner_user_id"] == user_id and b["status"] == "active"
+        ]
+        client_ids: set[str] = set()
         for binding_id in bindings:
-            self.revoke_client_authorizations(self.clients_for_binding(binding_id))
+            client_ids |= self.clients_for_binding(binding_id)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute(
+                    "UPDATE mcp_oauth_bindings SET status = 'blocked', updated_at = ? "
+                    "WHERE owner_user_id = ? AND status = 'active'",
+                    (now, user_id),
+                )
+                count = cur.rowcount or 0
+                self._revoke_clients_tx(conn, client_ids, now)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
         return count
 
     # -- callback policies -------------------------------------------------

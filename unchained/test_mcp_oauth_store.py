@@ -816,7 +816,15 @@ class BindingTests(StoreTestBase):
             scheme="https", host="g.test", port=443, path=f"/a/{binding}", owner_user_id="u-2"
         )
         fresh = OAuthStore(self.db_path)
-        self.assertEqual(fresh.get_binding(binding)["status"], "blocked")
+        # No arbitrary owner is chosen; the rows stay unbound and fail closed.
+        self.assertIsNone(fresh.get_binding(binding))
+        from mcp_oauth_policy import client_callback_status
+
+        client = {"source": "dcr", "redirect_uris": [f"https://g.test/r/{binding}"]}
+        self.assertEqual(
+            client_callback_status(client, fresh.list_policies(), fresh.bindings_map()),
+            "blocked",
+        )
 
     def test_transfer_revokes_grants_tokens_codes_and_pending_requests(self):
         client_id = self._bound_client()
@@ -847,6 +855,38 @@ class BindingTests(StoreTestBase):
                 if p.get("binding_id") == "b1"
             )
         )
+
+    def test_transfer_rolls_back_when_revocation_fails(self):
+        self._bound_client()
+        original = self.store._revoke_clients_tx
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("revocation failed")
+
+        self.store._revoke_clients_tx = boom  # type: ignore[assignment]
+        try:
+            with self.assertRaises(RuntimeError):
+                self.store.transfer_binding("b1", from_owner="u-1", to_owner="u-2")
+        finally:
+            self.store._revoke_clients_tx = original  # type: ignore[assignment]
+        binding = self.store.get_binding("b1")
+        self.assertEqual(binding["owner_user_id"], "u-1")
+        self.assertEqual(binding["authorization_version"], 1)
+
+    def test_revocation_batches_large_client_sets(self):
+        ids = [f"c{i}" for i in range(1100)]
+        with self.store._conn() as conn:
+            conn.executemany(
+                """
+                INSERT INTO mcp_oauth_grants
+                    (id, user_id, client_id, agent_id, key_hash,
+                     key_fingerprint, scopes, created_at)
+                VALUES (?, 'u-1', ?, 'claude-aaaaaaaa', 'aaaaaaaa', 'f', '[]', ?)
+                """,
+                [(f"g{i}", cid, time.time()) for i, cid in enumerate(ids)],
+            )
+        result = self.store.revoke_client_authorizations(ids)
+        self.assertEqual(result["grants_revoked"], 1100)
 
     def test_transfer_requires_the_expected_owner(self):
         self._bound_client()
