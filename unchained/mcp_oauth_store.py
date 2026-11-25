@@ -79,10 +79,7 @@ def _chunks(values, size: int = 400):
         yield values[index:index + size]
 
 
-def _provider_for_binding(binding_id: str) -> str:
-    if binding_id.startswith("user_bound_custom-mcp-"):
-        return "google"
-    return "unknown"
+
 
 
 def _hash(value: str) -> str:
@@ -457,11 +454,16 @@ class OAuthStore:
         silently choosing an owner, and an unowned personal callback stays
         unbound, which callers treat as blocked.
         """
-        from mcp_oauth_policy import binding_id_from_uri
+        from mcp_oauth_policy import PERSONAL_CALLBACK_MARKER, binding_id_from_uri, provider_for_binding
 
+        marker = conn.execute(
+            "SELECT value FROM mcp_oauth_meta WHERE key = 'bindings_migrated'"
+        ).fetchone()
+        if marker is not None and marker["value"] == "1":
+            return
         rows = conn.execute(
-            "SELECT id, path, owner_user_id FROM mcp_oauth_policies "
-            "WHERE path LIKE '%user_bound_custom-mcp-%'"
+            "SELECT id, path, owner_user_id FROM mcp_oauth_policies WHERE path LIKE ?",
+            (f"%{PERSONAL_CALLBACK_MARKER}%",),
         ).fetchall()
         groups: dict[str, list] = {}
         for row in rows:
@@ -485,7 +487,7 @@ class OAuthStore:
                      authorization_version, created_at, updated_at)
                 VALUES (?, ?, ?, 'active', 1, ?, ?)
                 """,
-                (_provider_for_binding(binding_id), binding_id, owners[0], now, now),
+                (provider_for_binding(binding_id), binding_id, owners[0], now, now),
             )
             ids = [int(r["id"]) for r in members]
             for chunk in _chunks(ids):
@@ -494,6 +496,9 @@ class OAuthStore:
                     f"UPDATE mcp_oauth_policies SET binding_id = ? WHERE id IN ({placeholders})",
                     (binding_id, *chunk),
                 )
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('bindings_migrated', '1')"
+        )
 
     def bindings_map(self) -> dict[str, dict]:
         with self._conn() as conn:
@@ -588,6 +593,53 @@ class OAuthStore:
             "active_grants": int(grants),
             "pending_requests": int(pending),
         }
+
+    def enroll_binding(
+        self,
+        binding_id: str,
+        owner_user_id: str,
+        entries: Iterable[dict],
+        *,
+        provider: str = "google",
+    ) -> list[int]:
+        """Create the binding and its policies in one transaction."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT owner_user_id FROM mcp_oauth_bindings WHERE binding_id = ?",
+                    (binding_id,),
+                ).fetchone()
+                if row is not None:
+                    if row["owner_user_id"] != owner_user_id:
+                        raise ValueError(
+                            "binding is enrolled to another account; use transfer-binding"
+                        )
+                    conn.execute(
+                        "UPDATE mcp_oauth_bindings SET status = 'active', updated_at = ? "
+                        "WHERE binding_id = ?",
+                        (now, binding_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO mcp_oauth_bindings
+                            (provider, binding_id, owner_user_id, status,
+                             authorization_version, created_at, updated_at)
+                        VALUES (?, ?, ?, 'active', 1, ?, ?)
+                        """,
+                        (provider, binding_id, owner_user_id, now, now),
+                    )
+                ids = [
+                    self._upsert_policy(conn, entry, owner_user_id, binding_id)
+                    for entry in entries
+                ]
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return ids
 
     def clients_for_binding(self, binding_id: str) -> set[str]:
         """Clients whose registered callbacks belong to this binding."""

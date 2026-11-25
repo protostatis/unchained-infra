@@ -790,6 +790,18 @@ class BindingTests(StoreTestBase):
         )
         return grant_id, ticket
 
+    def _clear_binding_migration_marker(self):
+        with self.store._conn() as conn:
+            conn.execute(
+                "DELETE FROM mcp_oauth_meta WHERE key = 'bindings_migrated'"
+            )
+
+    def test_enroll_binding_refuses_a_different_owner(self):
+        entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
+        self.store.enroll_binding("b-enroll", "u-1", [entry])
+        with self.assertRaises(ValueError):
+            self.store.enroll_binding("b-enroll", "u-2", [entry])
+
     def test_migration_promotes_owned_policy_to_binding(self):
         binding = "user_bound_custom-mcp-abc"
         self.store.add_policy(
@@ -799,6 +811,7 @@ class BindingTests(StoreTestBase):
             path=f"/r/{binding}",
             owner_user_id="u-1",
         )
+        self._clear_binding_migration_marker()
         fresh = OAuthStore(self.db_path)
         row = fresh.get_binding(binding)
         self.assertIsNotNone(row)
@@ -815,6 +828,7 @@ class BindingTests(StoreTestBase):
         self.store.add_policy(
             scheme="https", host="g.test", port=443, path=f"/a/{binding}", owner_user_id="u-2"
         )
+        self._clear_binding_migration_marker()
         fresh = OAuthStore(self.db_path)
         # No arbitrary owner is chosen; the rows stay unbound and fail closed.
         self.assertIsNone(fresh.get_binding(binding))

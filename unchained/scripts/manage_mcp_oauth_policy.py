@@ -296,13 +296,10 @@ def cmd_enroll_gemini(store: OAuthStore, args) -> int:
 
     binding_key = f"user_bound_custom-mcp-{binding}"
     try:
-        store.upsert_binding(binding_key, owner_id)
+        ids = store.enroll_binding(binding_key, owner_id, bundle)
     except ValueError as exc:
         print(f"Refusing: {exc}")
         return 2
-    ids = store.add_policy_group(
-        bundle, owner_user_id=owner_id, binding_id=binding_key
-    )
     print(f"Enrolled binding {binding_key} with {len(ids)} policies.")
     return 0
 

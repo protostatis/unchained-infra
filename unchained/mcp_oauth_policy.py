@@ -243,7 +243,14 @@ def describe_policy(policy: Mapping) -> str:
 
 
 PERSONAL_CALLBACK_MARKER = "user_bound_custom-mcp-"
-_BINDING_RE = re.compile(r"(user_bound_custom-mcp-[A-Za-z0-9_-]+)")
+_BINDING_RE = re.compile(
+    r"(" + re.escape(PERSONAL_CALLBACK_MARKER) + r"[A-Za-z0-9_-]+)"
+)
+
+
+def provider_for_binding(binding_id: str) -> str:
+    """Provider a binding id belongs to."""
+    return "google" if str(binding_id or "").startswith(PERSONAL_CALLBACK_MARKER) else "unknown"
 
 
 def binding_id_from_uri(value: str) -> str | None:
