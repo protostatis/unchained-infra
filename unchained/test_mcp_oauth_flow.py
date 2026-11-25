@@ -549,10 +549,15 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertNotIn("code=", complete.headers.get("location", ""))
 
     async def _case_connector_enrolled_to_another_account_cannot_complete(self):
-        policy_id = next(
-            p["id"] for p in self.store.list_policies() if p["host"] == "connector.test"
+        self.store.upsert_binding("test-binding", "someone-else")
+        self.store.add_policy(
+            scheme="https",
+            host="connector.test",
+            port=443,
+            path="/callback",
+            match="exact",
+            binding_id="test-binding",
         )
-        self.store.set_policy_owner(policy_id, "someone-else")
 
         client = await self._register()
         resp, _ = await self._authorize(client)

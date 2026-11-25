@@ -294,8 +294,13 @@ def cmd_enroll_gemini(store: OAuthStore, args) -> int:
         print("Dry run. Re-run with --apply to enroll.")
         return 0
 
-    ids = store.add_policy_group(bundle, owner_user_id=owner_id)
-    print(f"Enrolled {len(ids)} policies.")
+    binding_key = f"user_bound_custom-mcp-{binding}"
+    try:
+        ids = store.enroll_binding(binding_key, owner_id, bundle, actor=args.actor or "")
+    except ValueError as exc:
+        print(f"Refusing: {exc}")
+        return 2
+    print(f"Enrolled binding {binding_key} with {len(ids)} policies.")
     return 0
 
 
@@ -332,8 +337,92 @@ def cmd_backfill_owners(store: OAuthStore, args) -> int:
         print("Dry run. Re-run with --apply to set these owners.")
         return 0
     for policy_id, user_id in proposed.items():
+        policy = next(p for p in policies if p["id"] == policy_id)
+        binding_id = policy.get("binding_id") or _binding_from_path(policy["path"])
         store.set_policy_owner(policy_id, user_id)
+        if binding_id:
+            store.upsert_binding(binding_id, user_id)
+            store.attach_policies_to_binding(binding_id)
     print(f"Set owners on {len(proposed)} policies.")
+    return 0
+
+
+def _binding_from_path(path: str) -> str:
+    from mcp_oauth_policy import binding_id_from_uri
+
+    return binding_id_from_uri(path) or ""
+
+
+def _binding_key(value: str) -> str:
+    value = str(value or "").strip()
+    return value if value.startswith("user_bound_custom-mcp-") else f"user_bound_custom-mcp-{value}"
+
+
+def cmd_list_bindings(store: OAuthStore, args) -> int:
+    bindings = store.bindings_map()
+    if not bindings:
+        print("No bindings.")
+        return 0
+    auth = _auth()
+    for key in sorted(bindings):
+        binding = bindings[key]
+        user = auth.find_user_by_id(binding["owner_user_id"])
+        impact = store.binding_impact(key)
+        events = store.binding_events(key, 1)
+        last = ""
+        if events:
+            event = events[0]
+            last = f"  last={event['event']}"
+            if event.get("actor"):
+                last += f" by {event['actor']}"
+        print(
+            f"{key}  [{binding['status']}]  v{binding['authorization_version']}  "
+            f"owner={user['email'] if user else binding['owner_user_id']}  "
+            f"clients={impact['clients']} grants={impact['active_grants']} "
+            f"pending={impact['pending_requests']}{last}"
+        )
+    return 0
+
+
+def cmd_transfer_binding(store: OAuthStore, args) -> int:
+    key = _binding_key(args.binding)
+    from_id = _user_id_for_email(args.from_owner)
+    to_id = _user_id_for_email(args.to_owner)
+    if not from_id or not to_id:
+        print("Both --from and --to must be existing Unchained accounts.")
+        return 2
+    binding = store.get_binding(key)
+    if binding is None:
+        print(f"No binding {key}.")
+        return 1
+    impact = store.binding_impact(key)
+    auth = _auth()
+    old = auth.find_user_by_id(binding["owner_user_id"])
+    print(f"Binding: {key} [{binding['status']}] v{binding['authorization_version']}")
+    print(f"Owner:   {old['email'] if old else binding['owner_user_id']} -> {args.to_owner}")
+    print(
+        f"Impact:  {impact['clients']} client(s), {impact['active_grants']} active grant(s), "
+        f"{impact['pending_requests']} pending request(s)"
+    )
+    if not args.apply:
+        print("Dry run. Re-run with --apply to transfer and revoke the affected grants.")
+        return 0
+    try:
+        result = store.transfer_binding(
+            key,
+            from_owner=from_id,
+            to_owner=to_id,
+            actor=args.actor or "",
+            reason=args.reason or "",
+        )
+    except ValueError as exc:
+        print(f"Refusing: {exc}")
+        return 2
+    print(
+        f"Transferred to {args.to_owner}; version {result['version']}; "
+        f"revoked {result['grants_revoked']} grant(s); "
+        f"discarded {result['requests_discarded']} request(s)."
+    )
     return 0
 
 
@@ -375,6 +464,7 @@ def main() -> int:
     enroll.add_argument("--binding", required=True, help="id after user_bound_custom-mcp-")
     enroll.add_argument("--owner", required=True, help="Unchained account email")
     enroll.add_argument("--reason", default="")
+    enroll.add_argument("--actor", default="")
     enroll.add_argument("--apply", action="store_true")
 
     backfill = sub.add_parser(
@@ -382,6 +472,18 @@ def main() -> int:
         help="infer owners for per-account bindings from existing grants",
     )
     backfill.add_argument("--apply", action="store_true")
+
+    sub.add_parser("list-bindings", help="show canonical bindings and their impact")
+
+    transfer = sub.add_parser(
+        "transfer-binding", help="move a binding to another account"
+    )
+    transfer.add_argument("--binding", required=True)
+    transfer.add_argument("--from", dest="from_owner", required=True)
+    transfer.add_argument("--to", dest="to_owner", required=True)
+    transfer.add_argument("--reason", default="")
+    transfer.add_argument("--actor", default="")
+    transfer.add_argument("--apply", action="store_true")
 
     args = parser.parse_args()
     store = _store(args)
@@ -399,6 +501,10 @@ def main() -> int:
         return cmd_enroll_gemini(store, args)
     if args.command == "backfill-owners":
         return cmd_backfill_owners(store, args)
+    if args.command == "list-bindings":
+        return cmd_list_bindings(store, args)
+    if args.command == "transfer-binding":
+        return cmd_transfer_binding(store, args)
     return cmd_revalidate(store, args)
 
 

@@ -194,6 +194,7 @@ class ConsentHandlerTests(unittest.TestCase):
         self.assertNotIn("Unverified connector", response.text)
 
     def _enroll_owner(self, user_id):
+        self.store.upsert_binding("test-binding", user_id)
         self.store.add_policy(
             scheme="https",
             host="connector.test",
@@ -202,6 +203,7 @@ class ConsentHandlerTests(unittest.TestCase):
             match="exact",
             allow_query=0,
             owner_user_id=user_id,
+            binding_id="test-binding",
         )
 
     def test_connector_enrolled_to_another_account_is_blocked(self):
@@ -209,6 +211,7 @@ class ConsentHandlerTests(unittest.TestCase):
         response = self._get(self.request_id)
         self.assertEqual(response.status, 403)
         self.assertIn("different Unchained account", response.text)
+        self.assertIn("Switch Unchained account", response.text)
 
     def test_connector_enrolled_to_this_account_is_allowed(self):
         self._enroll_owner("user-1")

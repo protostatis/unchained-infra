@@ -242,28 +242,81 @@ def describe_policy(policy: Mapping) -> str:
     return f"{policy.get('scheme')}://{policy.get('host')}{port_part}{path}{suffix}{query}"
 
 
-def policy_owners_for_uri(uri: str, policies: Iterable[Mapping]) -> set[str]:
-    """Accounts a callback is enrolled to, via matching policies with an owner."""
-    owners: set[str] = set()
-    for policy in policies:
-        owner = str(policy.get("owner_user_id") or "")
-        if owner and match_policy(uri, policy):
-            owners.add(owner)
-    return owners
+PERSONAL_CALLBACK_MARKER = "user_bound_custom-mcp-"
+_BINDING_RE = re.compile(
+    r"(" + re.escape(PERSONAL_CALLBACK_MARKER) + r"[A-Za-z0-9_-]+)"
+)
 
 
-def uri_owner_allows(uri: str, policies: Iterable[Mapping], user_id: str) -> bool:
-    """True when the callback is unowned or enrolled to this account.
+PERSONAL_CALLBACK_PROVIDER = "google"
 
-    A per-account binding admits one destination, not one *user*: without this
-    check any signed-in user could authorize a connector enrolled for somebody
-    else and hand it their token.
+
+def binding_id_from_uri(value: str) -> str | None:
+    """The binding identifier embedded in a personal callback, if any."""
+    match = _BINDING_RE.search(str(value or ""))
+    return match.group(1) if match else None
+
+
+def callback_binding(
+    uri: str, policies: Iterable[Mapping], bindings: Mapping[str, Mapping]
+) -> tuple[str, Mapping | None]:
+    """Classify a callback against its policies and canonical binding.
+
+    ``binding_id`` on the policy is authoritative; ``owner_user_id`` on the row
+    is a denormalised cache.  A personal callback with no binding row is never
+    treated as provider-wide, and overlapping bound/unbound policies fail
+    closed rather than picking one.
     """
-    owners = policy_owners_for_uri(uri, policies)
-    return not owners or str(user_id or "") in owners
+    matched = [p for p in policies if match_policy(uri, p)]
+    if not matched:
+        # Operator-registered (manual) clients bypass admission; a DCR client
+        # without a matching policy never gets this far because get_client
+        # reports it as blocked.  A personal-looking callback with no policy at
+        # all still fails closed.
+        return ("unbound_personal" if binding_id_from_uri(uri) else "static"), None
+    bound = [p for p in matched if p.get("binding_id")]
+    unbound = [p for p in matched if not p.get("binding_id")]
+    personal = binding_id_from_uri(uri) is not None
+
+    if bound:
+        ids = {str(p["binding_id"]) for p in bound}
+        if len(ids) != 1 or unbound:
+            return "conflict", None
+        binding = bindings.get(next(iter(ids)))
+        if binding is None:
+            return "missing", None
+        if str(binding.get("status") or "") != "active":
+            return "inactive", binding
+        return "bound", binding
+
+    if personal:
+        return "unbound_personal", None
+    return "static", None
 
 
-def client_callback_status(client: Mapping, policies: Iterable[Mapping]) -> str:
+def callback_owner_state(
+    uri: str,
+    policies: Iterable[Mapping],
+    bindings: Mapping[str, Mapping],
+    user_id: str,
+) -> tuple[bool, str]:
+    """Whether this account may authorize a callback, and why not when it may not."""
+    state, binding = callback_binding(uri, policies, bindings)
+    if state == "static":
+        return True, "static"
+    if state != "bound" or binding is None:
+        return False, state
+    owner = str(binding.get("owner_user_id") or "")
+    if owner != str(user_id or ""):
+        return False, "owner_mismatch"
+    return True, "bound"
+
+
+def client_callback_status(
+    client: Mapping,
+    policies: Iterable[Mapping],
+    bindings: Mapping[str, Mapping] | None = None,
+) -> str:
     """Classify a client's callbacks: ``manual``, ``policy`` or ``blocked``.
 
     Manual clients were registered by an operator, who is the approving party.
@@ -273,6 +326,13 @@ def client_callback_status(client: Mapping, policies: Iterable[Mapping]) -> str:
     if str(client.get("source") or "") == "manual":
         return "manual"
     uris = [str(u) for u in (client.get("redirect_uris") or [])]
-    if uris and all_policies_match(uris, policies):
-        return "policy"
-    return "blocked"
+    if not uris:
+        return "blocked"
+    for uri in uris:
+        # DCR admission: every registered callback must match a policy first.
+        if not any_policy_matches(uri, policies):
+            return "blocked"
+        state, _binding = callback_binding(uri, policies, bindings or {})
+        if state not in ("static", "bound"):
+            return "blocked"
+    return "policy"

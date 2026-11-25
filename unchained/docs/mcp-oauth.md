@@ -156,11 +156,17 @@ Policy provenance is split:
   database, **enrolled to one Unchained account**. Snapshot them with `export`
   and restore with `import`.
 
-A policy's `owner_user_id` is enforced, not decorative: consent and code
-completion refuse when the signed-in account differs from the binding's owner.
-Without that check a per-account binding would admit one destination but any
-user could authorize it and hand its connector a token for their own browser.
-Static provider callbacks have no owner and remain open to any account.
+Ownership is canonical, not per-row. `mcp_oauth_bindings (provider, binding_id)`
+holds `owner_user_id`, a status (`active`, `blocked`, `retired`) and an
+`authorization_version`; personal policy rows reference it through `binding_id`.
+(Their `owner_user_id` is a display cache.) Consent, `/oauth/complete` and
+`get_client` resolve the binding from the callback and fail closed when it is
+missing, blocked, or owned by another account. Static provider callbacks have no
+binding and remain open to any account.
+
+A personal callback with **no** binding row is refused, never treated as
+provider-wide — that covers a partially migrated database. Overlapping bound and
+unbound policies are refused as ambiguous.
 
 ```bash
 uv run scripts/manage_mcp_oauth_policy.py list
@@ -176,9 +182,22 @@ uv run scripts/manage_mcp_oauth_policy.py enroll-gemini \
 uv run scripts/manage_mcp_oauth_policy.py backfill-owners --apply
 ```
 
-`enroll-gemini` is dry-run by default, validates the binding id, resolves the
-owner, and writes all six rows in one transaction. `backfill-owners` infers an
-owner only when exactly one active user has grants through a matching client.
+`enroll-gemini` is dry-run by default, validates the binding id, creates the
+binding, and writes all six rows in one transaction. It refuses to change an
+existing owner; that is what `transfer-binding` is for.
+
+```bash
+uv run scripts/manage_mcp_oauth_policy.py list-bindings
+uv run scripts/manage_mcp_oauth_policy.py transfer-binding \
+    --binding <id> --from old@example.com --to new@example.com --apply
+```
+
+`transfer-binding` previews affected clients, grants and pending requests,
+requires the expected current owner (so two operators cannot race), bumps the
+authorization version, revokes every grant/token/family that the binding
+authorized, discards its pending requests and codes, and points the policy rows
+at the new owner. There is deliberately no overlap window — an overlap would be
+multi-account authorization again. The new owner must consent afresh.
 
 `export` writes every policy; `import` reports what is missing and only adds,
 so a restore never deletes an operator's newer entries.
@@ -260,6 +279,7 @@ loopback allowed only for native clients an operator registered.
 | Key revoked | Its grants are revoked on the next OAuth call (transport + tool layer) |
 | Grant disconnected at `/oauth/connections` | Grants, tokens and token families revoked immediately |
 | Rejected/pending account holds a token | OAuth refused; API-key behaviour unchanged |
+| Rejected account owns a binding | Binding becomes `blocked` (tombstone) and its grants are revoked; an operator transfers or retires it, it never becomes ownerless-open |
 
 Key creation is refused for a rejected account, inside the same write
 transaction as the insert, so a rejection cannot race a fresh key into

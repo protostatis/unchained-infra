@@ -755,6 +755,199 @@ class RequestBudgetTests(StoreTestBase):
         self._create(max_per_client=1)
 
 
+class BindingTests(StoreTestBase):
+    def _bound_client(self, owner="u-1", binding="b1"):
+        self.store.upsert_binding(binding, owner)
+        self.store.save_client(
+            client_id="c1",
+            client_name="C",
+            redirect_uris=["https://x.test/cb"],
+            source="dcr",
+        )
+        self.store.add_policy(
+            scheme="https", host="x.test", port=443, path="/cb", binding_id=binding
+        )
+        return "c1"
+
+    def _grant(self, client_id="c1", user="u-1"):
+        request_id = self.store.create_request(
+            client_id=client_id,
+            redirect_uri="https://x.test/cb",
+            state=None,
+            scopes=["mcp:browser"],
+            code_challenge="c" * 43,
+            code_challenge_method="S256",
+            resource=None,
+        )
+        grant_id, ticket = self.store.approve_request(
+            request_id=request_id,
+            user_id=user,
+            agent_id="claude-aaaaaaaa",
+            key_hash="aaaaaaaa",
+            key_fingerprint="f" * 64,
+            scopes=["mcp:browser"],
+            resource=None,
+        )
+        return grant_id, ticket
+
+    def _clear_binding_migration_marker(self):
+        with self.store._conn() as conn:
+            conn.execute(
+                "DELETE FROM mcp_oauth_meta WHERE key = 'bindings_migrated'"
+            )
+
+    def test_enroll_binding_refuses_a_different_owner(self):
+        entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
+        self.store.enroll_binding("b-enroll", "u-1", [entry])
+        self.assertEqual(self.store.binding_events("b-enroll")[0]["event"], "enrolled")
+        with self.assertRaises(ValueError):
+            self.store.enroll_binding("b-enroll", "u-2", [entry])
+
+    def test_migration_promotes_owned_policy_to_binding(self):
+        binding = "user_bound_custom-mcp-abc"
+        self.store.add_policy(
+            scheme="https",
+            host="g.test",
+            port=443,
+            path=f"/r/{binding}",
+            owner_user_id="u-1",
+        )
+        self._clear_binding_migration_marker()
+        fresh = OAuthStore(self.db_path)
+        row = fresh.get_binding(binding)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["owner_user_id"], "u-1")
+        self.assertEqual(row["status"], "active")
+        policy = [p for p in fresh.list_policies() if binding in p["path"]][0]
+        self.assertEqual(policy["binding_id"], binding)
+
+    def test_migration_blocks_conflicting_owners(self):
+        binding = "user_bound_custom-mcp-def"
+        self.store.add_policy(
+            scheme="https", host="g.test", port=443, path=f"/r/{binding}", owner_user_id="u-1"
+        )
+        self.store.add_policy(
+            scheme="https", host="g.test", port=443, path=f"/a/{binding}", owner_user_id="u-2"
+        )
+        self._clear_binding_migration_marker()
+        fresh = OAuthStore(self.db_path)
+        # No arbitrary owner is chosen; the rows stay unbound and fail closed.
+        self.assertIsNone(fresh.get_binding(binding))
+        from mcp_oauth_policy import client_callback_status
+
+        client = {"source": "dcr", "redirect_uris": [f"https://g.test/r/{binding}"]}
+        self.assertEqual(
+            client_callback_status(client, fresh.list_policies(), fresh.bindings_map()),
+            "blocked",
+        )
+
+    def test_transfer_revokes_grants_tokens_codes_and_pending_requests(self):
+        client_id = self._bound_client()
+        grant_id, ticket = self._grant()
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id=client_id, scopes=["mcp:browser"], resource=None
+        )
+        # A pending request with a live approval and an unused code.
+        _g2, ticket2 = self._grant()
+        code = self.store.complete_request(ticket2)["code"]
+
+        result = self.store.transfer_binding("b1", from_owner="u-1", to_owner="u-2")
+
+        self.assertEqual(result["version"], 2)
+        self.assertEqual(self.store.get_binding("b1")["owner_user_id"], "u-2")
+        self.assertIsNone(self.store.get_grant(grant_id))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(
+            self.store.rotate_refresh_token(
+                issued["refresh_token"], client_id=client_id, scopes=["mcp:browser"]
+            )
+        )
+        self.assertIsNone(self.store.get_authorization_code(code))
+        event = self.store.binding_events("b1")[0]
+        self.assertEqual(event["event"], "transferred")
+        self.assertEqual(event["old_owner"], "u-1")
+        self.assertEqual(event["new_owner"], "u-2")
+        self.assertTrue(
+            all(
+                p["owner_user_id"] == "u-2"
+                for p in self.store.list_policies()
+                if p.get("binding_id") == "b1"
+            )
+        )
+
+    def test_attach_matches_only_the_exact_binding_suffix(self):
+        self.store.add_policy(scheme="https", host="g.test", port=443, path="/r/abc")
+        self.store.add_policy(scheme="https", host="g.test", port=443, path="/r/xabc")
+        self.store.upsert_binding("abc", "u-1")
+        self.store.attach_policies_to_binding("abc")
+        rows = {
+            p["path"]: p.get("binding_id")
+            for p in self.store.list_policies()
+            if "abc" in p["path"]
+        }
+        self.assertEqual(rows["/r/abc"], "abc")
+        self.assertIsNone(rows["/r/xabc"])
+
+    def test_transfer_rolls_back_when_revocation_fails(self):
+        self._bound_client()
+        original = self.store._revoke_clients_tx
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("revocation failed")
+
+        self.store._revoke_clients_tx = boom  # type: ignore[assignment]
+        try:
+            with self.assertRaises(RuntimeError):
+                self.store.transfer_binding("b1", from_owner="u-1", to_owner="u-2")
+        finally:
+            self.store._revoke_clients_tx = original  # type: ignore[assignment]
+        binding = self.store.get_binding("b1")
+        self.assertEqual(binding["owner_user_id"], "u-1")
+        self.assertEqual(binding["authorization_version"], 1)
+
+    def test_revocation_batches_large_client_sets(self):
+        ids = [f"c{i}" for i in range(1100)]
+        with self.store._conn() as conn:
+            conn.executemany(
+                """
+                INSERT INTO mcp_oauth_grants
+                    (id, user_id, client_id, agent_id, key_hash,
+                     key_fingerprint, scopes, created_at)
+                VALUES (?, 'u-1', ?, 'claude-aaaaaaaa', 'aaaaaaaa', 'f', '[]', ?)
+                """,
+                [(f"g{i}", cid, time.time()) for i, cid in enumerate(ids)],
+            )
+        result = self.store.revoke_client_authorizations(ids)
+        self.assertEqual(result["grants_revoked"], 1100)
+
+    def test_transfer_requires_the_expected_owner(self):
+        self._bound_client()
+        with self.assertRaises(ValueError):
+            self.store.transfer_binding("b1", from_owner="u-9", to_owner="u-2")
+
+    def test_transfer_of_unknown_binding_fails(self):
+        with self.assertRaises(ValueError):
+            self.store.transfer_binding("nope", from_owner="u-1", to_owner="u-2")
+
+    def test_blocking_a_dead_owner_revokes_and_tombstones(self):
+        client_id = self._bound_client()
+        grant_id, _ticket = self._grant()
+        issued = self.store.issue_tokens(
+            grant_id=grant_id, client_id=client_id, scopes=["mcp:browser"], resource=None
+        )
+        self.assertEqual(self.store.block_bindings_for_user("u-1"), 1)
+        self.assertEqual(self.store.get_binding("b1")["status"], "blocked")
+        self.assertEqual(self.store.binding_events("b1")[0]["event"], "blocked")
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        self.assertIsNone(self.store.get_grant(grant_id))
+
+    def test_transfer_reactivates_a_blocked_binding(self):
+        self._bound_client()
+        self.store.block_bindings_for_user("u-1")
+        self.store.transfer_binding("b1", from_owner="u-1", to_owner="u-2")
+        self.assertEqual(self.store.get_binding("b1")["status"], "active")
+
+
 class DeleteClientTests(StoreTestBase):
     def test_delete_revokes_grants_tokens_and_pending_state(self):
         client, request_id, grant_id, ticket = self._approved()
