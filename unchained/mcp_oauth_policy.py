@@ -248,9 +248,7 @@ _BINDING_RE = re.compile(
 )
 
 
-def provider_for_binding(binding_id: str) -> str:
-    """Provider a binding id belongs to."""
-    return "google" if str(binding_id or "").startswith(PERSONAL_CALLBACK_MARKER) else "unknown"
+PERSONAL_CALLBACK_PROVIDER = "google"
 
 
 def binding_id_from_uri(value: str) -> str | None:

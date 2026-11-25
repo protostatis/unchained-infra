@@ -226,15 +226,14 @@ class OAuthStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS mcp_oauth_bindings (
+                    binding_id TEXT PRIMARY KEY,
                     provider TEXT NOT NULL,
-                    binding_id TEXT NOT NULL,
                     owner_user_id TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'blocked', 'retired')),
                     authorization_version INTEGER NOT NULL DEFAULT 1,
                     created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    PRIMARY KEY (provider, binding_id)
+                    updated_at REAL NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS mcp_oauth_policies (
@@ -454,7 +453,11 @@ class OAuthStore:
         silently choosing an owner, and an unowned personal callback stays
         unbound, which callers treat as blocked.
         """
-        from mcp_oauth_policy import PERSONAL_CALLBACK_MARKER, binding_id_from_uri, provider_for_binding
+        from mcp_oauth_policy import (
+            PERSONAL_CALLBACK_MARKER,
+            PERSONAL_CALLBACK_PROVIDER,
+            binding_id_from_uri,
+        )
 
         marker = conn.execute(
             "SELECT value FROM mcp_oauth_meta WHERE key = 'bindings_migrated'"
@@ -487,7 +490,7 @@ class OAuthStore:
                      authorization_version, created_at, updated_at)
                 VALUES (?, ?, ?, 'active', 1, ?, ?)
                 """,
-                (provider_for_binding(binding_id), binding_id, owners[0], now, now),
+                (PERSONAL_CALLBACK_PROVIDER, binding_id, owners[0], now, now),
             )
             ids = [int(r["id"]) for r in members]
             for chunk in _chunks(ids):
@@ -568,7 +571,7 @@ class OAuthStore:
             cur = conn.execute(
                 "UPDATE mcp_oauth_policies SET binding_id = ? "
                 "WHERE path LIKE ? AND (binding_id IS NULL OR binding_id = '')",
-                (binding_id, f"%{binding_id}%"),
+                (binding_id, f"%/{binding_id}"),
             )
             return cur.rowcount or 0
 
@@ -641,24 +644,32 @@ class OAuthStore:
             conn.execute("COMMIT")
         return ids
 
-    def clients_for_binding(self, binding_id: str) -> set[str]:
-        """Clients whose registered callbacks belong to this binding."""
+    @staticmethod
+    def _clients_for_binding_tx(conn, binding_id: str) -> set[str]:
+        """Clients attached to a binding, read inside the caller's transaction."""
+        from mcp_oauth_policy import match_policy
+
         policies = [
-            p for p in self.list_policies() if p.get("binding_id") == binding_id
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM mcp_oauth_policies WHERE binding_id = ?",
+                (binding_id,),
+            ).fetchall()
         ]
         if not policies:
             return set()
-        from mcp_oauth_policy import match_policy
-
-        result = set()
-        for client in self.dcr_clients():
-            if any(
-                match_policy(uri, policy)
-                for uri in client["redirect_uris"]
-                for policy in policies
-            ):
-                result.add(client["client_id"])
+        result: set[str] = set()
+        for row in conn.execute(
+            "SELECT client_id, redirect_uris FROM mcp_oauth_clients WHERE source = 'dcr'"
+        ).fetchall():
+            uris = _loads(row["redirect_uris"], [])
+            if any(match_policy(uri, policy) for uri in uris for policy in policies):
+                result.add(row["client_id"])
         return result
+
+    def clients_for_binding(self, binding_id: str) -> set[str]:
+        with self._conn() as conn:
+            return self._clients_for_binding_tx(conn, binding_id)
 
     @staticmethod
     def _revoke_clients_tx(conn, client_ids: Iterable[str], now: float) -> dict:
@@ -750,10 +761,10 @@ class OAuthStore:
         transfer fail instead of overwriting each other.
         """
         now = _now()
-        client_ids = self.clients_for_binding(binding_id)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                client_ids = self._clients_for_binding_tx(conn, binding_id)
                 row = conn.execute(
                     "SELECT owner_user_id, status FROM mcp_oauth_bindings WHERE binding_id = ?",
                     (binding_id,),
@@ -798,17 +809,20 @@ class OAuthStore:
     def block_bindings_for_user(self, user_id: str) -> int:
         """Tombstone an account's bindings and revoke what they authorized."""
         now = _now()
-        bindings = [
-            b["binding_id"]
-            for b in self.bindings_map().values()
-            if b["owner_user_id"] == user_id and b["status"] == "active"
-        ]
-        client_ids: set[str] = set()
-        for binding_id in bindings:
-            client_ids |= self.clients_for_binding(binding_id)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                bindings = [
+                    r["binding_id"]
+                    for r in conn.execute(
+                        "SELECT binding_id FROM mcp_oauth_bindings "
+                        "WHERE owner_user_id = ? AND status = 'active'",
+                        (user_id,),
+                    ).fetchall()
+                ]
+                client_ids: set[str] = set()
+                for binding_id in bindings:
+                    client_ids |= self._clients_for_binding_tx(conn, binding_id)
                 cur = conn.execute(
                     "UPDATE mcp_oauth_bindings SET status = 'blocked', updated_at = ? "
                     "WHERE owner_user_id = ? AND status = 'active'",

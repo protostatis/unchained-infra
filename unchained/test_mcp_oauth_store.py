@@ -870,6 +870,19 @@ class BindingTests(StoreTestBase):
             )
         )
 
+    def test_attach_matches_only_the_exact_binding_suffix(self):
+        self.store.add_policy(scheme="https", host="g.test", port=443, path="/r/abc")
+        self.store.add_policy(scheme="https", host="g.test", port=443, path="/r/xabc")
+        self.store.upsert_binding("abc", "u-1")
+        self.store.attach_policies_to_binding("abc")
+        rows = {
+            p["path"]: p.get("binding_id")
+            for p in self.store.list_policies()
+            if "abc" in p["path"]
+        }
+        self.assertEqual(rows["/r/abc"], "abc")
+        self.assertIsNone(rows["/r/xabc"])
+
     def test_transfer_rolls_back_when_revocation_fails(self):
         self._bound_client()
         original = self.store._revoke_clients_tx
