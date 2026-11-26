@@ -210,11 +210,29 @@ class ConsentHandlerTests(unittest.TestCase):
         self._enroll_owner("someone-else")
         response = self._get(self.request_id)
         self.assertEqual(response.status, 403)
-        self.assertIn("different Unchained account", response.text)
+        self.assertIn("not permitted for this Unchained account", response.text)
         self.assertIn("Switch Unchained account", response.text)
 
     def test_connector_enrolled_to_this_account_is_allowed(self):
         self._enroll_owner("user-1")
+        self.assertEqual(self._get(self.request_id).status, 200)
+
+    def test_connector_permitted_for_this_account_is_allowed(self):
+        self.store.upsert_binding("test-binding", "someone-else")
+        self.store.add_policy(
+            scheme="https", host="connector.test", port=443, path="/cb",
+            match="exact", allow_query=0, binding_id="test-binding",
+        )
+        from auth import Auth
+
+        auth = Auth()
+        with auth._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, email, api_key, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("user-1", "user-1@example.test", "key-user-1", 0.0),
+            )
+        self.store.permit_binding_account("test-binding", "user-1")
         self.assertEqual(self._get(self.request_id).status, 200)
 
     def test_post_rejected_when_enrolled_to_another_account(self):

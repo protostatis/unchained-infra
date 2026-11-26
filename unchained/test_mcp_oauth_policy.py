@@ -232,6 +232,18 @@ class OwnerTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(reason, "static")
 
+    def test_permitted_account_can_authorize(self):
+        bindings = {
+            self.binding["binding_id"]: dict(self.binding, accounts=["u-1", "u-2"])
+        }
+        self.assertEqual(self.check(user="u-2", bindings=bindings), (True, "bound"))
+
+    def test_unpermitted_account_cannot_authorize(self):
+        bindings = {
+            self.binding["binding_id"]: dict(self.binding, accounts=["u-1"])
+        }
+        self.assertEqual(self.check(user="u-2", bindings=bindings), (False, "owner_mismatch"))
+
     def test_inactive_binding_makes_the_client_blocked(self):
         from mcp_oauth_policy import client_callback_status
 

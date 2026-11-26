@@ -311,7 +311,10 @@ async def handle_mcp_oauth_consent(request: web.Request) -> web.Response:
 
 
 _MISMATCH_REASONS = {
-    "owner_mismatch": "This connector is linked to a different Unchained account.",
+    "owner_mismatch": (
+        "This connector is not permitted for this Unchained account. "
+        "Sign in as an account it is permitted for, or ask the operator to add this one."
+    ),
     "unbound_personal": (
         "This connector has not been enrolled for any Unchained account yet. "
         "Ask the operator to enroll it."

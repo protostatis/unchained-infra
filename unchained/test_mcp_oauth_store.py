@@ -27,6 +27,17 @@ class StoreTestBase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def _mkuser(self, user_id: str):
+        from auth import Auth
+
+        auth = Auth(self.db_path)
+        with auth._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, email, api_key, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (user_id, f"{user_id}@example.test", f"key-{user_id}", time.time()),
+            )
+
     def _client(self, client_id="client-1", uris=None, name="Test Client"):
         self.store.save_client(
             client_id=client_id,
@@ -756,6 +767,11 @@ class RequestBudgetTests(StoreTestBase):
 
 
 class BindingTests(StoreTestBase):
+    def setUp(self):
+        super().setUp()
+        for user_id in ("u-1", "u-2", "u-3"):
+            self._mkuser(user_id)
+
     def _bound_client(self, owner="u-1", binding="b1"):
         self.store.upsert_binding(binding, owner)
         self.store.save_client(
@@ -797,6 +813,8 @@ class BindingTests(StoreTestBase):
             )
 
     def test_enroll_binding_refuses_a_different_owner(self):
+        self._mkuser("u-1")
+        self._mkuser("u-2")
         entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
         self.store.enroll_binding("b-enroll", "u-1", [entry])
         self.assertEqual(self.store.binding_events("b-enroll")[0]["event"], "enrolled")
@@ -887,6 +905,45 @@ class BindingTests(StoreTestBase):
         }
         self.assertEqual(rows["/r/abc"], "abc")
         self.assertIsNone(rows["/r/xabc"])
+
+    def test_enrollment_permits_the_owner(self):
+        entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
+        self.store.enroll_binding("b-enroll", "u-1", [entry])
+        self.assertEqual(self.store.get_binding("b-enroll")["accounts"], ["u-1"])
+
+    def test_permit_adds_an_account(self):
+        self._bound_client()
+        self.store.permit_binding_account("b1", "u-2", actor="ops")
+        self.assertEqual(self.store.get_binding("b1")["accounts"], ["u-1", "u-2"])
+
+    def test_revoke_permit_revokes_that_account_only(self):
+        client_id = self._bound_client()
+        grant_u2, _ticket = self._grant(user="u-2")
+        issued = self.store.issue_tokens(
+            grant_id=grant_u2, client_id=client_id, scopes=["mcp:browser"], resource=None
+        )
+        grant_u1, _ticket1 = self._grant(user="u-1")
+        self.store.permit_binding_account("b1", "u-2")
+
+        revoked = self.store.revoke_binding_account("b1", "u-2")
+
+        self.assertEqual(revoked, 1)
+        self.assertNotIn("u-2", self.store.get_binding("b1")["accounts"])
+        self.assertIsNone(self.store.get_grant(grant_u2))
+        self.assertIsNone(self.store.load_access_token(issued["access_token"]))
+        # The administrator's grant is untouched.
+        self.assertIsNotNone(self.store.get_grant(grant_u1))
+
+    def test_administrator_cannot_be_unpermitted(self):
+        self._bound_client()
+        with self.assertRaises(ValueError):
+            self.store.revoke_binding_account("b1", "u-1")
+
+    def test_transfer_resets_permitted_accounts_to_the_new_owner(self):
+        self._bound_client()
+        self.store.permit_binding_account("b1", "u-2")
+        self.store.transfer_binding("b1", from_owner="u-1", to_owner="u-3")
+        self.assertEqual(self.store.get_binding("b1")["accounts"], ["u-3"])
 
     def test_transfer_rolls_back_when_revocation_fails(self):
         self._bound_client()
