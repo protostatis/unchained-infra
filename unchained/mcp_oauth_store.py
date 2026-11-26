@@ -520,6 +520,17 @@ class OAuthStore:
             "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) VALUES ('bindings_migrated', '1')"
         )
 
+    def _require_account(self, user_id: str) -> str:
+        """Reject a permit or transfer target that is not a real account."""
+        value = str(user_id or "").strip()
+        if not value:
+            raise ValueError("account is required")
+        from auth import Auth
+
+        if Auth(self.db_path).find_user_by_id(value) is None:
+            raise ValueError(f"unknown account: {value}")
+        return value
+
     @staticmethod
     def _record_event(
         conn,
@@ -691,6 +702,7 @@ class OAuthStore:
         actor: str = "",
     ) -> list[int]:
         """Create the binding and its policies in one transaction."""
+        owner_user_id = self._require_account(owner_user_id)
         now = _now()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -858,6 +870,7 @@ class OAuthStore:
         The previous owner must match, which makes two operators racing the same
         transfer fail instead of overwriting each other.
         """
+        to_owner = self._require_account(to_owner)
         now = _now()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -927,6 +940,7 @@ class OAuthStore:
         self, binding_id: str, user_id: str, *, actor: str = ""
     ) -> bool:
         """Allow one more Unchained account to authorize this binding."""
+        user_id = self._require_account(user_id)
         now = _now()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -939,11 +953,12 @@ class OAuthStore:
                     raise ValueError("binding not found")
                 if binding["status"] == "retired":
                     raise ValueError("binding is retired")
-                conn.execute(
+                cur = conn.execute(
                     "INSERT OR IGNORE INTO mcp_oauth_binding_accounts "
                     "(binding_id, user_id, added_at, added_by) VALUES (?, ?, ?, ?)",
                     (binding_id, user_id, now, actor or ""),
                 )
+                added = (cur.rowcount or 0) == 1
                 self._record_event(
                     conn,
                     binding_id,
@@ -956,7 +971,7 @@ class OAuthStore:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
-        return True
+        return added
 
     def revoke_binding_account(
         self, binding_id: str, user_id: str, *, actor: str = ""
@@ -972,7 +987,7 @@ class OAuthStore:
                 ).fetchone()
                 if binding is None:
                     raise ValueError("binding not found")
-                if binding["owner_user_id"] == user_id:
+                if str(binding["owner_user_id"]) == str(user_id):
                     raise ValueError("the administrator cannot be removed; transfer the binding")
                 client_ids = self._clients_for_binding_tx(conn, binding_id)
                 conn.execute(

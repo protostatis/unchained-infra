@@ -223,6 +223,15 @@ class ConsentHandlerTests(unittest.TestCase):
             scheme="https", host="connector.test", port=443, path="/cb",
             match="exact", allow_query=0, binding_id="test-binding",
         )
+        from auth import Auth
+
+        auth = Auth()
+        with auth._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, email, api_key, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("user-1", "user-1@example.test", "key-user-1", 0.0),
+            )
         self.store.permit_binding_account("test-binding", "user-1")
         self.assertEqual(self._get(self.request_id).status, 200)
 

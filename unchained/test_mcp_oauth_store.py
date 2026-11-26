@@ -27,6 +27,17 @@ class StoreTestBase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def _mkuser(self, user_id: str):
+        from auth import Auth
+
+        auth = Auth(self.db_path)
+        with auth._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, email, api_key, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (user_id, f"{user_id}@example.test", f"key-{user_id}", time.time()),
+            )
+
     def _client(self, client_id="client-1", uris=None, name="Test Client"):
         self.store.save_client(
             client_id=client_id,
@@ -756,6 +767,11 @@ class RequestBudgetTests(StoreTestBase):
 
 
 class BindingTests(StoreTestBase):
+    def setUp(self):
+        super().setUp()
+        for user_id in ("u-1", "u-2", "u-3"):
+            self._mkuser(user_id)
+
     def _bound_client(self, owner="u-1", binding="b1"):
         self.store.upsert_binding(binding, owner)
         self.store.save_client(
@@ -797,6 +813,8 @@ class BindingTests(StoreTestBase):
             )
 
     def test_enroll_binding_refuses_a_different_owner(self):
+        self._mkuser("u-1")
+        self._mkuser("u-2")
         entry = dict(scheme="https", host="g.test", port=443, path="/r/x", match="exact")
         self.store.enroll_binding("b-enroll", "u-1", [entry])
         self.assertEqual(self.store.binding_events("b-enroll")[0]["event"], "enrolled")
