@@ -156,13 +156,20 @@ Policy provenance is split:
   database, **enrolled to one Unchained account**. Snapshot them with `export`
   and restore with `import`.
 
-Ownership is canonical, not per-row. `mcp_oauth_bindings (provider, binding_id)`
-holds `owner_user_id`, a status (`active`, `blocked`, `retired`) and an
+Ownership is canonical, not per-row. `mcp_oauth_bindings` holds an
+administrator (`owner_user_id`), a status (`active`, `blocked`, `retired`) and an
 `authorization_version`; personal policy rows reference it through `binding_id`.
 (Their `owner_user_id` is a display cache.) Consent, `/oauth/complete` and
 `get_client` resolve the binding from the callback and fail closed when it is
-missing, blocked, or owned by another account. Static provider callbacks have no
-binding and remain open to any account.
+missing or blocked.
+
+`mcp_oauth_binding_accounts` lists the Unchained accounts permitted to
+authorize the binding — the administrator plus anyone explicitly added. This is
+deliberate: the Google account that owns a Gemini connector does not have to
+match the Unchained account whose browser it drives. Each permitted account gets
+its own grant, pinned to its own browser; removing one revokes only that
+account's grants. Static provider callbacks have no binding and remain open to
+any account.
 
 A personal callback with **no** binding row is refused, never treated as
 provider-wide — that covers a partially migrated database. Overlapping bound and
@@ -192,12 +199,25 @@ uv run scripts/manage_mcp_oauth_policy.py transfer-binding \
     --binding <id> --from old@example.com --to new@example.com --apply
 ```
 
+```bash
+uv run scripts/manage_mcp_oauth_policy.py permit-binding \
+    --binding <id> --account other@example.com --apply
+uv run scripts/manage_mcp_oauth_policy.py revoke-permit \
+    --binding <id> --account other@example.com --apply
+```
+
+`permit-binding` lets another Unchained account authorize the same connector;
+`revoke-permit` removes it and revokes that account's grants, leaving the
+administrator's untouched. The administrator cannot be removed; transfer the
+binding instead.
+
 `transfer-binding` previews affected clients, grants and pending requests,
 requires the expected current owner (so two operators cannot race), bumps the
 authorization version, revokes every grant/token/family that the binding
 authorized, discards its pending requests and codes, and points the policy rows
 at the new owner. There is deliberately no overlap window — an overlap would be
-multi-account authorization again. The new owner must consent afresh.
+multi-account authorization again. The new owner must consent afresh, and the
+permitted-account list resets to just that owner.
 
 `export` writes every policy; `import` reports what is missing and only adds,
 so a restore never deletes an operator's newer entries.

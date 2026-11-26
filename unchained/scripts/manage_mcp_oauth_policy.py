@@ -368,6 +368,7 @@ def cmd_list_bindings(store: OAuthStore, args) -> int:
         binding = bindings[key]
         user = auth.find_user_by_id(binding["owner_user_id"])
         impact = store.binding_impact(key)
+        accounts = ", ".join(_account_emails(store, binding))
         events = store.binding_events(key, 1)
         last = ""
         if events:
@@ -378,6 +379,7 @@ def cmd_list_bindings(store: OAuthStore, args) -> int:
         print(
             f"{key}  [{binding['status']}]  v{binding['authorization_version']}  "
             f"owner={user['email'] if user else binding['owner_user_id']}  "
+            f"accounts=[{accounts}]  "
             f"clients={impact['clients']} grants={impact['active_grants']} "
             f"pending={impact['pending_requests']}{last}"
         )
@@ -423,6 +425,65 @@ def cmd_transfer_binding(store: OAuthStore, args) -> int:
         f"revoked {result['grants_revoked']} grant(s); "
         f"discarded {result['requests_discarded']} request(s)."
     )
+    return 0
+
+
+def _account_emails(store: OAuthStore, binding: dict) -> list[str]:
+    auth = _auth()
+    result = []
+    for user_id in binding.get("accounts") or [binding["owner_user_id"]]:
+        user = auth.find_user_by_id(user_id)
+        result.append(user["email"] if user else user_id)
+    return sorted(result)
+
+
+def cmd_permit_binding(store: OAuthStore, args) -> int:
+    key = _binding_key(args.binding)
+    user_id = _user_id_for_email(args.account)
+    if not user_id:
+        print(f"No Unchained account for {args.account!r}.")
+        return 2
+    binding = store.get_binding(key)
+    if binding is None:
+        print(f"No binding {key}.")
+        return 1
+    if user_id in (binding.get("accounts") or []):
+        print(f"{args.account} is already permitted.")
+        return 0
+    print(f"Binding:   {key} [{binding['status']}]")
+    print(f"Permit:    {args.account}")
+    print("Effect:    this account may authorize the connector and will get its own grant.")
+    if not args.apply:
+        print("Dry run. Re-run with --apply to permit.")
+        return 0
+    store.permit_binding_account(key, user_id, actor=args.actor or "")
+    print(f"Permitted. Accounts: {', '.join(_account_emails(store, store.get_binding(key)))}")
+    return 0
+
+
+def cmd_revoke_permit(store: OAuthStore, args) -> int:
+    key = _binding_key(args.binding)
+    user_id = _user_id_for_email(args.account)
+    if not user_id:
+        print(f"No Unchained account for {args.account!r}.")
+        return 2
+    binding = store.get_binding(key)
+    if binding is None:
+        print(f"No binding {key}.")
+        return 1
+    impact = store.binding_impact(key)
+    print(f"Binding:   {key} [{binding['status']}]")
+    print(f"Revoke:    {args.account}")
+    print(f"Effect:    revoke this account's grants for {impact['clients']} client(s).")
+    if not args.apply:
+        print("Dry run. Re-run with --apply to revoke.")
+        return 0
+    try:
+        revoked = store.revoke_binding_account(key, user_id, actor=args.actor or "")
+    except ValueError as exc:
+        print(f"Refusing: {exc}")
+        return 2
+    print(f"Revoked {revoked} grant(s). Accounts: {', '.join(_account_emails(store, store.get_binding(key)))}")
     return 0
 
 
@@ -485,6 +546,22 @@ def main() -> int:
     transfer.add_argument("--actor", default="")
     transfer.add_argument("--apply", action="store_true")
 
+    permit = sub.add_parser(
+        "permit-binding", help="allow another account to authorize a binding"
+    )
+    permit.add_argument("--binding", required=True)
+    permit.add_argument("--account", required=True)
+    permit.add_argument("--actor", default="")
+    permit.add_argument("--apply", action="store_true")
+
+    revoke = sub.add_parser(
+        "revoke-permit", help="remove a permitted account and revoke its grants"
+    )
+    revoke.add_argument("--binding", required=True)
+    revoke.add_argument("--account", required=True)
+    revoke.add_argument("--actor", default="")
+    revoke.add_argument("--apply", action="store_true")
+
     args = parser.parse_args()
     store = _store(args)
     if args.command == "list":
@@ -505,6 +582,10 @@ def main() -> int:
         return cmd_list_bindings(store, args)
     if args.command == "transfer-binding":
         return cmd_transfer_binding(store, args)
+    if args.command == "permit-binding":
+        return cmd_permit_binding(store, args)
+    if args.command == "revoke-permit":
+        return cmd_revoke_permit(store, args)
     return cmd_revalidate(store, args)
 
 

@@ -306,8 +306,12 @@ def callback_owner_state(
         return True, "static"
     if state != "bound" or binding is None:
         return False, state
-    owner = str(binding.get("owner_user_id") or "")
-    if owner != str(user_id or ""):
+    accounts = binding.get("accounts")
+    if accounts:
+        permitted = {str(a) for a in accounts}
+    else:
+        permitted = {str(binding.get("owner_user_id") or "")}
+    if str(user_id or "") not in permitted:
         return False, "owner_mismatch"
     return True, "bound"
 

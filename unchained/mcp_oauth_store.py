@@ -232,6 +232,14 @@ class OAuthStore:
                     updated_at REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS mcp_oauth_binding_accounts (
+                    binding_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    added_at REAL NOT NULL,
+                    added_by TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (binding_id, user_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS mcp_oauth_binding_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     binding_id TEXT NOT NULL,
@@ -309,6 +317,7 @@ class OAuthStore:
                 "ON mcp_oauth_policies (binding_id)"
             )
             self._migrate_bindings(conn)
+            self._migrate_binding_accounts(conn)
             self._seed_policies(conn)
 
     def _seed_policies(self, conn) -> None:
@@ -549,21 +558,50 @@ class OAuthStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def _migrate_binding_accounts(self, conn) -> None:
+        marker = conn.execute(
+            "SELECT value FROM mcp_oauth_meta WHERE key = 'binding_accounts_migrated'"
+        ).fetchone()
+        if marker is not None and marker["value"] == "1":
+            return
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO mcp_oauth_binding_accounts
+                (binding_id, user_id, added_at, added_by)
+            SELECT binding_id, owner_user_id, updated_at, 'migration'
+              FROM mcp_oauth_bindings
+            """
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_oauth_meta (key, value) "
+            "VALUES ('binding_accounts_migrated', '1')"
+        )
+
     def bindings_map(self) -> dict[str, dict]:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM mcp_oauth_bindings").fetchall()
-        return {
-            r["binding_id"]: {
-                "binding_id": r["binding_id"],
-                "provider": r["provider"],
-                "owner_user_id": r["owner_user_id"],
-                "status": r["status"],
-                "authorization_version": int(r["authorization_version"]),
-                "created_at": r["created_at"],
-                "updated_at": r["updated_at"],
+            account_rows = conn.execute(
+                "SELECT binding_id, user_id FROM mcp_oauth_binding_accounts"
+            ).fetchall()
+        accounts: dict[str, set[str]] = {}
+        for row in account_rows:
+            accounts.setdefault(row["binding_id"], set()).add(str(row["user_id"]))
+        result: dict[str, dict] = {}
+        for row in rows:
+            owner = str(row["owner_user_id"])
+            permitted = accounts.get(row["binding_id"], set()) or {owner}
+            permitted.add(owner)
+            result[row["binding_id"]] = {
+                "binding_id": row["binding_id"],
+                "provider": row["provider"],
+                "owner_user_id": owner,
+                "accounts": sorted(permitted),
+                "status": row["status"],
+                "authorization_version": int(row["authorization_version"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             }
-            for r in rows
-        }
+        return result
 
     def get_binding(self, binding_id: str) -> dict | None:
         return self.bindings_map().get(binding_id)
@@ -685,6 +723,11 @@ class OAuthStore:
                     self._upsert_policy(conn, entry, owner_user_id, binding_id)
                     for entry in entries
                 ]
+                conn.execute(
+                    "INSERT OR IGNORE INTO mcp_oauth_binding_accounts "
+                    "(binding_id, user_id, added_at, added_by) VALUES (?, ?, ?, ?)",
+                    (binding_id, owner_user_id, now, actor or "enrollment"),
+                )
                 self._record_event(
                     conn,
                     binding_id,
@@ -844,6 +887,15 @@ class OAuthStore:
                     "UPDATE mcp_oauth_policies SET owner_user_id = ? WHERE binding_id = ?",
                     (to_owner, binding_id),
                 )
+                conn.execute(
+                    "DELETE FROM mcp_oauth_binding_accounts WHERE binding_id = ?",
+                    (binding_id,),
+                )
+                conn.execute(
+                    "INSERT INTO mcp_oauth_binding_accounts "
+                    "(binding_id, user_id, added_at, added_by) VALUES (?, ?, ?, ?)",
+                    (binding_id, to_owner, now, actor or "transfer"),
+                )
                 # Revocation shares the transaction: a failure here leaves the
                 # old owner and the old grants intact, never a half-transfer.
                 revoked = self._revoke_clients_tx(conn, client_ids, now)
@@ -870,6 +922,130 @@ class OAuthStore:
             "clients": len(client_ids),
             **revoked,
         }
+
+    def permit_binding_account(
+        self, binding_id: str, user_id: str, *, actor: str = ""
+    ) -> bool:
+        """Allow one more Unchained account to authorize this binding."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                binding = conn.execute(
+                    "SELECT status FROM mcp_oauth_bindings WHERE binding_id = ?",
+                    (binding_id,),
+                ).fetchone()
+                if binding is None:
+                    raise ValueError("binding not found")
+                if binding["status"] == "retired":
+                    raise ValueError("binding is retired")
+                conn.execute(
+                    "INSERT OR IGNORE INTO mcp_oauth_binding_accounts "
+                    "(binding_id, user_id, added_at, added_by) VALUES (?, ?, ?, ?)",
+                    (binding_id, user_id, now, actor or ""),
+                )
+                self._record_event(
+                    conn,
+                    binding_id,
+                    "permitted",
+                    actor=actor,
+                    new_owner=user_id,
+                    version=self._binding_version_tx(conn, binding_id),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return True
+
+    def revoke_binding_account(
+        self, binding_id: str, user_id: str, *, actor: str = ""
+    ) -> int:
+        """Remove a permitted account and revoke everything it authorized here."""
+        now = _now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                binding = conn.execute(
+                    "SELECT owner_user_id, status FROM mcp_oauth_bindings WHERE binding_id = ?",
+                    (binding_id,),
+                ).fetchone()
+                if binding is None:
+                    raise ValueError("binding not found")
+                if binding["owner_user_id"] == user_id:
+                    raise ValueError("the administrator cannot be removed; transfer the binding")
+                client_ids = self._clients_for_binding_tx(conn, binding_id)
+                conn.execute(
+                    "DELETE FROM mcp_oauth_binding_accounts "
+                    "WHERE binding_id = ? AND user_id = ?",
+                    (binding_id, user_id),
+                )
+                revoked = self._revoke_user_clients_tx(conn, client_ids, user_id, now)
+                self._record_event(
+                    conn,
+                    binding_id,
+                    "permit_revoked",
+                    actor=actor,
+                    old_owner=user_id,
+                    version=self._binding_version_tx(conn, binding_id),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return revoked
+
+    @staticmethod
+    def _revoke_user_clients_tx(conn, client_ids, user_id: str, now: float) -> int:
+        """Revoke one account's grants for a client set, inside the transaction."""
+        ids = list(dict.fromkeys(str(c) for c in client_ids if c))
+        if not ids:
+            return 0
+        grant_ids: list[str] = []
+        for chunk in _chunks(ids):
+            ph = ",".join("?" for _ in chunk)
+            grant_ids.extend(
+                r["id"]
+                for r in conn.execute(
+                    f"SELECT id FROM mcp_oauth_grants WHERE client_id IN ({ph}) "
+                    f"AND user_id = ? AND revoked_at IS NULL",
+                    (*chunk, user_id),
+                ).fetchall()
+            )
+        for chunk in _chunks(grant_ids):
+            ph = ",".join("?" for _ in chunk)
+            conn.execute(
+                f"UPDATE mcp_oauth_grants SET revoked_at = ? WHERE id IN ({ph})",
+                (now, *chunk),
+            )
+            conn.execute(
+                f"UPDATE mcp_oauth_tokens SET revoked_at = ? "
+                f"WHERE revoked_at IS NULL AND grant_id IN ({ph})",
+                (now, *chunk),
+            )
+            conn.execute(
+                f"UPDATE mcp_oauth_families SET revoked_at = ? "
+                f"WHERE revoked_at IS NULL AND grant_id IN ({ph})",
+                (now, *chunk),
+            )
+            conn.execute(f"DELETE FROM mcp_oauth_codes WHERE grant_id IN ({ph})", tuple(chunk))
+        for chunk in _chunks(ids):
+            ph = ",".join("?" for _ in chunk)
+            requests = conn.execute(
+                f"SELECT id FROM mcp_oauth_requests WHERE client_id IN ({ph}) AND user_id = ?",
+                (*chunk, user_id),
+            ).fetchall()
+            request_ids = [r["id"] for r in requests]
+            for rchunk in _chunks(request_ids):
+                rph = ",".join("?" for _ in rchunk)
+                conn.execute(
+                    f"DELETE FROM mcp_oauth_approvals WHERE request_id IN ({rph})",
+                    tuple(rchunk),
+                )
+                conn.execute(
+                    f"DELETE FROM mcp_oauth_requests WHERE id IN ({rph})", tuple(rchunk)
+                )
+        return len(grant_ids)
 
     def block_bindings_for_user(self, user_id: str) -> int:
         """Tombstone an account's bindings and revoke what they authorized."""
